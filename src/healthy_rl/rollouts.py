@@ -61,6 +61,7 @@ __all__ = [
     "JsonlWriter",
     "output_dir",
     "load_vectors",
+    "make_zstd_threadsafe",
     "run_rollouts",
 ]
 
@@ -882,6 +883,58 @@ def _state() -> RunState:
 
 PROVIDER_NAME = "healthy-rl-lens"
 
+_ZSTD_PATCHED = False
+
+
+def make_zstd_threadsafe() -> bool:
+    """Give ``vllm_lens``'s client-side zstd objects a fresh context per call.
+
+    ``vllm_lens/_helpers/_serialize.py`` keeps one process-global
+    ``ZstdCompressor`` and one ``ZstdDecompressor``. Each reuses a single
+    internal zstd context, so concurrent calls interleave and produce corrupt
+    frames -- 13-19% of requests failed that way during activation extraction on
+    this cluster, and throttling did not fix it. This stage decompresses hook
+    results from up to ``max_samples`` in-flight rollouts at once in one process,
+    so it is exposed to exactly the same bug.
+
+    ``patches/vllm_lens_zstd_threadsafe.py`` fixes the two server-side singletons
+    by rewriting the installed files; it does not touch ``_serialize.py``, and the
+    rollout container installs its own unpatched copy of vllm-lens in any case.
+    Patching the objects in memory here covers both. Idempotent, and a no-op if
+    the attributes have already been replaced.
+    """
+    global _ZSTD_PATCHED
+    if _ZSTD_PATCHED:
+        return False
+
+    import zstandard as zstd
+    from vllm_lens._helpers import _serialize
+
+    class _PerCallZstd:
+        """Drop-in for a shared compressor/decompressor. A context per call costs
+        microseconds against a multi-MB payload."""
+
+        __slots__ = ("_factory",)
+
+        def __init__(self, factory):
+            self._factory = factory
+
+        def compress(self, data):
+            return self._factory().compress(data)
+
+        def decompress(self, data, *args, **kwargs):
+            return self._factory().decompress(data, *args, **kwargs)
+
+    for name, factory in (
+        ("_ZSTD_COMPRESSOR", lambda: zstd.ZstdCompressor(level=1)),
+        ("_ZSTD_DECOMPRESSOR", zstd.ZstdDecompressor),
+    ):
+        current = getattr(_serialize, name, None)
+        if current is not None and not isinstance(current, _PerCallZstd):
+            setattr(_serialize, name, _PerCallZstd(factory))
+    _ZSTD_PATCHED = True
+    return True
+
 
 def register_sample_hook() -> None:
     """Register the Inspect hook that appends each finished rollout to the JSONL.
@@ -926,6 +979,7 @@ def _register_inspect_extensions() -> str:
     """
     global _REGISTERED
     register_sample_hook()
+    make_zstd_threadsafe()
     if _REGISTERED:
         return PROVIDER_NAME
     provider_name = PROVIDER_NAME
@@ -1214,6 +1268,7 @@ def preflight(base_url: str, model_name: str, vectors: Vectors, cfg: Mapping[str
     """
     from healthy_rl.server import LensClient, wait_for_health
 
+    make_zstd_threadsafe()
     wait_for_health(base_url, timeout_s=float(cfg.get("health_timeout_s", 1800.0)))
     client = LensClient(
         base_url, model=model_name, timeout=float(cfg.get("request_timeout_s", 600.0))
