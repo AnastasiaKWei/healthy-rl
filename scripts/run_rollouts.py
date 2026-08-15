@@ -33,7 +33,12 @@ from pathlib import Path
 
 from healthy_rl.artifacts import check_upstream, verify_upstreams, write_manifest
 from healthy_rl.config import load_config, load_env, repo_root
-from healthy_rl.rollouts import output_dir, parse_shard, run_rollouts
+from healthy_rl.rollouts import (
+    output_dir,
+    parse_shard,
+    run_rollouts,
+    select_sweep_from_dir,
+)
 
 DEFAULT_CONFIG = repo_root() / "configs" / "rollouts.yaml"
 SUMMARY_NAME = "summary.json"
@@ -73,6 +78,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "from the readout. Use this when tier 1 ran as separate shard jobs whose "
             "JSONLs this job cannot see, so every shard sweeps the same problems."
         ),
+    )
+    parser.add_argument(
+        "--select-sweep-only",
+        action="store_true",
+        help=(
+            "apply the sweep-selection rule to the completed tier-1 JSONLs, print the "
+            "chosen task_ids and the rates they came from, and exit without running "
+            "any rollout or contacting the server (Ruling R26, phase 1.5)"
+        ),
+    )
+    parser.add_argument(
+        "--allow-partial-readout",
+        action="store_true",
+        help="let --select-sweep-only succeed on an incomplete readout (it warns and exits 2 otherwise)",
     )
     parser.add_argument(
         "--no-resume",
@@ -140,13 +159,83 @@ def summary_name(shard: tuple[int, int]) -> str:
     return SUMMARY_NAME if count == 1 else f"summary.shard{index}of{count}.json"
 
 
+SWEEP_SELECTION_NAME = "sweep_selection.json"
+
+
+def report_sweep_selection(
+    out_dir: Path, cfg: dict, bench_parquet: Path, allow_partial: bool
+) -> int:
+    """Print and record the sweep problems selected from the completed readout.
+
+    Phase 1.5 of the two-phase launch (**Ruling R26**). The selection rule is
+    applied exactly once, to every tier-1 rollout across every shard file, and the
+    result is written to ``sweep_selection.json`` before any sweep rollout runs --
+    that file is the pre-registration record.
+
+    Exit codes: 0 selected, 2 the readout is incomplete (so the selection would
+    not be the pre-registered one), 3 the model is disqualified from the causal
+    test under R4.
+    """
+    task_ids = None
+    if bench_parquet.is_file():
+        import pandas as pd
+
+        task_ids = [str(v) for v in pd.read_parquet(bench_parquet, columns=["task_id"])["task_id"]]
+
+    report = select_sweep_from_dir(out_dir, cfg, task_ids)
+    (out_dir / SWEEP_SELECTION_NAME).write_text(
+        json.dumps(report, indent=2, sort_keys=True, default=str) + "\n"
+    )
+
+    print(f"readout: {report['n_readout_records']}/{report['n_expected_records']} rollouts "
+          f"from {report['shard_files'] or ['(no shard files found)']}")
+    print("per-problem hack rate:")
+    for task_id, rate in report["rates"].items():
+        mark = "*" if task_id in report["problems"] else " "
+        print(f"  {mark} {task_id:<16} {rate:.3f}")
+
+    if report["disqualified"]:
+        print(f"\nDISQUALIFIED: {report['sweep']['reason']}")
+        print(f"wrote {out_dir / SWEEP_SELECTION_NAME}")
+        return 3
+
+    if report["sweep"]["filled"]:
+        print(f"\nR4 fill: {report['sweep']['reason']}")
+
+    print(f"\nsweep problems ({len(report['problems'])}):")
+    print("  " + ",".join(report["problems"]))
+    print("\nlaunch tiers 2-3 with:")
+    print(f"  --tiers 2,3 --sweep-problems {','.join(report['problems'])}")
+    print(f"\nwrote {out_dir / SWEEP_SELECTION_NAME}")
+
+    if not report["complete"]:
+        detail = []
+        if report["problems_with_no_records"]:
+            detail.append(f"no records for {report['problems_with_no_records']}")
+        if report["problems_with_missing_samples"]:
+            detail.append(f"short of samples: {report['problems_with_missing_samples']}")
+        print(
+            "\nINCOMPLETE READOUT: " + "; ".join(detail or ["fewer records than expected"]),
+            file=sys.stderr,
+        )
+        if not allow_partial:
+            print(
+                "Selecting from a partial readout is exactly the race the two-phase "
+                "launch exists to avoid -- finish tier 1 first, or pass "
+                "--allow-partial-readout to accept this selection anyway.",
+                file=sys.stderr,
+            )
+            return 2
+        print("--allow-partial-readout given; using the selection anyway", file=sys.stderr)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     load_env()
     cfg = load_config(args.config)
 
     model = resolve_model(args.model, cfg)
-    base_url = resolve_base_url(args.base_url)
     version = str(cfg.get("version", "v1"))
 
     artifact_root = resolve_artifact_root(args.artifact_root, cfg)
@@ -154,14 +243,25 @@ def main(argv: list[str] | None = None) -> int:
     bench_dir = Path(cfg.get("bench_dir") or artifact_root / "bench" / version)
     bench_parquet = Path(cfg.get("bench_parquet") or bench_dir / "conflicting.parquet")
 
+    shard = parse_shard(args.shard)
+    tiers = [int(t) for t in args.tiers.replace(",", " ").split()] if args.tiers else None
+    sweep_problems = (
+        args.sweep_problems.replace(",", " ").split() if args.sweep_problems else None
+    )
+
+    out_dir = Path(args.out_dir) if args.out_dir else output_dir("rollouts", model, version)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.select_sweep_only:
+        # Phase 1.5 of the two-phase launch: no server, no vectors, no rollouts.
+        return report_sweep_selection(out_dir, cfg, bench_parquet, args.allow_partial_readout)
+
     # Upstreams must exist and carry a manifest before anything runs: a missing
     # one means a stage was skipped, which is a setup error, not a data finding.
     check_upstream(vectors_dir)
     check_upstream(bench_dir)
 
-    out_dir = Path(args.out_dir) if args.out_dir else output_dir("rollouts", model, version)
-    out_dir.mkdir(parents=True, exist_ok=True)
-
+    base_url = resolve_base_url(args.base_url)
     print(
         f"rollouts: model={model} url={base_url} shard={shard[0]}/{shard[1]}\n"
         f"  vectors  {vectors_dir}\n"
@@ -170,17 +270,7 @@ def main(argv: list[str] | None = None) -> int:
         flush=True,
     )
 
-
     summary: dict = {"stage": "rollouts", "model": model, "complete": False}
-    shard = parse_shard(args.shard)
-    tiers = (
-        [int(t) for t in args.tiers.replace(",", " ").split()] if args.tiers else None
-    )
-    sweep_problems = (
-        [t for t in args.sweep_problems.replace(",", " ").split()]
-        if args.sweep_problems
-        else None
-    )
     failure: BaseException | None = None
     # Drop any summary from an earlier run: below, "the file exists" is taken to
     # mean this run wrote it. Resume state lives in the JSONL, not here.

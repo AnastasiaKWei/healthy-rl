@@ -8,6 +8,8 @@ live vllm-lens server, and a mock of it would only test the mock.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from healthy_rl.rollouts import (
@@ -22,6 +24,7 @@ from healthy_rl.rollouts import (
     read_jsonl,
     samples_for_tier,
     select_readout_problems,
+    select_sweep_from_dir,
     select_sweep_problems,
     shard_items,
     sort_task_ids,
@@ -350,3 +353,85 @@ def test_samples_per_problem_falls_back_to_the_older_keys():
     assert samples_for_tier(cfg, 1) == 6
     assert samples_for_tier(cfg, 2) == 4
     assert samples_for_tier({}, 1) == 6
+
+
+# ---------------------------------------------------------------------------
+# Two-phase launch (R26): apply the selection rule once, to the whole readout
+# ---------------------------------------------------------------------------
+
+SELECT_CFG = {"readout_problems": 6, "sweep_problems": 3, "samples_per_problem": {1: 4}}
+
+
+def _write_shards(tmp_path, rates, n_samples=4, n_shards=2):
+    """Spread readout records over n_shards files, the way a sharded run does."""
+    records = _readout_records(rates, n_samples=n_samples)
+    handles = [(tmp_path / f"rollouts.shard{i}of{n_shards}.jsonl").open("w") for i in range(n_shards)]
+    for index, record in enumerate(records):
+        handles[index % n_shards].write(json.dumps(record) + "\n")
+    for handle in handles:
+        handle.close()
+    return records
+
+
+def test_selection_reads_every_shard_file(tmp_path):
+    rates = {f"lcbhard_{i}": r for i, r in enumerate([0.0, 0.5, 0.25, 0.75, 1.0, 0.5])}
+    _write_shards(tmp_path, rates, n_shards=3)
+
+    report = select_sweep_from_dir(tmp_path, SELECT_CFG)
+
+    assert len(report["shard_files"]) == 3
+    assert report["n_readout_records"] == 24 == report["n_expected_records"]
+    assert report["complete"] and not report["disqualified"]
+    # Both problems at 0.5, plus the 0.25/0.75 pair's tie-break winner. The list
+    # itself comes back in R11 order, not selection order.
+    assert report["problems"] == ["lcbhard_1", "lcbhard_2", "lcbhard_5"]
+    assert report["sweep"]["qualifying"][:2] == ["lcbhard_1", "lcbhard_5"]
+    assert set(report["selected_rates"]) == set(report["problems"])
+
+
+def test_selection_is_identical_however_the_records_are_split(tmp_path):
+    """This is the property the two-phase launch buys: one rule, one answer."""
+    rates = {f"lcbhard_{i}": (i % 5) / 4 for i in range(6)}
+    chosen = []
+    for n_shards in (1, 2, 3, 5):
+        for stale in tmp_path.glob("rollouts*.jsonl"):
+            stale.unlink()
+        _write_shards(tmp_path, rates, n_shards=n_shards)
+        chosen.append(select_sweep_from_dir(tmp_path, SELECT_CFG)["problems"])
+    assert len(set(map(tuple, chosen))) == 1
+
+
+def test_selection_flags_a_partial_readout(tmp_path):
+    rates = {f"lcbhard_{i}": 0.5 for i in range(6)}
+    _write_shards(tmp_path, rates, n_shards=2)
+    # Simulate a shard that has not finished: drop one of its files.
+    (tmp_path / "rollouts.shard1of2.jsonl").unlink()
+
+    report = select_sweep_from_dir(tmp_path, SELECT_CFG)
+
+    assert not report["complete"]
+    assert report["n_readout_records"] < report["n_expected_records"]
+    assert report["problems_with_missing_samples"]
+    # It still produces a selection -- the caller decides whether to accept it.
+    assert len(report["problems"]) == 3
+
+
+def test_selection_reports_problems_with_no_records_at_all(tmp_path):
+    _write_shards(tmp_path, {f"lcbhard_{i}": 0.5 for i in range(4)})
+    report = select_sweep_from_dir(tmp_path, SELECT_CFG, BENCH_IDS)
+    assert report["problems_with_no_records"] == ["lcbhard_4", "lcbhard_5"]
+    assert not report["complete"]
+
+
+def test_selection_reports_disqualification(tmp_path):
+    _write_shards(tmp_path, {f"lcbhard_{i}": float(i % 2) for i in range(6)})
+    report = select_sweep_from_dir(tmp_path, SELECT_CFG)
+    assert report["disqualified"]
+    assert report["problems"] == []
+    assert report["complete"]  # the readout is complete; the model just never varies
+
+
+def test_selection_on_an_empty_directory_is_disqualified_not_a_crash(tmp_path):
+    report = select_sweep_from_dir(tmp_path, SELECT_CFG)
+    assert report["disqualified"] and report["n_readout_records"] == 0
+    assert not report["complete"]

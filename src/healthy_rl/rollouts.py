@@ -62,6 +62,8 @@ __all__ = [
     "output_dir",
     "load_vectors",
     "make_zstd_threadsafe",
+    "read_all_shards",
+    "select_sweep_from_dir",
     "run_rollouts",
 ]
 
@@ -897,11 +899,16 @@ def make_zstd_threadsafe() -> bool:
     results from up to ``max_samples`` in-flight rollouts at once in one process,
     so it is exposed to exactly the same bug.
 
-    ``patches/vllm_lens_zstd_threadsafe.py`` fixes the two server-side singletons
-    by rewriting the installed files; it does not touch ``_serialize.py``, and the
-    rollout container installs its own unpatched copy of vllm-lens in any case.
-    Patching the objects in memory here covers both. Idempotent, and a no-op if
-    the attributes have already been replaced.
+    Worse than the raised errors: at realistic payload sizes the same race also
+    produces **silent** wrong bytes -- frames that decompress without complaint
+    and return the wrong data. A clean error count is therefore not evidence of a
+    clean run, which is why this is applied unconditionally rather than only when
+    something has already failed.
+
+    ``patches/vllm_lens_zstd_threadsafe.py`` fixes the installed files on the host
+    venv. The rollout container installs its own copy of vllm-lens and never sees
+    that patch, so the objects are replaced in memory here as well. Idempotent,
+    and a no-op if the file-level patch already replaced them.
     """
     global _ZSTD_PATCHED
     if _ZSTD_PATCHED:
@@ -930,7 +937,10 @@ def make_zstd_threadsafe() -> bool:
         ("_ZSTD_DECOMPRESSOR", zstd.ZstdDecompressor),
     ):
         current = getattr(_serialize, name, None)
-        if current is not None and not isinstance(current, _PerCallZstd):
+        # Matched by class NAME, not identity: `patches/vllm_lens_zstd_threadsafe.py`
+        # installs its own `_PerCallZstd` into the file, and wrapping a proxy in a
+        # proxy would work but is worth avoiding.
+        if current is not None and type(current).__name__ != "_PerCallZstd":
             setattr(_serialize, name, _PerCallZstd(factory))
     _ZSTD_PATCHED = True
     return True
@@ -1256,6 +1266,19 @@ def build_task(
 # ---------------------------------------------------------------------------
 
 
+# Printed with every preflight failure: whoever hits this at 4am should not have
+# to read a report to find the fix.
+_PROVIDER_FALLBACK_HINT = (
+    "FALLBACK: the likely cause is `vllm_lens.inspect_provider` breaking against "
+    "the container's inspect_ai. The fix is to reparent HealthyRLLensAPI in "
+    "src/healthy_rl/rollouts.py (_register_inspect_extensions) onto Inspect's own "
+    "OpenAI-compatible provider, `inspect_ai.model._providers.vllm.VLLMAPI`, and do "
+    "the extra_args -> vllm_xargs transform in that subclass (copy "
+    "VLLMLensAPI._transform_config, ~60 lines). Nothing else in this stage changes: "
+    "the hook, the steering vector and the record schema are all independent of it."
+)
+
+
 def preflight(base_url: str, model_name: str, vectors: Vectors, cfg: Mapping[str, Any]) -> dict:
     """Prove the hook and the steering vector actually work before spending hours.
 
@@ -1285,7 +1308,8 @@ def preflight(base_url: str, model_name: str, vectors: Vectors, cfg: Mapping[str
         raise RuntimeError(
             "preflight: the projection hook returned nothing usable "
             f"({summary.error or 'no hook_results at all'}). Rollouts would record no "
-            "emotion data, so the run is stopping here."
+            "emotion data, so the run is stopping here.\n"
+            + _PROVIDER_FALLBACK_HINT
         )
     missing = [
         layer for layer in vectors.capture_layers if str(layer) not in summary.stats
@@ -1293,7 +1317,7 @@ def preflight(base_url: str, model_name: str, vectors: Vectors, cfg: Mapping[str
     if missing:
         raise RuntimeError(
             f"preflight: the hook never fired on capture layer(s) {missing}; "
-            f"it fired on {sorted(summary.stats)}"
+            f"it fired on {sorted(summary.stats)}\n" + _PROVIDER_FALLBACK_HINT
         )
 
     steered = client.chat(
@@ -1349,6 +1373,71 @@ def read_all_shards(out: Path) -> list[dict[str, Any]]:
     for path in sorted(out.glob("rollouts*.jsonl")):
         records.extend(read_jsonl(path))
     return records
+
+
+def select_sweep_from_dir(
+    out: str | os.PathLike[str], cfg: Mapping[str, Any], bench_task_ids: Sequence[str] | None = None
+) -> dict[str, Any]:
+    """Apply the sweep-selection rule once, to the completed readout. **Ruling R26.**
+
+    This is the pre-registration record for the causal test: the spec pre-registers
+    the sweep problems as "selected from the readout by a fixed rule", and applying
+    that rule exactly once to the *complete* readout -- then recording the chosen
+    ids before any sweep rollout runs -- is the auditable version of that claim.
+
+    Deriving the selection per shard instead would race: shards finish tier 1 at
+    different times, so an early shard would select from a partial readout and a
+    later one from a fuller readout, and they would sweep different problems
+    without anything failing. Hence the two-phase launch.
+
+    Reads every ``rollouts*.jsonl`` under ``out``. ``complete`` is False when the
+    readout is short of ``readout_problems x samples_per_problem[1]`` rollouts,
+    which is the one condition that makes the selection unsafe to use.
+    """
+    directory = Path(out)
+    records = [
+        r for r in read_all_shards(directory) if r.get("condition_name") == READOUT_CONDITION
+    ]
+    rates = hack_rates(records)
+    selection = select_sweep_problems(rates, int(cfg.get("sweep_problems", 12)))
+
+    n_expected_problems = int(cfg.get("readout_problems", 24))
+    if bench_task_ids is not None:
+        n_expected_problems = min(n_expected_problems, len(bench_task_ids))
+    per_problem = samples_for_tier(cfg, 1)
+    expected = n_expected_problems * per_problem
+
+    short = sorted(
+        (task_id for task_id, n in _counts(records).items() if n < per_problem),
+        key=task_order_key,
+    )
+    missing_problems: list[str] = []
+    if bench_task_ids is not None:
+        wanted = select_readout_problems(bench_task_ids, int(cfg.get("readout_problems", 24)))
+        missing_problems = [t for t in wanted if t not in rates]
+
+    return {
+        "sweep": asdict(selection),
+        "problems": selection.problems,
+        "rates": {t: rates[t] for t in sort_task_ids(rates)},
+        "selected_rates": {t: rates[t] for t in selection.problems},
+        "n_readout_records": len(records),
+        "n_expected_records": expected,
+        "samples_per_problem": per_problem,
+        "shard_files": sorted(p.name for p in directory.glob("rollouts*.jsonl")),
+        "problems_with_missing_samples": short,
+        "problems_with_no_records": missing_problems,
+        "complete": len(records) >= expected and not short and not missing_problems,
+        "disqualified": selection.disqualified,
+    }
+
+
+def _counts(records: Iterable[Mapping[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for record in records:
+        task_id = str(record.get("task_id"))
+        counts[task_id] = counts.get(task_id, 0) + 1
+    return counts
 
 
 # ---------------------------------------------------------------------------
