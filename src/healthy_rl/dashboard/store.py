@@ -11,6 +11,7 @@ from __future__ import annotations
 import datetime as _dt
 import json
 import os
+import threading
 import uuid
 from pathlib import Path
 from typing import Any
@@ -36,6 +37,11 @@ class SessionStore:
         self.arrays_dir = self.root / ARRAYS_DIR
         self.arrays_dir.mkdir(parents=True, exist_ok=True)
         self._writer: JsonlWriter | None = None
+        # One dashboard session appends from several threads at once -- a task
+        # run and a chat send can be in flight together -- and they share one
+        # file handle. Without this, two records interleave on that handle and
+        # the JSONL grows a torn line that no reader can parse.
+        self._lock = threading.Lock()
 
     @classmethod
     def create(cls, root: str | os.PathLike[str], session: dict[str, Any]) -> "SessionStore":
@@ -55,14 +61,20 @@ class SessionStore:
         return cls(root, json.loads(path.read_text()))
 
     def append(self, record: dict[str, Any], arrays: dict[str, np.ndarray]) -> str:
-        rid = record.get("record_id") or uuid.uuid4().hex
-        record["record_id"] = rid
-        record.setdefault("created_at", _now())
-        np.savez(self.arrays_dir / f"{rid}.npz", **arrays)
-        record["arrays"] = f"{ARRAYS_DIR}/{rid}.npz"
-        if self._writer is None:
-            self._writer = JsonlWriter(self.records_path)
-        self._writer.write(record)
+        """Write the arrays and the row. Thread-safe; the row lands last.
+
+        The lock covers the npz write too, so a row is never visible before the
+        arrays it points at, and ``self._writer`` is created exactly once.
+        """
+        with self._lock:
+            rid = record.get("record_id") or uuid.uuid4().hex
+            record["record_id"] = rid
+            record.setdefault("created_at", _now())
+            np.savez(self.arrays_dir / f"{rid}.npz", **arrays)
+            record["arrays"] = f"{ARRAYS_DIR}/{rid}.npz"
+            if self._writer is None:
+                self._writer = JsonlWriter(self.records_path)
+            self._writer.write(record)
         return rid
 
     def records(self) -> list[dict[str, Any]]:
@@ -101,6 +113,7 @@ class SessionStore:
         return list(out.values())
 
     def close(self) -> None:
-        if self._writer is not None:
-            self._writer.close()
-            self._writer = None
+        with self._lock:
+            if self._writer is not None:
+                self._writer.close()
+                self._writer = None

@@ -351,6 +351,17 @@ def create_app(state: AppState) -> FastAPI:
     @app.get("/api/aggregate")
     def aggregate(source: str = "task", split: str | None = None, position: str = "start", stat: str = "token",
                   segment: str = "all", include_cap: bool = False, layer: int | None = None):
+        """By-turn series and paired last-minus-first delta over one source.
+
+        ``position`` names the readout when ``stat="token"``; ``segment`` names
+        the span when ``stat="mean"``. Each is inert under the other stat.
+
+        ``include_cap`` only bites on the ``end`` *readout* (``stat="token"``,
+        ``position="end"``), where a capped turn's last token is wherever the
+        budget ran out rather than where the model finished. A turn mean over a
+        segment is not an end readout and is never dropped for the cap (ruling,
+        2026-08-15).
+        """
         if position not in stats.READOUTS or stat not in ("token", "mean") or segment not in stats.SEGMENTS:
             raise HTTPException(400, "bad position/stat/segment")
         layer = _layer(layer)

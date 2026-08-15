@@ -56,3 +56,56 @@ def test_records_survive_reopen(tmp_path):
     st = SessionStore.create(tmp_path / "s", {"model": "m"})
     st.append(_rec(), _arrays()); st.close()
     assert len(SessionStore.open(tmp_path / "s").records()) == 1
+
+
+def test_concurrent_appends_share_one_writer_and_lose_no_rows(tmp_path, monkeypatch):
+    """A task run and a chat send append at the same time, through one handle.
+
+    The writer is created lazily on the first append, so without a lock several
+    threads each open their own handle to ``records.jsonl``. The extra handles
+    are never closed and the rows they wrote are not counted by the survivor.
+    The sleep in the patched constructor holds that window open, so a missing
+    lock fails this test every time instead of one run in five.
+    """
+    import threading
+    import time
+
+    from healthy_rl.dashboard import store as store_mod
+
+    built: list[object] = []
+
+    class SlowWriter(store_mod.JsonlWriter):
+        def __init__(self, path):
+            built.append(path)
+            time.sleep(0.05)
+            super().__init__(path)
+
+    monkeypatch.setattr(store_mod, "JsonlWriter", SlowWriter)
+
+    st = SessionStore.create(tmp_path / "s", {"model": "m"})
+    errors: list[BaseException] = []
+    together = threading.Barrier(8)
+
+    def work(t: int) -> None:
+        try:
+            together.wait()
+            for i in range(25):
+                st.append(_rec(f"c{t}", "chat", i), _arrays())
+        except BaseException as exc:  # a torn write surfaces here, not as a silent short file
+            errors.append(exc)
+
+    threads = [threading.Thread(target=work, args=(t,)) for t in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert errors == []
+    assert len(built) == 1, f"{len(built)} handles opened on one records.jsonl"
+    assert st._writer.n_written == 200
+    st.close()
+
+    rows = [json.loads(l) for l in (tmp_path / "s" / "records.jsonl").read_text().splitlines()]
+    assert len(rows) == 200
+    assert len({r["record_id"] for r in rows}) == 200
+    assert all((tmp_path / "s" / r["arrays"]).is_file() for r in rows)
