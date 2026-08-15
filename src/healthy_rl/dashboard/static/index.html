@@ -348,7 +348,7 @@ table.agg .sw{display:inline-block;width:8px;height:8px;border-radius:2px;margin
           <div class="ctrl" id="aggParams" style="margin-bottom:8px"></div>
           <div id="aggMsg"></div>
           <div class="wrapx"><table class="agg" id="aggTable"></table></div>
-          <p class="hint">Δ = last − first usable turn, paired within conversation. Wilcoxon reported when n ≥ 6 and scipy is available, else "—". Bars are Δ; grey rows are directions outside the four headline ones. The readout and segment switches on the Trajectory and Tokens tabs apply here too.</p>
+          <p class="hint">Δ = last − first usable turn, paired within conversation. Wilcoxon reported when n ≥ 6 and scipy is available, else "—". Bars are Δ; grey rows are directions outside the four headline ones. Readout and segment are shared with the Trajectory and Tokens tabs, and the Tokens tab's layer switch drives this table too; stat applies here only. The Trajectory card always reads single tokens at the probe layer.</p>
         </div>
         <div class="card">
           <div class="ch"><h3>By turn index, session mean</h3><span class="sub" id="aggChartSub">band = ±1 SEM</span></div>
@@ -951,25 +951,26 @@ async function aggregateData(params) {
   aggCache.set(key, p);
   try { return await p; } catch (e) { aggCache.delete(key); throw e; }
 }
-// `layer` defaults to the layer switch, which governs the strip, the token chart and the
-// Aggregate tab. The trajectory passes the probe layer explicitly: /api/conversations/{id}
-// only ever computes readouts there, so an overlay at any other layer would be a different
-// measurement drawn under the same lines.
-function aggParams(source, split, layer) {
-  return {source: source, split: split, position: S.readout, stat: S.stat, segment: S.segment,
-          include_cap: S.includeCap, layer: layer === undefined ? S.layer : layer};
+// Defaults are the Aggregate tab's switches: layer, stat and segment as set. The trajectory
+// overrides all three, because its solid lines are single-token readouts at the probe layer
+// (that is all /api/conversations/{id} computes) and an overlay measured any other way would
+// be a different statistic drawn under the same lines.
+function aggParams(source, split, over) {
+  const p = {source: source, split: split, position: S.readout, stat: S.stat, segment: S.segment,
+             include_cap: S.includeCap, layer: S.layer};
+  return Object.assign(p, over || {});
 }
 
 async function renderTrajectory() {
   renderTiles();
-  $("#trajSub").textContent = (S.stat === "token" ? "single token · " + READOUT_LABEL[S.readout] : "turn mean · " + S.segment) +
-    " · probe L" + S.probeLayer;
+  $("#trajSub").textContent = "single token · " + READOUT_LABEL[S.readout] + " · probe L" + S.probeLayer;
   trajDraw();
   renderTrajWarnings();
   if (!S.current) { S.trajSess = null; return; }
   const conv = S.current.conversation;
   try {
-    const data = await aggregateData(aggParams(conv.source || "task", conv.bench_split || null, S.probeLayer));
+    const data = await aggregateData(aggParams(conv.source || "task", conv.bench_split || null,
+                                                {stat: "token", segment: "all", layer: S.probeLayer}));
     S.trajSess = data;
   } catch (e) {
     S.trajSess = null;
@@ -1407,7 +1408,9 @@ function renderSettings() {
 function convState() { return S.current ? (S.current.conversation.state || "done") : null; }
 function liveTaskCid() { return (S.taskCid && !S.taskDone) ? S.taskCid : null; }
 function taskTarget() {
-  if (S.taskCid) return S.taskCid;
+  // Only a live run outranks what is on screen: S.taskCid survives the run that set it,
+  // so a finished run would otherwise swallow a Stop meant for the task you are looking at.
+  if (liveTaskCid()) return S.taskCid;
   return (S.current && S.current.conversation.source === "task") ? S.current.conversation.conversation_id : null;
 }
 function isChatConv() { return !!S.current && S.current.conversation.source !== "task"; }
@@ -1508,6 +1511,7 @@ async function stopTask() {
   if (!cid) return;
   try {
     const r = await api.post("/api/task/" + encodeURIComponent(cid) + "/stop", {});
+    if (cid === S.taskCid) S.taskDone = true;
     setStatus("stop requested · run is " + r.state);
   } catch (e) { setStatus(e.message, true); return; }
   invalidateAgg();
