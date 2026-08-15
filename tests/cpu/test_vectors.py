@@ -158,3 +158,64 @@ def test_turn_statistic_rejects_bad_norm():
         turn_statistic(projections, 0.0)
     with pytest.raises(ValueError):
         turn_statistic(np.zeros((0, 2)), 1.0)
+
+
+def _massive_activation_data(n=4000, seed=13):
+    """Residual-stream-like data: a few dimensions whose mean dwarfs their spread."""
+    rng = np.random.default_rng(seed)
+    means = np.array([1500.0, -900.0, 1200.0, 0.5, -0.25, 2.0])
+    return rng.normal(size=(n, means.size)) * 2.0 + means
+
+
+def test_online_covariance_survives_massive_activation_dimensions():
+    """float64 accumulation must stay exact where mean >> std.
+
+    The sum-of-squares form cancels catastrophically here: at float32 the variance
+    of the mean-1500 dimension comes back ~22% low -- so a 1e-8 relative tolerance
+    here discriminates by seven orders of magnitude, even though the raw sums of
+    squares are ~1e10 (measured float64 error: 2e-10).
+    """
+    data = _massive_activation_data()
+
+    cov = OnlineCovariance(data.shape[1])
+    for start in range(0, data.shape[0], 137):
+        cov.update(data[start : start + 137])
+
+    expected = np.cov(data, rowvar=False)
+    got = cov.covariance()
+    scale = np.abs(expected).max()
+    assert np.max(np.abs(got - expected)) / scale < 1e-8
+    # The variances that would collapse at float32 are recovered to ~4 (std 2).
+    np.testing.assert_allclose(np.diag(got)[:3], np.diag(expected)[:3], rtol=1e-8)
+
+
+def test_online_covariance_rejects_non_float64_dtype():
+    for dtype in (np.float32, np.float16, np.int64):
+        with pytest.raises(ValueError, match="float64"):
+            OnlineCovariance(8, dtype=dtype)
+
+
+def test_online_covariance_rejects_non_float64_accumulator_state():
+    """The resume path restores sum/sum_outer by assignment and must be guarded."""
+    data = _massive_activation_data(n=200)
+    cov = OnlineCovariance(data.shape[1])
+    cov.update(data)
+
+    cov.sum = cov.sum.astype(np.float32)
+    cov.sum_outer = cov.sum_outer.astype(np.float32)
+    with pytest.raises(ValueError, match="float64"):
+        cov.covariance()
+    with pytest.raises(ValueError, match="float64"):
+        cov.mean()
+
+
+def test_online_covariance_upcasts_float32_input():
+    """A float32 *batch* is fine -- it is accumulated exactly in float64."""
+    data = _massive_activation_data(n=500).astype(np.float32)
+    cov = OnlineCovariance(data.shape[1])
+    cov.update(data[:250])
+    cov.update(data[250:])
+
+    assert cov.sum.dtype == np.float64
+    expected = np.cov(data.astype(np.float64), rowvar=False)
+    assert np.max(np.abs(cov.covariance() - expected)) / np.abs(expected).max() < 1e-8

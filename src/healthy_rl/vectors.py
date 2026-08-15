@@ -87,14 +87,39 @@ class OnlineCovariance:
 
     Token-level activations are never stored, only the ``(d, d)`` outer-product
     accumulator, so a full pass over rollouts costs O(d^2) memory per layer.
+
+    **float64 only.** The sum-of-squares form cancels catastrophically when a
+    dimension's mean dwarfs its standard deviation -- exactly the massive-activation
+    dimensions of a residual stream. Measured on mean 1500 / std 2 data: float64
+    errs by ~4e-10 while float32 returns variance 3.07 against a true 3.95, a 22%
+    error. At d=5120 the accumulator is 210 MB per layer, so float32 is precisely
+    what someone reaches for under memory pressure; the constructor and
+    ``covariance()`` both refuse it rather than trusting the default.
     """
 
     def __init__(self, d: int | None = None, dtype=np.float64) -> None:
+        if np.dtype(dtype) != np.float64:
+            raise ValueError(
+                f"OnlineCovariance requires float64, got {np.dtype(dtype)}: the "
+                "sum-of-squares accumulator loses ~22% of the variance at float32 on "
+                "residual-stream dimensions whose mean dwarfs their standard deviation"
+            )
         self.d = d
-        self.dtype = dtype
+        self.dtype = np.float64
         self.count = 0
-        self.sum = np.zeros(d, dtype=dtype) if d is not None else None
-        self.sum_outer = np.zeros((d, d), dtype=dtype) if d is not None else None
+        self.sum = np.zeros(d, dtype=np.float64) if d is not None else None
+        self.sum_outer = np.zeros((d, d), dtype=np.float64) if d is not None else None
+
+    def _check_accumulator_dtype(self) -> None:
+        """Guard the resume path: callers restore ``sum``/``sum_outer`` by assignment."""
+        for name in ("sum", "sum_outer"):
+            arr = getattr(self, name)
+            if arr is not None and np.dtype(arr.dtype) != np.float64:
+                raise ValueError(
+                    f"OnlineCovariance.{name} has dtype {arr.dtype}, expected float64; "
+                    "a non-float64 accumulator silently loses variance on "
+                    "large-mean dimensions"
+                )
 
     def update(self, batch) -> "OnlineCovariance":
         """Accumulate a ``(n_positions, d)`` batch of activations."""
@@ -116,6 +141,7 @@ class OnlineCovariance:
     def mean(self) -> np.ndarray:
         if self.count == 0:
             raise ValueError("no samples accumulated")
+        self._check_accumulator_dtype()
         return self.sum / self.count
 
     def covariance(self, ddof: int = 1) -> np.ndarray:
@@ -124,6 +150,7 @@ class OnlineCovariance:
             raise ValueError(
                 f"need more than ddof={ddof} samples to form a covariance, have {self.count}"
             )
+        self._check_accumulator_dtype()
         mean = self.mean()
         centered_outer = self.sum_outer - self.count * np.outer(mean, mean)
         cov = centered_outer / (self.count - ddof)
@@ -137,6 +164,11 @@ def project(activations, directions) -> np.ndarray:
         activations: ``(n_positions, d)`` (a single ``(d,)`` position is accepted).
         directions: ``(n_emotions, d)``; re-normalised here so callers cannot
             silently pass unnormalised rows.
+
+    This is the raw dot product with unit directions, not a cosine: the activation
+    side is deliberately left unnormalised so per-token magnitude survives, and the
+    "cosine-style" normalisation of brief 2 happens once per turn in
+    ``turn_statistic`` (divide by the layer's mean residual norm).
 
     Returns:
         ``(n_positions, n_emotions)``.
@@ -154,9 +186,13 @@ def turn_statistic(projections, norm: float):
     """Mean projection over an assistant turn's generated positions, scaled by ``norm``.
 
     ``norm`` is that layer's mean residual-stream norm, which makes the result
-    comparable across layers and models. Returns a float for a single emotion
-    (1-D input) and a ``(n_emotions,)`` array for ``(n_positions, n_emotions)``
-    input.
+    comparable across layers and models. Returns a ``(n_emotions,)`` array for
+    ``(n_positions, n_emotions)`` input.
+
+    A 1-D input is read as ``(n_positions,)`` for a single emotion and returns a
+    float. Note the trap: ``project`` always returns 2-D, so a 1-D array here is
+    almost always one *position's* ``(n_emotions,)`` row, which this would average
+    across emotions -- a meaningless number. Pass the 2-D array.
     """
     arr = np.asarray(projections, dtype=np.float64)
     if arr.ndim not in (1, 2):

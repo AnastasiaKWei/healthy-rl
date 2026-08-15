@@ -21,6 +21,7 @@ __all__ = [
     "MANIFEST_NAME",
     "StaleUpstreamError",
     "artifact_dir",
+    "git_state",
     "write_manifest",
     "check_upstream",
     "manifest_sha256",
@@ -60,21 +61,39 @@ def manifest_path(path: str | os.PathLike[str]) -> Path:
     return p if p.name == MANIFEST_NAME else p / MANIFEST_NAME
 
 
-def _git_commit() -> str | None:
+def _git(*args: str) -> str | None:
+    """Run a git command in the repo root; ``None`` if git or the repo is unavailable."""
     try:
         result = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
+            ["git", *args],
             cwd=repo_root(),
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=30,
             check=False,
         )
     except (OSError, subprocess.SubprocessError):
         return None
     if result.returncode != 0:
         return None
-    return result.stdout.strip() or None
+    return result.stdout
+
+
+def git_state() -> dict[str, Any]:
+    """``{"sha": ..., "dirty": ...}`` for the working tree that produced an artifact.
+
+    ``dirty`` is ``git status --porcelain`` being non-empty (uncommitted or untracked
+    files included). Without it a manifest claims a commit that may not be the code
+    that actually ran, and that is unrecoverable once the tree moves on. Both fields
+    are ``None`` when git cannot be consulted -- an honest "unknown" rather than a
+    "clean" that would be a lie.
+    """
+    sha = _git("rev-parse", "HEAD")
+    status = _git("status", "--porcelain")
+    return {
+        "sha": sha.strip() or None if sha is not None else None,
+        "dirty": bool(status.strip()) if status is not None else None,
+    }
 
 
 def _normalize_upstreams(
@@ -87,11 +106,13 @@ def _normalize_upstreams(
     if isinstance(upstreams, (str, os.PathLike)):
         upstreams = [upstreams]
 
+    # Keyed by resolved path, not by the upstream's stage: the comparison stage
+    # consumes two models' activation directories, which share a stage name and
+    # would silently collide down to one entry.
     resolved: dict[str, Path] = {}
     for path in upstreams:
         p = Path(path)
-        name = check_upstream(p).get("stage") or manifest_path(p).parent.name
-        resolved[str(name)] = p
+        resolved[str(p.resolve())] = p
     return resolved
 
 
@@ -103,9 +124,13 @@ def write_manifest(
 ) -> Path:
     """Write ``<dir>/manifest.json`` describing this stage and its upstreams.
 
+    Schema (fixed by the plan's global constraints): ``stage``, ``created_at``,
+    ``git.sha``, ``git.dirty``, ``config``, and ``upstreams`` mapping a name to
+    ``{path, stage, manifest_sha256}``.
+
     ``upstreams`` may be a mapping ``name -> artifact dir`` or a sequence of
-    artifact dirs (keyed by each upstream's own ``stage``). Each upstream must
-    already have a manifest; its sha256 is recorded here.
+    artifact dirs (keyed by resolved path). Each upstream must already have a
+    manifest; the sha256 of that manifest is recorded here.
     """
     out_dir = Path(dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -116,13 +141,13 @@ def write_manifest(
         recorded[name] = {
             "path": str(Path(path).resolve()),
             "stage": upstream.get("stage"),
-            "sha256": manifest_sha256(path),
+            "manifest_sha256": manifest_sha256(path),
         }
 
     manifest = {
         "stage": stage,
-        "created": datetime.now(timezone.utc).isoformat(),
-        "git_commit": _git_commit(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "git": git_state(),
         "config": dict(config) if config else {},
         "upstreams": recorded,
     }
@@ -164,8 +189,11 @@ def verify_upstreams(dir: str | os.PathLike[str]) -> dict:
     stale = []
     for name, entry in manifest.get("upstreams", {}).items():
         current = manifest_sha256(entry["path"])
-        if current != entry.get("sha256"):
-            stale.append(f"{name} at {entry['path']}: {entry.get('sha256')} -> {current}")
+        # "sha256" is the pre-schema-fix key: manifests written by jobs that were
+        # already running when the schema changed are still readable.
+        recorded = entry.get("manifest_sha256", entry.get("sha256"))
+        if current != recorded:
+            stale.append(f"{name} at {entry['path']}: {recorded} -> {current}")
     if stale:
         raise StaleUpstreamError(
             f"upstream manifest(s) changed since {manifest_path(dir)} was written: "
