@@ -18,7 +18,7 @@ From: python:3.12-bookworm
 
 %labels
     Purpose  ImpossibleBench rollouts for the healthy-rl desperation pilot
-    Inspect  inspect_ai 0.3.258 (NOT the host venv's 0.3.69; see %post)
+    Inspect  inspect_ai 0.3.258 (matches the host venv's pyproject pin; see %post)
     Bench    safety-research/impossiblebench @ 061dc3dce6a96ab6cf02a855157263033dcfa3ba
 
 %post
@@ -34,12 +34,13 @@ From: python:3.12-bookworm
     # server outside, reached over HTTP.
     python -m pip install --index-url https://download.pytorch.org/whl/cpu torch
 
-    # inspect_ai 0.3.258, the current release. NOT the host venv's 0.3.69:
-    # uv.lock pins 0.3.69 for python < 3.13, and 0.3.69 has no
-    # inspect_ai.agent module, which impossiblebench imports. Both this
-    # version and vllm_lens's Inspect provider were checked against each other
-    # before this pin was chosen -- every private inspect_ai module
-    # vllm_lens/inspect_provider.py reaches into still exists at 0.3.258.
+    # inspect_ai 0.3.258, the same floor pyproject.toml sets for the host venv
+    # (keep them in step: the host reads the .eval logs this container writes).
+    # Older releases such as 0.3.69 have no inspect_ai.agent module, which
+    # impossiblebench imports. Both this version and vllm_lens's Inspect
+    # provider were checked against each other before this pin was chosen --
+    # every private inspect_ai module vllm_lens/inspect_provider.py reaches
+    # into still exists at 0.3.258.
     # openai is required, not optional: inspect_ai reaches a vLLM server through
     # its OpenAI-compatible provider, which imports the openai package, and that
     # is the path steering takes via extra_body={"vllm_xargs": ...}.

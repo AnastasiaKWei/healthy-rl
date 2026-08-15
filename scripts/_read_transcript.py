@@ -1,19 +1,15 @@
-"""Render one Inspect .eval log. Runs INSIDE apptainer/eval.sif.
+"""Render one Inspect .eval log.
 
 Driven by scripts/read_transcript.sh, which supplies MODE, CLOG and SAMPLE in
-the environment. Kept as its own file rather than inlined into the shell
-wrapper because quoting a Python program through `apptainer exec ... python -c`
-inside a bash script is how you get a syntax error at 3am.
+the environment. Runs on the host venv; it used to run inside apptainer/eval.sif
+back when the venv's inspect_ai was too old to read the container's logs.
 """
 
 from __future__ import annotations
 
+import asyncio
 import os
 import textwrap
-
-os.makedirs("/work/tmp", exist_ok=True)
-
-import asyncio  # noqa: E402
 
 # read_eval_log_async is imported inside load(); see the docstring there.
 

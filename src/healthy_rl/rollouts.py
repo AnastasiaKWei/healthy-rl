@@ -19,10 +19,11 @@ Layout of this module:
 
 Two version skews are load-bearing and deliberate:
 
-- The rollout container pins ``inspect_ai==0.3.258`` (see ``apptainer/eval.def``),
-  NOT the host venv's 0.3.69. 0.3.69 has neither ``GenerateConfig.extra_body``
-  nor ``inspect_ai.hooks``, both of which this module needs, and
-  ``vllm_lens.inspect_provider`` cannot work against it at all.
+- The rollout container pins ``inspect_ai==0.3.258`` (see ``apptainer/eval.def``)
+  and ``pyproject.toml`` requires ``>=0.3.258`` on the host too. Anything older
+  (0.3.69, which uv.lock once resolved on Python 3.12) has neither
+  ``GenerateConfig.extra_body`` nor ``inspect_ai.hooks``, both of which this
+  module needs, and ``vllm_lens.inspect_provider`` cannot work against it at all.
 - ``impossible_livecodebench()`` builds its dataset with ``hf_dataset()``, which
   needs the network. Compute nodes have no DNS, so by default the dataset is
   rebuilt from ``bench/v1/conflicting.parquet`` using ImpossibleBench's own
@@ -1166,7 +1167,7 @@ def register_sample_hook() -> None:
         raise RuntimeError(
             f"inspect_ai {getattr(inspect_ai, '__version__', '?')} has no inspect_ai.hooks; "
             "the rollout harness needs >= 0.3.258 (that is what apptainer/eval.def "
-            "installs). The host venv's 0.3.69 cannot run rollouts."
+            "installs and what pyproject.toml requires; run `uv sync`)."
         ) from exc
 
     @hooks(name="healthy_rl_rollout_writer", description="Append each rollout to the JSONL")

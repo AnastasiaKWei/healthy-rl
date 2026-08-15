@@ -41,3 +41,6 @@ viewer/data.json
 logs/smoke*/
 logs/screen*/
 logs/partial/
+
+# Symlink to $ARTIFACT_DIR/rollouts (Inspect .eval logs live off-repo)
+inspect-logs

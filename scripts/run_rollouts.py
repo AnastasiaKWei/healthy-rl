@@ -169,10 +169,10 @@ DEFAULT_SIF = "apptainer/eval.sif"
 def _needs_container() -> str | None:
     """Why this interpreter cannot run rollouts, or None if it can.
 
-    The host venv is pinned to inspect_ai 0.3.69 (uv.lock, Python 3.12) and has
-    no ``impossiblebench``; the rollout container has 0.3.258 and both. The
-    version that matters is whichever interpreter is executing, so this asks the
-    interpreter rather than trusting a path.
+    The host venv has no ``impossiblebench``; the rollout container has it. The
+    ``inspect_ai.hooks`` check is a guard against a stale venv (uv.lock once
+    pinned 0.3.69 on Python 3.12). What matters is whichever interpreter is
+    executing, so this asks the interpreter rather than trusting a path.
     """
     from importlib.util import find_spec
 
