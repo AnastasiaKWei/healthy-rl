@@ -74,7 +74,7 @@ Rollout records, `$ARTIFACT_DIR/rollouts/<model>/<version>/*.jsonl`:
 | model | version | records | notes |
 |---|---|---:|---|
 | Ministral-3-14B-Reasoning-2512 | `d6` | 24 | complete, analysed |
-| Ministral-3-14B-Reasoning-2512 | `aff6` | 21 | **still accumulating** |
+| Ministral-3-14B-Reasoning-2512 | `aff6` | 24 | complete |
 | Ministral-3-14B-Reasoning-2512 | `pos6` | 24 | complete; 5/24 solved, 20/24 ran all six turns |
 | Ministral-3-14B-Reasoning-2512 | `affpos6` | 0 | **submitted 2026-08-15**, jobs 5641830-32 |
 | Ministral-3-14B-Reasoning-2512 | `v1` | 48 | void |
@@ -88,10 +88,10 @@ Rollout records, `$ARTIFACT_DIR/rollouts/<model>/<version>/*.jsonl`:
 | gemma-3-12b-it | `aff6` | 24 | complete, analysed (turn-end only) |
 | Olmo-3.1-32B-Think | `v1` | 172 | void |
 | Qwen3.6-27B | `v1` | 0 | never produced records |
-| Qwen3-14B | `d6` | 0 | **submitted 2026-08-15**, jobs 5641928-30 |
-| Qwen3-14B | `aff6` | 0 | **submitted 2026-08-15**, jobs 5641931-33 |
-| Qwen3-14B | `pos6` | 0 | **submitted 2026-08-15**, jobs 5641934-36 |
-| Qwen3-14B | `affpos6` | 0 | **submitted 2026-08-15**, jobs 5641937-39 |
+| Qwen3-14B | `d6` | 0 | relaunched as 5642677-79 after the max_model_len failure |
+| Qwen3-14B | `aff6` | 0 | relaunched as 5642680-82 |
+| Qwen3-14B | `pos6` | 0 | relaunched as 5642683-85 |
+| Qwen3-14B | `affpos6` | 0 | relaunched as 5642686-88 |
 | Nemotron-3-Nano-4B-BF16 | `d6` | 0 | **submitted 2026-08-15**, jobs 5641940-42 |
 | Nemotron-3-Nano-4B-BF16 | `aff6` | 0 | **submitted 2026-08-15**, jobs 5641943-45 |
 | Nemotron-3-Nano-4B-BF16 | `pos6` | 0 | **submitted 2026-08-15**, jobs 5641946-48 |

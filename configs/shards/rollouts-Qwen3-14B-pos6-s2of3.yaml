@@ -39,7 +39,12 @@ serve:
   # that depth and Qwen will not. If serve logs show heavy preemption on Olmo,
   # the L40S nodes (92 GB total, ~20 GB KV for Olmo) are the cheaper fix than
   # shortening the window.
-  max_model_len: 65536
+  # 40960, not 65536: Qwen3-14B's config.json caps max_position_embeddings at
+  # 40960 and vLLM refuses a larger max_model_len outright -- the first twelve
+  # jobs for this model died 19 seconds in, before the weights loaded, because
+  # the serve block was copied from Qwen3.5-9B (262144). Well clear of what the
+  # runs need: the deepest rollout measured generated 21k tokens in total.
+  max_model_len: 40960
   gpu_memory_utilization: 0.92
   max_num_seqs: 8
 

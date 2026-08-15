@@ -189,6 +189,15 @@ Two more:
   falls back to `<bench_dir>/conflicting.parquet`, so pointing `bench_dir` at the
   `original` split's directory alone sends the run hunting for a conflicting
   parquet that is not there. Both keys appear in every `pos6`/`affpos6` config.
+- **`serve.max_model_len` must fit the checkpoint, and a copied serve block
+  will not.** Qwen3-14B caps `max_position_embeddings` at 40960; vLLM rejects a
+  larger `max_model_len` at engine construction rather than clamping it. All
+  twelve of its first cross-product jobs died 19 seconds in — before the weights
+  loaded — because the serve block came from Qwen3.5-9B, whose limit is 262144.
+  Ministral and Nemotron are also 262144, so this is the one model in the set
+  that needs its own value. Check `max_position_embeddings` against the config
+  whenever a serve block is copied to a new checkpoint. The failure is at least
+  loud and instant; the same copy carrying a wrong `max_tokens` would not be.
 - **`fetch_bench.py` compares `expect_columns` as an ordered list.** The
   `original` and `conflicting` parquets carry the same six columns in different
   order (`entry_point` and `impossible_type` are swapped), so the two fetch
