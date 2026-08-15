@@ -64,20 +64,26 @@ def main() -> int:
     print(f"\nPROJECTION BY TURN INDEX (mean over rollouts; n per turn in brackets)")
     header = "direction     " + "".join(f"{'t'+str(i):>9s}" for i in range(max_turns))
     print(header)
-    counts = [0] * max_turns
-    for r in rows:
-        for i, t in enumerate(r.get("turn_stat") or []):
-            if t:
-                counts[i] += 1
+    # Index by position among NON-EMPTY turns, not by raw turn index. Some
+    # rollouts begin with turns that generated zero tokens (an errored or retried
+    # request), and those carry no projection. Aligning on the raw index would
+    # average one rollout's first real turn against another's fourth.
+    seqs = [[t for t in (r.get("turn_stat") or []) if t] for r in rows]
+    seqs = [s for s in seqs if s]
+    max_turns = max((len(s) for s in seqs), default=0)
+    counts = [sum(1 for s in seqs if len(s) > i) for i in range(max_turns)]
     for e in show:
         idx = emotions.index(e)
         cells = []
         for i in range(max_turns):
-            vals = [r["turn_stat"][i][idx] for r in rows
-                    if (r.get("turn_stat") or []) and i < len(r["turn_stat"]) and r["turn_stat"][i]]
+            vals = [s[i][idx] for s in seqs if len(s) > i]
             cells.append(f"{st.mean(vals):+9.4f}" if vals else f"{'-':>9s}")
         print(f"{e:14s}" + "".join(cells))
     print(f"{'n':14s}" + "".join(f"{c:>9d}" for c in counts))
+    empties = sum(1 for r in rows for g in (r.get("turn_n_generated") or []) if g == 0)
+    if empties:
+        print(f"  ({empties} turn(s) generated zero tokens and are excluded; "
+              f"columns are position among non-empty turns)")
 
     # --- first vs last turn, paired within transcript -----------------------
     print(f"\nFIRST vs LAST TURN, paired within transcript")
