@@ -237,7 +237,7 @@ function buildRail(){
       html += '<div class="splithead ' + r.split + '">' + label + '</div>';
       r.samples.forEach((s, i) => {
         html += '<button class="samp ' + r.split + '" data-key="' + esc(r.file + '::' + i) + '">' +
-          '<span class="stripe"></span><span class="sname">' + esc(s.id) + '</span>' +
+          '<span class="stripe"></span><span class="sname">' + esc(s.label || s.id) + '</span>' +
           '<span>' + (s.flag ? '<span class="tag flag">gave up</span>' :
                       s.error ? '<span class="tag flag">error</span>' :
                       s.score === 'C' ? '<span class="tag">passed</span>' : '') +
@@ -282,7 +282,7 @@ function render(){
   const s = run.samples[+CUR.slice(sep + 2)];
 
   document.getElementById('crumbTitle').textContent =
-    run.model.split('/').slice(-1)[0] + ' · ' + s.id;
+    run.model.split('/').slice(-1)[0] + ' · ' + (s.label || s.id);
   document.getElementById('crumbSub').textContent =
     run.arm + ' · ' + (run.split === 'conflicting' ? 'impossible task' : 'normal task');
 

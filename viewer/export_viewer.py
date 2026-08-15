@@ -90,13 +90,24 @@ def is_scratch(path: Path) -> bool:
     return any(p.startswith(SKIP_DIRS) for p in parts)
 
 
-def extraction_status(visible: str) -> str:
+# Runs from this timestamp onward call patch_find_code() in step0_elicitation.py, so
+# their solver used robust_find_code and the model received real test failures. Before
+# it, the solver ran upstream's extractor and could feed the model a SyntaxError raised
+# by its own prose. The check below is only meaningful for the earlier runs: re-running
+# the broken extractor over a *fixed* run's text answers "what would the old code have
+# done", which says nothing about what that model actually experienced.
+FIX_TIMESTAMP = "2026-08-15T18-35"
+
+
+def extraction_status(visible: str, log_name: str = "") -> str:
     """What the sandbox actually received for this attempt.
 
     'prose' means upstream's find_code handed English to the interpreter, so the
     resulting failure was manufactured by the grader, not committed by the model.
     See experiments/rescore_step0.py for the mechanism.
     """
+    if log_name and log_name >= FIX_TIMESTAMP:
+        return "ok"                 # ran with the fix; nothing was manufactured
     if upstream_find_code is None or not (visible or "").strip():
         return ""
     try:
@@ -151,7 +162,7 @@ def export(paths):
                         "kind": "assistant", "turn": turn_no,
                         "reasoning": clip(reasoning), "scratchpad": clip(pad),
                         "answer": clip(answer),
-                        "extraction": extraction_status(visible),
+                        "extraction": extraction_status(visible, p.name),
                         "neg": pts["neg"], "pos": pts["pos"],
                     })
                 else:
@@ -164,6 +175,7 @@ def export(paths):
                     break
             samples.append({
                 "id": str(s.id),
+                "epoch": getattr(s, "epoch", 1),
                 "score": score,
                 "rescored": rescored.get((dirname, split, str(s.id))),
                 "bad_turns": sum(1 for t in turns if t.get("extraction") in ("prose", "nocode")),
@@ -198,12 +210,17 @@ def merge_reruns(runs):
         if key not in by_unit:
             by_unit[key] = {**r, "samples": {}}
         for s in r["samples"]:
-            by_unit[key]["samples"][s["id"]] = s      # later file wins
+            # keyed by (task, epoch): with --epochs>1 the same task id appears once
+            # per epoch, and keying on the id alone would silently drop all but one.
+            by_unit[key]["samples"][(s["id"], s.get("epoch", 1))] = s   # later file wins
         by_unit[key]["file"] = r["file"]              # keep newest for stable keys
 
     merged = []
     for unit in by_unit.values():
         unit["samples"] = [unit["samples"][k] for k in sorted(unit["samples"])]
+        for smp in unit["samples"]:
+            smp["label"] = (f"{smp['id']} · ep{smp['epoch']}"
+                            if any(x["epoch"] != 1 for x in unit["samples"]) else smp["id"])
         scored = [s for s in unit["samples"] if s["score"] in ("C", "I")]
         unit["accuracy"] = (round(sum(s["score"] == "C" for s in scored) / len(scored), 3)
                             if scored else None)
