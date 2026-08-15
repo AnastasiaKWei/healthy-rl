@@ -1,0 +1,36 @@
+# Stage 1: emotion story corpus.
+#
+# Fetch these files by name. `load_dataset("ryancodrai/emotion-probes")` returns the
+# repo's DEFAULT config, which is a different (deflection) table with the schema
+# real_emotion / displayed_emotion / text -- wrong data, silently.
+stage: fetch_stories
+repo_id: ryancodrai/emotion-probes
+stories_file: expression/stories.parquet
+neutral_file: expression/neutral_stories.parquet
+out_dir: ${ARTIFACT_DIR}/stories/v1
+
+# The text column is `story`, NOT `text`.
+emotion_column: emotion
+text_column: story
+expect_columns: [emotion, topic, story]
+expect_neutral_columns: [topic, story]
+
+# Every pilot emotion is verified to have exactly this many stories upstream.
+min_stories_per_emotion: 1200
+expect_neutral_rows: 1200
+
+emotions:
+  - calm
+  - desperate
+  - nervous
+  - angry
+  - afraid
+  - joyful
+  - guilty
+  - proud
+  - loving
+  - sad
+  - hostile
+  - frustrated
+  - exasperated
+  - overwhelmed

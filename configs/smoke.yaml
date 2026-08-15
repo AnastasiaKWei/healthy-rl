@@ -1,0 +1,17 @@
+# Stage 0: can vllm-lens actually hook THIS architecture?
+#
+# Runs on a compute node against an already-running server. One model per invocation
+# (`--model`); the server must be serving that same checkpoint.
+stage: smoke
+version: v1
+model_dir: ${MODEL_DIR}
+model: gemma-4-31B-it
+
+prompt: "Write one sentence about a deadline that is about to be missed."
+max_tokens: 8
+steer_max_tokens: 32
+seed: 1234
+steer_scale: 0.5
+norm_match: true
+temperature: 0.0
+request_timeout_s: 600
