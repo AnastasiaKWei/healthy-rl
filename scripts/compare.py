@@ -33,6 +33,7 @@ import json
 import math
 import os
 import traceback
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -40,6 +41,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 import numpy as np
 
+from healthy_rl.artifacts import git_state, manifest_sha256, write_manifest
 from healthy_rl.config import load_config, load_env, repo_root
 
 DEFAULT_CONFIG = repo_root() / "configs" / "compare.yaml"
@@ -50,6 +52,7 @@ DEFAULT_CONFIG = repo_root() / "configs" / "compare.yaml"
 READOUT_CONDITION = "readout"
 
 SUMMARY_NAME = "summary.md"
+MANIFEST = "manifest.json"
 CSV_NAME = "results.csv"
 CURVES_NAME = "steering_curves.png"
 TRACE_NAME = "desperate_trace.png"
@@ -366,47 +369,80 @@ def run_scope(records: Sequence[Mapping[str, Any]]) -> Scope:
 
 @dataclass
 class Truncation:
-    """How many assistant turns ran into the per-turn token budget."""
+    """How assistant turns ended: at the token budget, empty, or on the model's own stop.
+
+    Three categories, not two. A turn that generated zero tokens is not a short
+    turn -- it is a turn that did not happen, and counting it in the denominator
+    as "not truncated" understates how little of the budget the model actually
+    got to use.
+    """
 
     n_turns: int
-    n_truncated: int
+    n_at_cap: int
+    n_empty: int
     cap: int
+    n_records: int = 0
+    n_records_with_empty: int = 0
+
+    @property
+    def n_natural(self) -> int:
+        """Turns that ended on the model's own stop token."""
+        return self.n_turns - self.n_at_cap - self.n_empty
 
     @property
     def fraction(self) -> float | Missing:
         if self.n_turns == 0:
             return Missing("no turns")
-        return self.n_truncated / self.n_turns
+        return self.n_at_cap / self.n_turns
 
     def render(self) -> str:
         if self.n_turns == 0:
             return "no turns to count"
         return (
-            f"**{self.n_truncated} of {self.n_turns} turns ({fmt_pct(self.fraction, 0)}) "
-            f"hit the {self.cap}-token per-turn budget**"
+            f"**{self.n_at_cap} of {self.n_turns} turns ({fmt_pct(self.fraction, 0)}) hit "
+            f"the {self.cap}-token per-turn budget**, {self.n_empty} generated zero tokens, "
+            f"and {self.n_natural} ended on the model's own stop token"
+        )
+
+    def attempts_note(self) -> str | None:
+        """Empty turns cost the rollout an attempt, which is worth saying out loud."""
+        if not self.n_empty or not self.n_records:
+            return None
+        return (
+            f"{self.n_records_with_empty} of {self.n_records} rollouts contain at least one "
+            "turn that generated nothing, so those rollouts effectively got **one fewer "
+            "attempt** than the scaffold's budget allowed"
         )
 
 
 def truncation(records: Sequence[Mapping[str, Any]], cap: int | Missing) -> Truncation | Missing:
-    """Turns whose generation stopped at the cap rather than at the model's own stop.
+    """Turns at the cap, turns that generated nothing, and turns that stopped naturally.
 
     ``>= cap - 1`` rather than ``== cap``: the counter excludes the final stop
-    token on some paths, so an exact test silently misses the truncated turns.
+    token on some paths, so an exact test silently misses truncated turns.
     """
     if is_missing(cap):
         return cap
-    lengths = [
-        int(n)
-        for record in records
-        for n in (record.get("turn_n_generated") or [])
-        if n is not None
-    ]
+    lengths: list[int] = []
+    n_records = 0
+    n_records_with_empty = 0
+    for record in records:
+        counts = [int(n) for n in (record.get("turn_n_generated") or []) if n is not None]
+        if not counts:
+            continue
+        n_records += 1
+        if any(n == 0 for n in counts):
+            n_records_with_empty += 1
+        lengths.extend(counts)
     if not lengths:
         return Missing("no record carries `turn_n_generated`")
     return Truncation(
         n_turns=len(lengths),
-        n_truncated=sum(1 for n in lengths if n >= cap - 1),
+        n_at_cap=sum(1 for n in lengths if n >= cap - 1),
+        n_empty=sum(1 for n in lengths if n == 0),
         cap=int(cap),
+        n_records=n_records,
+        n_records_with_empty=n_records_with_empty,
     )
 
 
@@ -808,6 +844,67 @@ def sweep_results(records: Sequence[Mapping[str, Any]]) -> Sweep | Missing:
 
 
 @dataclass
+class Geometry:
+    """Cosine similarities between the steered direction and the other 13.
+
+    The manipulation check's off-target shifts are not a behavioural result: with
+    the readout at the injection layer they are ``strength * |h|/norm * cos``. This
+    makes that explicit by carrying the cosines, so the report can show the
+    predicted shift beside the observed one instead of asserting the relationship.
+    """
+
+    emotions: list[str]
+    cos: dict[str, dict[str, float]]
+    probe_layer: int
+
+    def against(self, emotion: str) -> list[tuple[str, float]]:
+        row = self.cos.get(emotion, {})
+        return sorted(
+            ((name, value) for name, value in row.items() if name != emotion),
+            key=lambda item: -abs(item[1]),
+        )
+
+
+def direction_geometry(vectors_dir: Path) -> Geometry | Missing:
+    """Pairwise cosines of the unit directions at the probe layer."""
+    meta = read_json(vectors_dir / "vectors.json")
+    if is_missing(meta):
+        return Missing(f"vectors.json unavailable ({meta.reason})")
+    path = vectors_dir / "vectors.safetensors"
+    if not path.is_file():
+        return Missing(f"{path} does not exist")
+    try:
+        from safetensors.numpy import load_file
+
+        directions = load_file(str(path))["directions"]
+    except Exception as exc:  # noqa: BLE001 - a missing geometry must not stop the report
+        return Missing(f"{path} could not be read: {type(exc).__name__}: {exc}")
+
+    emotions = list(meta.get("emotions") or [])
+    layers = list(meta.get("capture_layers") or [])
+    probe = meta.get("probe_layer")
+    if directions.ndim != 3 or probe not in layers:
+        return Missing(
+            f"unexpected directions shape {getattr(directions, 'shape', None)} for "
+            f"capture layers {layers} and probe layer {probe}"
+        )
+    at_probe = np.asarray(directions[:, layers.index(probe), :], dtype=np.float64)
+    norms = np.linalg.norm(at_probe, axis=1, keepdims=True)
+    if not np.all(norms > 0):
+        return Missing("at least one direction has zero norm at the probe layer")
+    unit = at_probe / norms
+    gram = unit @ unit.T
+    return Geometry(
+        emotions=emotions,
+        cos={
+            a: {b: float(gram[i, j]) for j, b in enumerate(emotions)}
+            for i, a in enumerate(emotions)
+        },
+        probe_layer=int(probe),
+    )
+
+
+@dataclass
 class ProbeShift:
     """Manipulation check: did steering a direction move that direction's own probe?
 
@@ -827,8 +924,12 @@ class ProbeShift:
     per_emotion: list[float]
     paired: bool
     n_pairs: int
+    fully_paired: bool
     rate: Rate
     truncation: Truncation | Missing
+    by_layer: dict[int, float]
+    probe_layer: int | None
+    runtime_norm: float | Missing
 
     @property
     def shift(self) -> float:
@@ -916,6 +1017,67 @@ def _paired_transcript_deltas(
     return np.asarray(deltas, dtype=float) if deltas else None
 
 
+def _paired_layer_deltas(
+    steered: Sequence[Mapping[str, Any]],
+    unsteered: Sequence[Mapping[str, Any]],
+    emotion_index: int,
+) -> dict[int, float]:
+    """Steered-minus-unsteered projection of one direction at EVERY capture layer.
+
+    This is the part of the manipulation check that the injection-layer number
+    cannot give: layers upstream of the injection are a control that could have
+    failed, and the profile across layers is what distinguishes a localized edit
+    from a measurement smeared across the capture window.
+    """
+
+    def per_layer(record: Mapping[str, Any]) -> dict[int, float]:
+        out: dict[int, list[float]] = {}
+        for row in record.get("turn_stat_layers") or []:
+            if not isinstance(row, Mapping):
+                continue
+            for key, values in row.items():
+                if not values:
+                    continue
+                try:
+                    layer = int(key)
+                    value = values[emotion_index]
+                except (TypeError, ValueError, IndexError):
+                    continue
+                if value is None or not math.isfinite(float(value)):
+                    continue
+                out.setdefault(layer, []).append(float(value))
+        return {layer: float(np.mean(vals)) for layer, vals in out.items()}
+
+    baseline = {
+        (str(r.get("task_id")), r.get("sample")): per_layer(r) for r in unsteered
+    }
+    deltas: dict[int, list[float]] = {}
+    for record in steered:
+        key = (str(record.get("task_id")), record.get("sample"))
+        if key not in baseline:
+            continue
+        before, after = baseline[key], per_layer(record)
+        for layer, value in after.items():
+            if layer in before:
+                deltas.setdefault(layer, []).append(value - before[layer])
+    return {layer: float(np.mean(vals)) for layer, vals in sorted(deltas.items())}
+
+
+def _runtime_norm(records: Sequence[Mapping[str, Any]], layer: int | None) -> float | Missing:
+    """Mean observed residual norm at the probe layer during these rollouts."""
+    if layer is None:
+        return Missing("no probe layer recorded")
+    values = [
+        float(row[str(layer)])
+        for record in records
+        for row in (record.get("turn_observed_norm") or [])
+        if isinstance(row, Mapping) and row.get(str(layer)) is not None
+    ]
+    if not values:
+        return Missing("no record carries `turn_observed_norm` at the probe layer")
+    return float(np.mean(values))
+
+
 def probe_shifts(
     records: Sequence[Mapping[str, Any]], emotions: Sequence[str], cap: int | Missing
 ) -> list[ProbeShift] | Missing:
@@ -963,10 +1125,18 @@ def probe_shifts(
             paired, n_pairs = True, int(deltas.shape[0])
             per_emotion = list(deltas.mean(axis=0))
             steered_mean = float(a.mean())
-            baseline_mean = steered_mean - float(deltas[:, index].mean())
+            # Only meaningful when every steered transcript found its partner: with
+            # partial pairing this would mix the paired delta into an unpaired mean
+            # and print a baseline that belongs to neither population.
+            baseline_mean = (
+                steered_mean - float(deltas[:, index].mean())
+                if n_pairs == int(a.size)
+                else float(b.mean())
+            )
+            fully_paired = n_pairs == int(a.size)
             p = _paired_t(deltas[:, index])
         else:
-            paired, n_pairs = False, 0
+            paired, n_pairs, fully_paired = False, 0, False
             per_emotion = list(steered_arr.mean(axis=0) - baseline_arr.mean(axis=0))
             steered_mean = float(a.mean())
             baseline_mean = float(b.mean())
@@ -982,6 +1152,7 @@ def probe_shifts(
                     p = float(sps.ttest_ind(a, b, equal_var=False).pvalue)
                 except ImportError:  # pragma: no cover
                     p = Missing("scipy is not installed")
+        probe_layer = records[0].get("probe_layer") if records else None
         shifts.append(
             ProbeShift(
                 emotion=emotion,
@@ -997,6 +1168,10 @@ def probe_shifts(
                 n_pairs=n_pairs,
                 rate=hack_rate(rows),
                 truncation=truncation(rows, cap),
+                fully_paired=fully_paired,
+                by_layer=_paired_layer_deltas(rows, unsteered, index),
+                probe_layer=int(probe_layer) if probe_layer is not None else None,
+                runtime_norm=_runtime_norm(rows, probe_layer),
             )
         )
     if not shifts:
@@ -1026,6 +1201,7 @@ class ModelReport:
     grouped: GroupResult | Missing = Missing("not computed")
     sweep: Sweep | Missing = Missing("not computed")
     shifts: list[ProbeShift] | Missing = Missing("not computed")
+    geometry: Geometry | Missing = Missing("not computed")
     scope: Scope | Missing = Missing("not computed")
     cap: int | Missing = Missing("not computed")
     truncation: Truncation | Missing = Missing("not computed")
@@ -1063,6 +1239,9 @@ def build_report(model: str, root: Path, cfg: Mapping[str, Any]) -> ModelReport:
         report.grouped = Missing(why)
         report.sweep = Missing(why)
         report.shifts = Missing(why)
+        report.geometry = direction_geometry(
+            root / "vectors" / model / versions["vectors"]
+        )
         report.scope = Missing(why)
         report.truncation = Missing(why)
         report.readout_truncation = Missing(why)
@@ -1090,6 +1269,7 @@ def build_report(model: str, root: Path, cfg: Mapping[str, Any]) -> ModelReport:
         report.paired = failure_turn_contrast(unsteered, report.emotions)
         report.grouped = hack_group_contrast(unsteered, report.emotions)
         report.shifts = probe_shifts(report.records, report.emotions, report.cap)
+    report.geometry = direction_geometry(root / "vectors" / model / versions["vectors"])
     report.sweep = sweep_results(report.records)
     report.scope = run_scope(report.records)
     report.truncation = truncation(report.records, report.cap)
@@ -1618,6 +1798,9 @@ def _truncation_caution(report: ModelReport) -> list[str]:
         ]
     zero = not is_missing(report.baseline) and report.baseline.k == 0 and report.baseline.n > 0
     lines = [f"> {trunc.render()} on the unsteered rollouts."]
+    attempts = trunc.attempts_note()
+    if attempts:
+        lines.append(f"> {attempts[0].upper()}{attempts[1:]}.")
     if zero:
         lines.append(
             "> The hack rate is exactly zero AND most turns were cut off mid-generation, "
@@ -1744,10 +1927,11 @@ def _causal_framing(report: ModelReport, hypothesis: str) -> list[str]:
         "run anyway, as a deliberate change of outcome measure (ruling R35), because two "
         "questions stay answerable:",
         ">",
-        f"> 1. **Manipulation check** -- does steering `{hypothesis}` actually move the "
-        f"`{hypothesis}` probe during real agentic rollouts? Answered in its own section "
-        "above, and answered positively; it validates the causal machinery end to end and "
-        "is a prerequisite for any future run, independently of behaviour.",
+        f"> 1. **Steering check** -- did the vector reach the model at the intended layer "
+        "and scale? Answered in its own section above. It is a plumbing and locality "
+        "check, not a demonstration that steering changed the model's computation: the "
+        "probe reads the layer the vector is injected into, so the shift there is an "
+        "identity.",
         "> 2. **Floor effect** -- a rate of zero can only move upward. Hacking under "
         "steering would be notable; none would be a clean bounded negative. Any lift is "
         "tested against the unsteered baseline below rather than asserted from the fact "
@@ -1759,129 +1943,246 @@ def _causal_framing(report: ModelReport, hypothesis: str) -> list[str]:
 
 
 def _manipulation_check(report: ModelReport, hypothesis: str) -> list[str]:
-    """First-class section: did the intervention do what it claims, and only that?
+    """What the steering check does and does not establish.
 
-    This carries most of what the pilot can establish. The pre-registered causal
-    test needs a non-zero baseline hack rate and does not have one, so "we could
-    not test the behavioural effect" is where that ends -- but that is a very
-    different claim from "we do not know whether the intervention works", and this
-    section settles the second one on its own evidence.
+    The critical caveat, stated first because everything else depends on it: the
+    steering vector is injected AT the probe layer with norm matching, and the
+    probe reads that same layer. The shift there is therefore
+    ``strength * |h| / mean_residual_norm * cos(direction, steered)`` by
+    construction -- an identity, predictable from the vectors artifact and the
+    recorded norms with no rollouts at all. It is a plumbing check, not evidence
+    that steering changed the model's computation.
     """
     lines = [
-        "### Manipulation check (secondary): does steering move the probe it claims to?",
+        "### Steering check (secondary): plumbing, locality, and what they do not show",
         "",
     ]
     shifts = report.shifts
     if is_missing(shifts):
         return lines + [f"**Not measured.** {shifts.reason}", ""]
 
+    probe = next((s.probe_layer for s in shifts if s.probe_layer is not None), None)
     lines += [
-        "Each steered condition's own direction, as a transcript-mean projection, against "
-        "the unsteered rollouts -- paired on (task_id, sample) wherever the same cell ran "
-        "both, which removes the between-problem variance that otherwise dominates. "
-        "`measured/nominal` is the shift in the probe's own units per unit of nominal "
-        "steering strength.",
+        f"> **Read this before the numbers.** The steering vector is injected **at the "
+        f"probe layer** (L{probe}) with norm matching, and the probe reads that same "
+        "layer. The shift measured there is therefore forced to be "
+        "`strength x |h| / mean_residual_norm x cos(direction, steered)` -- an identity. "
+        "Every number in the next table can be predicted from the vectors artifact and "
+        "the recorded residual norms **without running the model at all**, and the "
+        "predicted column below does exactly that.",
+        ">",
+        "> What this legitimately establishes is **plumbing**: the vector reached the "
+        "intended layer at the intended scale, the emotion indexing lines up end to end, "
+        "and the hook and the turn statistic agree with each other. That is a real "
+        "precondition for any future run, and it is worth recording that it holds. It is "
+        "**not** evidence that steering changed the model's computation.",
         "",
-        "| direction | strength | unsteered | steered | measured shift | measured/nominal | "
-        "n (steered / pairs) | p |",
-        "|---|---|---|---|---|---|---|---|",
+        "Paired on (task_id, sample) wherever the same cell ran both steered and "
+        "unsteered, which removes the between-problem variance in the projection's "
+        "baseline.",
+        "",
     ]
-    for shift in shifts:
-        pairing = f"{shift.n_steered} / {shift.n_pairs} paired" if shift.paired else (
-            f"{shift.n_steered} / unpaired vs {shift.n_baseline}"
-        )
-        lines.append(
-            f"| `{shift.emotion}` | {shift.strength:g} | {shift.baseline_mean:+.5f} | "
-            f"{shift.steered_mean:+.5f} | **{shift.shift:+.5f}** | "
-            f"{fmt_num(shift.ratio, 2)} | {pairing} | {fmt_p(shift.p)} |"
-        )
-    lines.append("")
-
-    target = [s for s in shifts if s.emotion == hypothesis]
-    if target:
-        strongest = max(target, key=lambda s: s.strength)
-        if strongest.shift > 0:
-            lines += [
-                f"**The apparatus works.** A nominal steering strength of "
-                f"{strongest.strength:g} on `{hypothesis}` produced a measured shift of "
-                f"**{strongest.shift:+.5f}** in that direction's own probe "
-                f"({fmt_p_eq(strongest.p)}, n = {strongest.n_steered}). The steering "
-                "vector, the norm matching, the probe readout and the turn statistic all "
-                "agree with each other, which is a quantitative validation of the whole "
-                "causal apparatus end to end -- independently of whether behaviour moved.",
-                "",
-            ]
-        else:
-            lines += [
-                f"**The probe did not move in the steered direction** "
-                f"({strongest.shift:+.5f} at strength {strongest.strength:g}, "
-                f"{fmt_p_eq(strongest.p)}). Steering cannot be assumed to have worked, so "
-                "every behavioural number below is uninterpretable until that is "
-                "understood.",
-                "",
-            ]
-
-    lines += _specificity(shifts, hypothesis)
+    lines += _shift_table(report, shifts)
+    lines += _layer_profile(report, shifts)
+    lines += _geometry_section(report, shifts, hypothesis)
     lines += _steered_floor(report, shifts)
     return lines
 
 
-def _specificity(shifts: Sequence[ProbeShift], hypothesis: str) -> list[str]:
-    """Did steering one direction move only that direction, or all 14 together?"""
+def _shift_table(report: ModelReport, shifts: Sequence[ProbeShift]) -> list[str]:
     lines = [
-        "#### Specificity: did it move only that direction?",
-        "",
-        "If steering one direction drags all 14 with it, the direction label on the "
-        "intervention is doing no work and every downstream claim weakens. Same logic as "
-        "the correlational table: computed, not asserted.",
-        "",
-        "| steered | strength | on-target shift | largest off-target | ratio | verdict |",
-        "|---|---|---|---|---|---|",
+        "| direction | strength | unsteered | steered | measured shift | predicted | "
+        "n (steered / pairs) |",
+        "|---|---|---|---|---|---|---|",
     ]
     for shift in shifts:
-        others = shift.off_target
-        if not others:
-            continue
-        name, value = others[0]
-        ratio = shift.specificity
-        if is_missing(ratio):
-            verdict = f"n/a ({ratio.reason})"
-        elif ratio >= 3:
-            verdict = "**specific**"
-        elif ratio >= 1.5:
-            verdict = "mostly on-target"
+        if shift.paired and shift.fully_paired:
+            pairing = f"{shift.n_steered} / {shift.n_pairs} paired"
+        elif shift.paired:
+            pairing = (
+                f"{shift.n_steered} / {shift.n_pairs} paired (partial; the unsteered "
+                f"column is the mean over all {shift.n_baseline} unsteered transcripts)"
+            )
         else:
-            verdict = "**NOT specific**"
+            pairing = f"{shift.n_steered} / unpaired vs {shift.n_baseline}"
+        predicted = _predicted_shift(report, shift, shift.emotion)
         lines.append(
-            f"| `{shift.emotion}` | {shift.strength:g} | {shift.shift:+.5f} | "
-            f"`{name}` {value:+.5f} | {fmt_num(ratio, 1)}x | {verdict} |"
+            f"| `{shift.emotion}` | {shift.strength:+g} | {shift.baseline_mean:+.5f} | "
+            f"{shift.steered_mean:+.5f} | **{shift.shift:+.5f}** | "
+            f"{fmt_num(predicted, 5)} | {pairing} |"
         )
+    lines += [
+        "",
+        "`predicted` is `strength x |h|/mean_residual_norm x cos`, computed from the "
+        "vectors artifact and the recorded norms alone. Agreement between the two "
+        "rightmost columns is the plumbing check passing; it is arithmetic, not a finding.",
+        "",
+    ]
+    return lines
+
+
+def _predicted_shift(
+    report: ModelReport, shift: ProbeShift, emotion: str
+) -> float | Missing:
+    """``strength * |h|/mean_residual_norm * cos`` -- the identity, computed."""
+    geometry = report.geometry
+    if is_missing(geometry):
+        return geometry
+    if is_missing(shift.runtime_norm):
+        return shift.runtime_norm
+    if is_missing(report.vectors):
+        return Missing("no vectors.json")
+    norms = report.vectors.get("mean_residual_norm") or {}
+    key = str(shift.probe_layer)
+    if key not in norms:
+        return Missing(f"no mean_residual_norm recorded at layer {key}")
+    cos = geometry.cos.get(shift.emotion, {}).get(emotion)
+    if cos is None:
+        return Missing(f"no cosine for {shift.emotion} vs {emotion}")
+    return shift.strength * (shift.runtime_norm / float(norms[key])) * cos
+
+
+def _layer_profile(report: ModelReport, shifts: Sequence[ProbeShift]) -> list[str]:
+    """The one part of the check that could have failed and did not."""
+    usable = [s for s in shifts if s.by_layer]
+    lines = ["#### Across layers: is the effect where it should be?", ""]
+    if not usable:
+        return lines + [
+            "**Not measured.** No steered condition carries per-layer turn statistics "
+            "(`turn_stat_layers`) paired against an unsteered cell.",
+            "",
+        ]
+    probe = next((s.probe_layer for s in usable if s.probe_layer is not None), None)
+    layers = sorted({layer for shift in usable for layer in shift.by_layer})
+    header = " | ".join(
+        f"L{layer}" + (" (injection)" if layer == probe else "") for layer in layers
+    )
+    lines += [
+        f"Paired shift of each steered direction at every capture layer. Injection is at "
+        f"L{probe}; lower layers are **upstream** of it and higher ones downstream.",
+        "",
+        f"| condition | {header} |",
+        "|---" * (len(layers) + 1) + "|",
+    ]
+    for shift in usable:
+        cells = " | ".join(
+            f"{shift.by_layer[layer]:+.5f}" if layer in shift.by_layer else "-"
+            for layer in layers
+        )
+        lines.append(f"| `{shift.emotion}` {shift.strength:+g} | {cells} |")
     lines.append("")
 
-    target = [s for s in shifts if s.emotion == hypothesis and not is_missing(s.specificity)]
-    if target:
-        strongest = max(target, key=lambda s: s.strength)
-        ratio = strongest.specificity
-        worst_name, worst_value = strongest.off_target[0]
-        if ratio >= 3:
+    upstream = [layer for layer in layers if probe is not None and layer < probe]
+    downstream = [layer for layer in layers if probe is not None and layer > probe]
+    if upstream:
+        worst = max(
+            (abs(s.by_layer[layer]) for s in usable for layer in upstream if layer in s.by_layer),
+            default=0.0,
+        )
+        on_target = max((abs(s.shift) for s in usable), default=0.0)
+        ratio = worst / on_target if on_target else float("inf")
+        verdict = (
+            "**This is a genuine control, and it passed.** Upstream layers cannot be "
+            "affected by an edit made below them, so a non-zero shift there would have "
+            "meant the measurement was smearing across the capture window or the layer "
+            "indexing was wrong. It is the one part of this check that could have failed."
+            if ratio < 0.05
+            else "**This control did NOT pass cleanly.** Upstream layers should be "
+            "unaffected by an edit made below them; a shift of this size there points at "
+            "the measurement smearing across the capture window or at a layer-indexing "
+            "error, and the injection-layer numbers should not be trusted until it is "
+            "explained."
+        )
+        lines += [
+            f"Upstream (L{', L'.join(str(l) for l in upstream)}): largest absolute shift "
+            f"{worst:.5f}, which is {100 * ratio:.1f}% of the on-target shift. {verdict}",
+            "",
+        ]
+    if downstream:
+        fracs = []
+        for shift in usable:
+            if not shift.shift:
+                continue
+            for layer in downstream:
+                if layer in shift.by_layer:
+                    fracs.append(abs(shift.by_layer[layer] / shift.shift))
+        if fracs:
             lines += [
-                f"Steering `{hypothesis}` moved `{hypothesis}` **{ratio:.1f}x more than any "
-                f"other direction** (largest off-target: `{worst_name}` at "
-                f"{worst_value:+.5f}). The intervention is direction-specific, not a "
-                "general perturbation of the residual stream.",
+                f"Downstream (L{', L'.join(str(l) for l in downstream)}): the shift "
+                f"persists at {100 * min(fracs):.0f}-{100 * max(fracs):.0f}% of its "
+                "injection-layer size. **Read this as weaker evidence than it looks.** "
+                "The residual stream is additive, so a vector added at "
+                f"L{probe} is carried into the later layers by construction; attenuation "
+                "in this range is what that alone predicts. It is consistent with the "
+                "model computing differently downstream, but it does not show it -- "
+                "propagation is not influence.",
                 "",
             ]
-        else:
+    return lines
+
+
+def _geometry_section(
+    report: ModelReport, shifts: Sequence[ProbeShift], hypothesis: str
+) -> list[str]:
+    """Off-target shift is the direction set's geometry, not a property of steering."""
+    lines = ["#### Off-target shift is the geometry of the direction set", ""]
+    geometry = report.geometry
+    target = [s for s in shifts if s.emotion == hypothesis] or list(shifts)
+    if not target:
+        return lines + ["**Not measured.** No steered condition to report.", ""]
+    shift = max(target, key=lambda s: (s.strength > 0, abs(s.strength)))
+
+    if is_missing(geometry):
+        others = shift.off_target
+        lines += [
+            f"The cosines could not be read ({geometry.reason}), so the off-target shifts "
+            "below cannot be checked against the direction set's geometry. They are "
+            "reported as observed, and should NOT be read as a behavioural result: with "
+            "the readout at the injection layer an off-target shift is "
+            "`strength x |h|/norm x cos` and reflects how non-orthogonal the directions "
+            "are, not what steering did to the model.",
+            "",
+        ]
+        if others:
             lines += [
-                f"Steering `{hypothesis}` moved it only {ratio:.1f}x more than "
-                f"`{worst_name}` ({worst_value:+.5f}), so **the intervention is not clearly "
-                "direction-specific**: at this strength it perturbs the space broadly and "
-                "attributing any downstream change to "
-                f"`{hypothesis}` in particular is not supported.",
+                "Largest observed off-target shifts: "
+                + ", ".join(f"`{n}` {v:+.5f}" for n, v in others[:5])
+                + ".",
                 "",
             ]
-        off = ", ".join(f"`{n}` {v:+.5f}" for n, v in strongest.off_target[:5])
-        lines += [f"Largest off-target shifts at strength {strongest.strength:g}: {off}.", ""]
+        return lines
+
+    lines += [
+        "**The 14 directions are not orthogonal**, and at the injection layer an "
+        "off-target shift is exactly `strength x |h|/norm x cos(other, steered)`. So the "
+        "pattern below is a property of the direction set, not of the intervention: it "
+        "would look the same if the model had never run.",
+        "",
+        f"| direction | cos with `{shift.emotion}` | predicted shift | observed shift |",
+        "|---|---|---|---|",
+    ]
+    observed = dict(zip(shift.emotions, shift.per_emotion))
+    for name, cos in geometry.against(shift.emotion)[:6]:
+        predicted = _predicted_shift(report, shift, name)
+        seen = observed.get(name)
+        lines.append(
+            f"| `{name}` | {cos:+.4f} | {fmt_num(predicted, 5)} | "
+            + (f"{seen:+.5f}" if seen is not None else "-")
+            + " |"
+        )
+    lines.append("")
+    top = geometry.against(shift.emotion)
+    if top:
+        name, cos = top[0]
+        lines += [
+            f"`{name}` is the largest off-target shift because it is the direction most "
+            f"anti-aligned with `{shift.emotion}` (cos {cos:+.3f}) -- the geometry of the "
+            "emotion space, not a behavioural finding about steering. Ratios computed "
+            "from these shifts (on-target over largest off-target) are "
+            f"`1/|cos|` = {1 / abs(cos):.2f} and say nothing about how specific the "
+            "intervention's *effect on the model* is.",
+            "",
+        ]
     return lines
 
 
@@ -1900,7 +2201,8 @@ def _steered_floor(report: ModelReport, shifts: Sequence[ProbeShift]) -> list[st
     for shift in shifts:
         trunc = shift.truncation
         cell = (
-            f"{trunc.n_truncated}/{trunc.n_turns} ({fmt_pct(trunc.fraction, 0)})"
+            f"{trunc.n_at_cap}/{trunc.n_turns} at cap ({fmt_pct(trunc.fraction, 0)}), "
+            f"{trunc.n_empty} empty"
             if not is_missing(trunc)
             else f"not measured ({trunc.reason})"
         )
@@ -1914,7 +2216,7 @@ def _steered_floor(report: ModelReport, shifts: Sequence[ProbeShift]) -> list[st
         caps = [s.truncation for s in shifts if not is_missing(s.truncation)]
         trunc_note = ""
         if caps:
-            n_trunc = sum(c.n_truncated for c in caps)
+            n_trunc = sum(c.n_at_cap for c in caps)
             n_turns = sum(c.n_turns for c in caps)
             trunc_note = (
                 f" And {n_trunc} of {n_turns} steered turns hit the token cap, exactly as "
@@ -2310,15 +2612,16 @@ def _exploratory_result(report: ModelReport, hypothesis: str, alpha: float) -> l
     if split.separates:
         lines += [
             "With only 14 directions the across-direction mean that centres each one is "
-            "noisy, so a common-mode shift affecting every direction at once could mimic "
-            "this pattern. Against that reading: the signs go in **both** directions, "
-            f"ordered by valence -- negative-valence directions average dz "
-            f"{split.mean_negative:+.2f} and positive-valence ones {split.mean_positive:+.2f} "
-            f"(Mann-Whitney {fmt_p_eq(split.p)}, {len(split.negative)} vs "
-            f"{len(split.positive)} directions). A uniform shared shift pushes everything "
-            "the same way; it does not split a set of directions along their valence. The "
-            "argument cuts both ways and the reader should weigh it, but the observed "
-            "signs are not the signature of a common-mode artefact.",
+            "noisy. Note that the directions are built by subtracting that across-emotion "
+            "mean, so the 14 projections are near zero-sum and **signs going both ways is "
+            "guaranteed by construction** -- it is not evidence of anything and is not "
+            "offered as any. What does carry weight is the **ordering**: the split falls "
+            f"along valence, with negative-valence directions averaging dz "
+            f"{split.mean_negative:+.2f} against {split.mean_positive:+.2f} for "
+            f"positive-valence ones (Mann-Whitney {fmt_p_eq(split.p)}, "
+            f"{len(split.negative)} vs {len(split.positive)} directions). Zero-sum "
+            "centring forces the signs to balance; it does not force which directions "
+            "land on which side.",
             "",
         ]
     else:
@@ -2334,52 +2637,89 @@ def _exploratory_result(report: ModelReport, hypothesis: str, alpha: float) -> l
     return lines
 
 
-def _apparatus_headline(report: ModelReport) -> list[str]:
-    """The manipulation check, stated in the headline as a result of its own.
+def _apparatus_headline(report: ModelReport, hypothesis: str) -> list[str]:
+    """The steering check, stated for what it is: plumbing plus a locality control.
 
-    "We could not test the behavioural effect" and "we do not know whether the
-    intervention works" are different claims. With the hack rate on the floor the
-    first is forced, and this keeps a reader from hearing the second.
+    Deliberately does NOT claim the causal apparatus is validated. The probe reads
+    the layer the vector is injected into, so the injection-layer shift is an
+    identity; the only part that could have failed is the upstream control.
     """
     shifts = report.shifts
     if is_missing(shifts):
         return []
-    best = max(shifts, key=lambda s: s.shift)
-    if best.shift <= 0:
+    # Success is a shift in the STEERED direction, so it is signed by strength: a
+    # negative-strength arm should move the probe down. Ranking on the raw shift
+    # would call a correctly-working negative arm a failure.
+    scored = [(s, s.ratio) for s in shifts if not is_missing(s.ratio)]
+    if not scored:
+        return []
+    # The hypothesis direction is what the reader came for; fall back to whichever
+    # condition tracked its nominal strength best only if it was never steered.
+    on_hypothesis = [item for item in scored if item[0].emotion == hypothesis]
+    # Rounded so that two arms tracking their nominal strength equally well are
+    # separated by readability (the positive arm) rather than by the third decimal.
+    best, ratio = max(
+        on_hypothesis or scored, key=lambda item: (round(item[1], 2), item[0].strength > 0)
+    )
+    if ratio <= 0:
         return [
-            "**Apparatus -- does the steering work?** No: the strongest condition "
-            f"(`{best.emotion}` at {best.strength:g}) moved its own probe by "
-            f"{best.shift:+.5f}. Until that is understood the steering results below "
-            "cannot be interpreted.",
+            "**Apparatus -- did the steering reach the model?** No: the strongest "
+            f"condition (`{best.emotion}` at {best.strength:+g}) moved its own probe "
+            f"{best.shift:+.5f}, the wrong way. Until that is understood the steering "
+            "results below cannot be interpreted.",
             "",
         ]
     lines = [
-        "**Apparatus -- does the steering work?** Yes, and this is measured rather than "
-        f"assumed: a nominal strength of {best.strength:g} on `{best.emotion}` shifted that "
-        f"direction's own probe by **{best.shift:+.5f}** ({fmt_p_eq(best.p)}, "
-        f"n = {best.n_steered}"
-        + (f", paired on {best.n_pairs} matched cells" if best.paired else "")
-        + ")."
+        "**Apparatus -- did the steering reach the model?** Yes, as **plumbing**: "
+        f"`{best.emotion}` at strength {best.strength:+g} shifted its own probe "
+        f"{best.shift:+.5f}, matching the value predicted from the vectors artifact "
+        "alone. Note what that is and is not -- the vector is injected at the probe "
+        "layer and the probe reads that same layer, so this number is an **identity**, "
+        "not a measurement of the model responding.",
     ]
-    ratio = best.specificity
-    if not is_missing(ratio):
-        name, value = best.off_target[0]
-        lines[0] += (
-            f" It moved that direction {ratio:.1f}x more than any other of the "
-            f"{len(best.emotions)} (largest off-target: `{name}` {value:+.5f}), so the "
-            "intervention is direction-specific"
-            if ratio >= 3
-            else f" But it moved `{name}` by {value:+.5f} too, only {ratio:.1f}x less, so "
-            "the intervention is **not clearly direction-specific**"
-        ) + "."
+    upstream = _upstream_control(report)
+    if upstream is not None:
+        lines[0] += " " + upstream
     lines[0] += (
-        " The behavioural test it was built for could not run, but the machinery itself is "
-        "validated end to end -- a future run only has to fix the floor effect."
+        " No part of this run shows that steering changed the model's computation; the "
+        "behavioural test that would have shown it could not run."
     )
     return lines + [""]
 
 
-def _behaviour_result(report: ModelReport) -> list[str]:
+def _upstream_control(report: ModelReport) -> str | None:
+    """One sentence on the layer control -- the part that could have failed."""
+    shifts = [s for s in report.shifts if s.by_layer] if not is_missing(report.shifts) else []
+    probe = next((s.probe_layer for s in shifts if s.probe_layer is not None), None)
+    if probe is None:
+        return None
+    worst = max(
+        (
+            abs(value)
+            for shift in shifts
+            for layer, value in shift.by_layer.items()
+            if layer < probe
+        ),
+        default=None,
+    )
+    on_target = max((abs(s.shift) for s in shifts), default=0.0)
+    if worst is None or not on_target:
+        return None
+    pct = 100 * worst / on_target
+    if pct < 5:
+        return (
+            f"The one genuine control here did pass: layers upstream of the injection "
+            f"moved {pct:.1f}% as much as the target direction, so the measurement is "
+            "layer-localized rather than smeared across the capture window."
+        )
+    return (
+        f"The locality control did NOT pass: layers upstream of the injection moved "
+        f"{pct:.0f}% as much as the target direction, which should be impossible for an "
+        "edit made below them."
+    )
+
+
+def _behaviour_result(report: ModelReport, hypothesis: str) -> list[str]:
     """The behavioural rate, with the truncation caveat attached to it, not filed away."""
     lines = ["**Behaviour -- did it cheat?**", ""]
     if is_missing(report.baseline):
@@ -2399,7 +2739,7 @@ def _behaviour_result(report: ModelReport) -> list[str]:
                     "turn that was cut off cannot show whether it would have cheated."
                 )
         lines += [sentence, ""]
-    lines += _apparatus_headline(report)
+    lines += _apparatus_headline(report, hypothesis)
     if is_missing(report.sweep):
         lines += [f"Steering sweep: **not run** ({report.sweep.reason}).", ""]
     elif _floor_effect(report):
@@ -2443,7 +2783,7 @@ def headline(reports: Sequence[ModelReport], hypothesis: str, alpha: float) -> l
         lines += [f"### `{report.model}` ({report.load.n_records} rollouts on disk)", ""]
         lines += _preregistered_result(report, hypothesis, alpha)
         lines += _exploratory_result(report, hypothesis, alpha)
-        lines += _behaviour_result(report)
+        lines += _behaviour_result(report, hypothesis)
 
     for report in without:
         status = report.load.status()
@@ -2506,21 +2846,63 @@ def _measured_caveats(reports: Sequence[ModelReport]) -> list[str]:
     return caveats
 
 
+def collect_provenance(reports: Sequence[ModelReport], root: Path, run_id: str) -> dict:
+    """Git state plus the sha256 of every upstream manifest this report consumed.
+
+    Without it the summary is a set of numbers with no way back to the code and
+    inputs that produced them -- and this is the file a human reads and acts on.
+    A manifest that cannot be hashed is recorded as the reason, never skipped.
+    """
+    upstreams: dict[str, str] = {}
+    for report in reports:
+        for kind, path in (
+            ("rollouts", report.load.dir),
+            ("gate", root / "gate" / report.model),
+            ("vectors", root / "vectors" / report.model),
+            ("activations", root / "activations" / report.model),
+        ):
+            candidates = [path] if (path / MANIFEST).is_file() else sorted(path.glob("*/"))
+            for candidate in candidates:
+                if not (candidate / MANIFEST).is_file():
+                    continue
+                try:
+                    upstreams[f"{report.model}/{kind}"] = manifest_sha256(candidate)
+                except (OSError, FileNotFoundError) as exc:
+                    upstreams[f"{report.model}/{kind}"] = f"unhashable ({exc})"
+                break
+            else:
+                upstreams[f"{report.model}/{kind}"] = f"no {MANIFEST} under {path}"
+    return {"run_id": run_id, "git": git_state(), "upstreams": upstreams}
+
+
 def render_summary(
     reports: Sequence[ModelReport],
     cfg: Mapping[str, Any],
     root: Path,
     figures: Mapping[str, Any],
+    provenance: Mapping[str, Any],
 ) -> str:
     hypothesis = str(cfg.get("hypothesis_emotion", "desperate"))
     focus = list(cfg.get("focus_emotions") or [hypothesis])
     alpha = float(cfg.get("alpha", 0.05))
     now = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M %Z")
 
+    git = provenance["git"]
+    dirty = (
+        "unknown" if git.get("dirty") is None else ("DIRTY" if git["dirty"] else "clean")
+    )
     lines: list[str] = [
         "# Desperation pilot -- results",
         "",
         f"_Generated {now} from `{root}`._",
+        "",
+        f"_Provenance: run `{provenance['run_id']}`, code `{git.get('sha') or 'unknown'}` "
+        f"({dirty} working tree). Upstream artifacts by manifest sha256:_",
+        "",
+    ]
+    for name, entry in sorted(provenance["upstreams"].items()):
+        lines.append(f"- `{name}`: {entry}")
+    lines += [
         "",
         "The question: does an LLM's internal **desperate** direction rise when its code "
         "fails tests, and does steering that direction change how often it cheats on "
@@ -2671,7 +3053,26 @@ def run(cfg: Mapping[str, Any], args: argparse.Namespace) -> tuple[Path, list[Mo
                         f"drawing raised {type(exc).__name__}: {exc}"
                     )
 
-    (out_dir / SUMMARY_NAME).write_text(render_summary(reports, cfg, root, figures))
+    run_id = uuid.uuid4().hex
+    provenance = collect_provenance(reports, root, run_id)
+    (out_dir / SUMMARY_NAME).write_text(
+        render_summary(reports, cfg, root, figures, provenance)
+    )
+    # The deliverable joins the provenance chain like every other stage. Upstream
+    # manifests are recorded by sha256 in `config` rather than through
+    # write_manifest's `upstreams=`, because the rollout manifests reference their
+    # own upstreams by CONTAINER path and re-resolving those from the host raises.
+    write_manifest(
+        out_dir,
+        stage=str(cfg.get("stage", "compare")),
+        config={
+            **cfg,
+            "run_id": run_id,
+            "artifact_root": str(root),
+            "models": models,
+            "upstream_manifest_sha256": provenance["upstreams"],
+        },
+    )
     return out_dir, reports
 
 

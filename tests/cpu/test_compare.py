@@ -1007,9 +1007,34 @@ def test_truncation_is_counted_against_the_manifest_budget(tmp_path):
     _, reports, summary = run_compare(tmp_path, root)
     trunc = reports[0].truncation
     assert trunc.cap == 3072
-    assert (trunc.n_truncated, trunc.n_turns) == (8, 12)
+    assert (trunc.n_at_cap, trunc.n_turns) == (8, 12)
+    assert (trunc.n_empty, trunc.n_natural) == (0, 4)
     assert trunc.fraction == pytest.approx(8 / 12)
     assert "**8 of 12 turns (67%) hit the 3072-token per-turn budget**" in summary
+    assert "0 generated zero tokens, and 4 ended on the model's own stop token" in summary
+
+
+def test_empty_turns_are_their_own_category_not_untruncated(tmp_path):
+    """A turn that generated nothing did not happen. Counting it in the denominator
+    as "not truncated" understates how little of the budget the model ever used."""
+    root = tmp_path / "artifacts"
+    write_instrument(root, MODEL)
+    records = [
+        make_record(
+            f"lcbhard_{task}", 0, False, {"desperate": [0.1, 0.2, 0.3]},
+            [False, True, True], n_generated=[3071, 3071, 0],
+        )
+        for task in range(4)
+    ]
+    write_rollouts(root, MODEL, records, max_tokens=3072)
+
+    _, reports, summary = run_compare(tmp_path, root)
+    trunc = reports[0].truncation
+    assert (trunc.n_at_cap, trunc.n_empty, trunc.n_natural) == (8, 4, 0)
+    assert trunc.n_records_with_empty == 4
+    assert "4 generated zero tokens" in summary
+    assert "0 ended on the model's own stop token" in summary
+    assert "effectively got **one fewer attempt**" in summary
 
 
 def test_truncation_absent_without_a_manifest_budget(tmp_path):
@@ -1114,6 +1139,9 @@ def test_headline_reports_prereg_then_exploratory_then_behaviour(tmp_path):
 
 
 def test_valence_pattern_is_offered_against_the_common_mode_reading(tmp_path):
+    """The signs going both ways is forced by the zero-sum centring in
+    build_directions, so it must NOT be offered as evidence. The valence ORDERING
+    is what carries the paragraph."""
     root = tmp_path / "artifacts"
     write_instrument(root, MODEL)
     write_rollouts(root, MODEL, valence_records(), max_tokens=3072)
@@ -1123,10 +1151,13 @@ def test_valence_pattern_is_offered_against_the_common_mode_reading(tmp_path):
     assert split.separates
     assert split.mean_negative > 0 > split.mean_positive
 
-    assert "common-mode shift" in summary
-    assert "the signs go in **both** directions" in summary
-    assert "does not split a set of directions along their valence" in summary
-    assert "cuts both ways" in summary
+    assert "guaranteed by construction" in summary
+    assert "near zero-sum" in summary
+    assert "What does carry weight is the **ordering**" in summary
+    assert "Zero-sum centring forces the signs to balance" in summary
+    # The retracted argument must be gone.
+    assert "the signs go in **both** directions" not in summary
+    assert "not the signature of a common-mode artefact" not in summary
 
 
 def test_common_mode_shift_is_not_dressed_up_as_a_valence_pattern(tmp_path):
@@ -1217,8 +1248,10 @@ def test_zero_baseline_relabels_the_sweep_as_secondary_and_exploratory(tmp_path)
     assert "this is NOT the pre-registered causal test" in summary
     assert "required a baseline hack rate strictly between 0 and 1" in summary
     assert "0/18, which disqualifies it" in summary
-    assert "**Manipulation check**" in summary
+    assert "**Steering check**" in summary
     assert "**Floor effect**" in summary
+    # The R35 bullet must not claim the steering check answered the causal question.
+    assert "not a demonstration that steering changed the model's computation" in summary
     # The headline must carry the relabelling too, not just the section.
     head = summary.split("## What was found")[1].split("## What ran")[0]
     assert "secondary and\nexploratory" in head or "**secondary and exploratory**" in head
@@ -1374,13 +1407,11 @@ def test_probe_shift_is_paired_on_task_and_sample(tmp_path):
     assert shift.n_pairs == 18
     assert shift.n_steered == 18
     assert shift.shift == pytest.approx(0.047)
-    # measured shift per unit of nominal strength
     assert shift.ratio == pytest.approx(0.047 / 0.05)
 
-    assert "### Manipulation check (secondary): does steering move the probe it claims to?" in summary
+    assert "### Steering check (secondary): plumbing, locality, and what they do not show" in summary
     assert "18 / 18 paired" in summary
     assert "**+0.04700**" in summary
-    assert "**The apparatus works.**" in summary
 
 
 def test_probe_shift_falls_back_to_unpaired_when_cells_do_not_match(tmp_path):
@@ -1401,37 +1432,44 @@ def test_probe_shift_falls_back_to_unpaired_when_cells_do_not_match(tmp_path):
     assert "unpaired vs 18" in summary
 
 
-def test_specificity_reports_a_direction_specific_intervention(tmp_path):
+def test_injection_layer_identity_is_stated_before_the_numbers(tmp_path):
+    """The vector is injected at the probe layer and the probe reads that layer, so
+    the shift there is an identity. The report must say so before showing it, and
+    must not claim the causal apparatus is validated."""
     root = tmp_path / "artifacts"
     write_instrument(root, MODEL)
-    # on-target 0.047, off-target 0.005 -> 9.4x
-    write_rollouts(root, MODEL, steered_probe_records(0.047, 0.005), max_tokens=3072)
+    write_rollouts(root, MODEL, steered_probe_records(), max_tokens=3072)
 
-    _, reports, summary = run_compare(tmp_path, root)
-    shift = reports[0].shifts[0]
-    assert shift.specificity == pytest.approx(0.047 / 0.005)
-    assert shift.off_target[0][1] == pytest.approx(0.005)
+    _, _, summary = run_compare(tmp_path, root)
+    section = summary.split("### Steering check")[1]
+    caveat = section.index("Read this before the numbers")
+    table = section.index("| direction | strength | unsteered |")
+    assert caveat < table, "the identity caveat must precede the numbers"
 
-    assert "#### Specificity: did it move only that direction?" in summary
-    assert "**specific**" in summary
-    assert "9.4x more than any other direction" in summary
-    assert "direction-specific, not a general perturbation" in summary
+    assert "injected **at the probe layer**" in section
+    assert "an identity" in section
+    assert "without running the model at all" in section
+    assert "It is **not** evidence that steering changed the model's computation." in section
 
-
-def test_specificity_flags_an_intervention_that_moved_everything(tmp_path):
-    """Steering that drags all 14 directions with it is not direction-specific, and
-    the report must say so rather than credit the label on the vector."""
-    root = tmp_path / "artifacts"
-    write_instrument(root, MODEL)
-    # on-target 0.047, off-target 0.040 -> 1.2x
-    write_rollouts(root, MODEL, steered_probe_records(0.047, 0.040), max_tokens=3072)
-
-    _, reports, summary = run_compare(tmp_path, root)
-    assert reports[0].shifts[0].specificity == pytest.approx(0.047 / 0.040)
-    assert "**NOT specific**" in summary
-    assert "not clearly direction-specific" in summary
-    assert "is not supported" in summary
+    # The retracted overclaims must be gone from the whole document.
+    assert "quantitative validation of the whole causal apparatus" not in summary
     assert "direction-specific, not a general perturbation" not in summary
+    assert "a future run only has to fix the floor effect" not in summary
+    assert "The apparatus works" not in summary
+
+
+def test_off_target_shift_is_reported_as_geometry_not_as_a_finding(tmp_path):
+    root = tmp_path / "artifacts"
+    write_instrument(root, MODEL)
+    write_rollouts(root, MODEL, steered_probe_records(), max_tokens=3072)
+
+    _, _, summary = run_compare(tmp_path, root)
+    assert "#### Off-target shift is the geometry of the direction set" in summary
+    section = summary.split("#### Off-target shift")[1]
+    # Without a vectors.safetensors the cosines cannot be read, and the report must
+    # say that rather than presenting the shifts as a behavioural result.
+    assert "should NOT be read as a behavioural result" in section
+    assert "reflects how non-orthogonal the directions are" in section
 
 
 def test_steered_behaviour_carries_the_floor_and_the_truncation(tmp_path):
@@ -1442,46 +1480,65 @@ def test_steered_behaviour_carries_the_floor_and_the_truncation(tmp_path):
     _, reports, summary = run_compare(tmp_path, root)
     shift = reports[0].shifts[0]
     assert (shift.rate.k, shift.rate.n) == (0, 18)
-    assert (shift.truncation.n_truncated, shift.truncation.n_turns) == (36, 54)
+    assert (shift.truncation.n_at_cap, shift.truncation.n_turns) == (36, 54)
 
     section = summary.split("#### Behaviour under steering")[1]
     assert "0.0% (0/18" in section
-    assert "36/54 (67%)" in section
+    assert "36/54 at cap (67%)" in section
     assert "steered hack rate is 0/18 -- still on the floor" in section
     assert "cannot be read as 'steering does not induce hacking'" in section
 
 
-def test_manipulation_check_is_a_section_not_a_footnote(tmp_path):
+def test_steering_check_is_a_section_not_a_footnote(tmp_path):
     root = tmp_path / "artifacts"
     write_instrument(root, MODEL)
     write_rollouts(root, MODEL, steered_probe_records(), max_tokens=3072)
 
     _, _, summary = run_compare(tmp_path, root)
-    # Top-level section, ahead of the sweep, and named in the headline.
-    assert "\n### Manipulation check (secondary)" in summary
-    assert summary.index("### Manipulation check") < summary.index("### Steering sweep")
+    assert "\n### Steering check (secondary)" in summary
+    assert summary.index("### Steering check") < summary.index("### Steering sweep")
     head = summary.split("## What was found")[1].split("## What ran")[0]
-    assert "**Apparatus -- does the steering work?**" in head
-    assert "measured rather than assumed" in head
-    assert "the machinery itself is validated end to end" in head
-    # R35 labelling survives.
+    assert "**Apparatus -- did the steering reach the model?** Yes, as **plumbing**" in head
+    assert "this number is an **identity**" in head
+    assert "No part of this run shows that steering changed the model's computation" in head
     assert "secondary" in summary
     assert "NOT the pre-registered causal test" in summary
 
 
-def test_apparatus_headline_reports_a_probe_that_did_not_move(tmp_path):
+def test_apparatus_headline_judges_by_sign_of_strength_not_of_shift(tmp_path):
+    """A negative-strength arm SHOULD move the probe down. Ranking on the raw shift
+    would call a correctly-working negative arm a failure."""
     root = tmp_path / "artifacts"
     write_instrument(root, MODEL)
+    records = steered_probe_records(on_target=-0.047, off_target=-0.005, strength=-0.05)
+    write_rollouts(root, MODEL, records, max_tokens=3072)
+
+    _, reports, summary = run_compare(tmp_path, root)
+    shift = reports[0].shifts[0]
+    assert shift.strength == -0.05
+    assert shift.shift < 0
+    assert shift.ratio > 0, "down-shift under negative strength is success"
+
+    head = summary.split("## What was found")[1].split("## What ran")[0]
+    assert "did the steering reach the model?** Yes" in head
+    assert "did the steering reach the model?** No" not in head
+
+
+def test_apparatus_headline_reports_a_probe_that_moved_the_wrong_way(tmp_path):
+    root = tmp_path / "artifacts"
+    write_instrument(root, MODEL)
+    # Positive strength, but the probe went down: the plumbing is wrong.
     write_rollouts(root, MODEL, steered_probe_records(-0.02, 0.0), max_tokens=3072)
 
-    _, _, summary = run_compare(tmp_path, root)
+    _, reports, summary = run_compare(tmp_path, root)
+    assert reports[0].shifts[0].ratio < 0
     head = summary.split("## What was found")[1].split("## What ran")[0]
-    assert "**Apparatus -- does the steering work?** No" in head
+    assert "did the steering reach the model?** No" in head
+    assert "the wrong way" in head
     assert "cannot be interpreted" in head
-    assert "The apparatus works" not in summary
 
 
-def test_manipulation_check_compares_each_direction_to_unsteered(tmp_path):
+def test_steering_check_compares_each_direction_to_unsteered(tmp_path):
     root = tmp_path / "artifacts"
     write_instrument(root, MODEL)
     write_rollouts(
@@ -1494,30 +1551,72 @@ def test_manipulation_check_compares_each_direction_to_unsteered(tmp_path):
     _, reports, summary = run_compare(tmp_path, root)
     shifts = {(s.emotion, s.strength): s for s in reports[0].shifts}
     desperate = shifts[("desperate", 0.05)]
-    # steered transcript mean 0.36 vs unsteered 0.15
     assert desperate.steered_mean == pytest.approx(0.36)
     assert desperate.baseline_mean == pytest.approx(0.15)
     assert desperate.shift == pytest.approx(0.21)
     assert desperate.n_steered == 6 and desperate.n_baseline == 18
 
-    assert "### Manipulation check (secondary): does steering move the probe it claims to?" in summary
-    assert "**The apparatus works.**" in summary
+    assert "### Steering check (secondary)" in summary
+    assert "it is arithmetic, not a finding" in summary
 
 
-def test_manipulation_check_flags_a_probe_that_did_not_move(tmp_path):
+def test_layer_profile_reports_the_upstream_control(tmp_path):
+    """Upstream layers cannot be affected by an edit made below them, so a flat
+    upstream reading is the one part of this check that could have failed."""
     root = tmp_path / "artifacts"
     write_instrument(root, MODEL)
-    records = floor_records({("desperate", 0.05): [False] * 6})
+    records = steered_probe_records()
     for record in records:
-        if record["condition"]:
-            # Steered, but the desperate probe sits BELOW the unsteered level.
-            record["turn_stat"] = [[0.01] * len(EMOTIONS) for _ in range(3)]
+        stats = record["turn_stat"]
+        # L41/L42 upstream (unchanged), L43 injection, L44/L45 attenuated downstream.
+        record["turn_stat_layers"] = [
+            {
+                "41": [0.01] * len(EMOTIONS),
+                "42": [0.01] * len(EMOTIONS),
+                "43": list(row),
+                "44": [v * 0.94 for v in row],
+                "45": [v * 0.89 for v in row],
+            }
+            if row is not None
+            else {}
+            for row in stats
+        ]
     write_rollouts(root, MODEL, records, max_tokens=3072)
 
     _, reports, summary = run_compare(tmp_path, root)
-    assert reports[0].shifts[0].shift < 0
-    assert "The probe did not move in the steered direction" in summary
-    assert "uninterpretable" in summary
+    by_layer = reports[0].shifts[0].by_layer
+    assert set(by_layer) == {41, 42, 43, 44, 45}
+    assert by_layer[41] == pytest.approx(0.0, abs=1e-9)
+    assert by_layer[42] == pytest.approx(0.0, abs=1e-9)
+    assert by_layer[43] == pytest.approx(0.047)
+    assert by_layer[44] < by_layer[43] and by_layer[45] < by_layer[44]
+
+    section = summary.split("#### Across layers")[1]
+    assert "L43 (injection)" in section
+    assert "**This is a genuine control, and it passed.**" in section
+    assert "the one part of this check that could have failed" in section
+    # Downstream persistence must be explicitly deflated.
+    assert "Read this as weaker evidence than it looks" in section
+    assert "propagation is not influence" in section
+
+
+def test_layer_profile_flags_a_failed_upstream_control(tmp_path):
+    root = tmp_path / "artifacts"
+    write_instrument(root, MODEL)
+    records = steered_probe_records()
+    for record in records:
+        stats = record["turn_stat"]
+        # Upstream moves as much as the injection layer: impossible for a clean edit.
+        record["turn_stat_layers"] = [
+            {"41": list(row), "43": list(row)} if row is not None else {}
+            for row in stats
+        ]
+    write_rollouts(root, MODEL, records, max_tokens=3072)
+
+    _, _, summary = run_compare(tmp_path, root)
+    section = summary.split("#### Across layers")[1]
+    assert "**This control did NOT pass cleanly.**" in section
+    assert "should not be trusted until it is explained" in section
 
 
 def test_manipulation_check_absent_without_steered_records(tmp_path):
@@ -1532,3 +1631,50 @@ def test_manipulation_check_absent_without_steered_records(tmp_path):
     assert "Floor effect" not in summary
     assert "NOT the pre-registered causal test" not in summary
     assert "**Not run.**" in summary
+
+
+# ---------------------------------------------------------------------------
+# Provenance
+# ---------------------------------------------------------------------------
+
+
+def test_summary_carries_provenance_and_a_manifest_is_written(tmp_path):
+    """The summary is what a human reads and acts on, so it must say which code and
+    which upstream artifacts produced it."""
+    root = tmp_path / "artifacts"
+    write_instrument(root, MODEL)
+    write_rollouts(root, MODEL, hack_records())
+    # An upstream manifest for the rollouts, as the real stage writes.
+    (root / "rollouts" / MODEL / "v1" / "manifest.json").write_text(
+        json.dumps({"stage": "rollouts", "config": {"max_tokens": 3072}})
+    )
+
+    out_dir, _, summary = run_compare(tmp_path, root)
+
+    assert "_Provenance: run `" in summary
+    assert "working tree)" in summary
+    assert f"`{MODEL}/rollouts`" in summary
+
+    manifest = json.loads((out_dir / "manifest.json").read_text())
+    assert manifest["stage"] == "compare"
+    assert "sha" in manifest["git"] and "dirty" in manifest["git"]
+    assert manifest["config"]["run_id"]
+    assert manifest["config"]["artifact_root"] == str(root)
+    hashes = manifest["config"]["upstream_manifest_sha256"]
+    assert hashes[f"{MODEL}/rollouts"] == compare.manifest_sha256(
+        root / "rollouts" / MODEL / "v1"
+    )
+    # The run_id in the manifest is the one printed in the summary.
+    assert manifest["config"]["run_id"] in summary
+
+
+def test_missing_upstream_manifest_is_named_not_skipped(tmp_path):
+    root = tmp_path / "artifacts"
+    write_instrument(root, MODEL)
+    write_rollouts(root, MODEL, hack_records(), max_tokens=None)
+
+    out_dir, _, summary = run_compare(tmp_path, root)
+    manifest = json.loads((out_dir / "manifest.json").read_text())
+    hashes = manifest["config"]["upstream_manifest_sha256"]
+    assert "no manifest.json under" in hashes[f"{MODEL}/gate"]
+    assert "no manifest.json under" in summary
