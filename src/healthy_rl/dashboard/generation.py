@@ -125,14 +125,27 @@ def assemble_generation(
 ) -> Generation:
     tokens = list(tokens)
     problems: list[str] = []
+    warns: list[str] = []
     L = len(capture_layers)
 
     # --- reasoning / answer split -------------------------------------------
     if reasoning_content:
+        # A server-side reasoning parser hands back the two halves already split,
+        # so the think/answer boundary has to be located in the token stream: find
+        # where the answer starts inside the joined tokens. When that fails the
+        # fallback is an offset into `reasoning_content`, which the tokens may not
+        # cover -- every token then gets labelled "think". Say so rather than
+        # reporting a confident n_think.
         reasoning, answer = reasoning_content.strip(), text.strip()
         joined = "".join(tokens)
         idx = joined.find(text.strip()) if text.strip() else -1
-        think_end_char = idx if idx > 0 else len(reasoning_content)
+        if idx > 0:
+            think_end_char = idx
+        else:
+            think_end_char = len(reasoning_content)
+            warns.append(
+                "reasoning_content offset is a guess: answer text not found in token stream"
+            )
         full_text = reasoning_content + text
     else:
         reasoning, answer, think_end_char = split_reasoning(text)
@@ -155,8 +168,11 @@ def assemble_generation(
             continue
         proj = np.asarray(proj, dtype=np.float32); norm = np.asarray(norm, dtype=np.float32).reshape(-1)
         kind = np.asarray(kind, dtype=np.float32).reshape(-1)
-        if proj.ndim != 2 or proj.shape[0] != kind.shape[0] or proj.shape[1] != n_emotions:
-            problems.append(f"layer {layer}: proj shape {proj.shape} vs kind {kind.shape}, E={n_emotions}")
+        if (proj.ndim != 2 or proj.shape[0] != kind.shape[0] or proj.shape[1] != n_emotions
+                or norm.shape[0] != kind.shape[0]):
+            problems.append(
+                f"layer {layer}: proj shape {proj.shape}, norm {norm.shape} vs kind {kind.shape}, E={n_emotions}"
+            )
             per_layer_proj.append(None); per_layer_norm.append(None); per_layer_pp.append(None); per_layer_pn.append(np.nan)
             continue
         decode = kind == 0.0
@@ -199,5 +215,5 @@ def assemble_generation(
         n_generated=T, n_think=sum(k == "think" for k in kinds),
         at_cap=(T >= max_tokens) or (finish_reason == "length"),
         finish_reason=finish_reason, misaligned=misaligned,
-        error="; ".join(problems) if problems else None, seconds=seconds,
+        error="; ".join(problems) if problems else None, seconds=seconds, warnings=warns,
     )

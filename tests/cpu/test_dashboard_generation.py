@@ -104,3 +104,28 @@ def test_merge_hook_results_flattens_and_converts():
     merged = merge_hook_results({"0": {"proj_L1": torch.ones(2, 3), "kind_L1": torch.zeros(2)}})
     assert isinstance(merged["proj_L1"], np.ndarray) and merged["proj_L1"].shape == (2, 3)
     assert merge_hook_results(None) == {}
+
+
+def test_reasoning_content_offset_fallback_is_warned_about():
+    # Tokens cover only the answer, so the answer text is found at offset 0 and the
+    # think_end_char fallback (len(reasoning_content)) is a guess over a string the
+    # tokens do not cover: every token would silently be labelled "think".
+    g = assemble_generation(text="ans", reasoning_content="think", tokens=list("ans"),
+                            finish_reason="stop", hook_saved=_saved(n_decode=3), capture_layers=LAYERS,
+                            probe_layer=PROBE, n_emotions=E, max_tokens=8, seconds=0.1)
+    assert g.warnings and any("guess" in w for w in g.warnings)
+    # The normal case, where the answer really does start after the reasoning tokens.
+    ok = assemble_generation(text="ans", reasoning_content="think", tokens=["th", "ink", "ans"],
+                             finish_reason="stop", hook_saved=_saved(n_decode=3), capture_layers=LAYERS,
+                             probe_layer=PROBE, n_emotions=E, max_tokens=8, seconds=0.1)
+    assert ok.warnings == []
+
+
+def test_assemble_generation_norm_length_mismatch_is_an_error_not_a_crash():
+    saved = _saved(n_decode=2)
+    saved["norm_L10"] = saved["norm_L10"][:1]  # 1 norm row for 3 kind rows
+    g = assemble_generation(text="ab", reasoning_content=None, tokens=list("ab"), finish_reason="stop",
+                            hook_saved=saved, capture_layers=LAYERS, probe_layer=PROBE,
+                            n_emotions=E, max_tokens=8, seconds=0.1)
+    assert g.error and "layer 10" in g.error
+    assert np.isnan(g.proj[:, 0, :]).all() and np.isfinite(g.proj[:, 1, :]).all()
