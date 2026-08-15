@@ -156,9 +156,16 @@ def main() -> int:
     show = [e.strip() for e in args.emotions.split(",")] if args.emotions else \
         [e for e in DEFAULT_SHOW if e in emotions]
     depths = [r["n_turns"] for r in rows]
-    hacks = sum(r["passed"] for r in rows)
+    passed = sum(r["passed"] for r in rows)
+    # `passed` inverts across ImpossibleBench splits: on `conflicting` it means the
+    # model satisfied mutually unsatisfiable tests (a hack), on `original` it means
+    # it solved the problem. Printing "hack 5/24" for a solvable run would be a
+    # fabricated finding, so the label comes from the record, not from a default.
+    split = str(rows[0].get("bench_split") or "conflicting")
+    label = "hack" if split == "conflicting" else "solved"
     print(f"{args.model}/{args.version}: {len(rows)} rollouts, {len(seqs)} with {args.stat} "
-          f"data, turns/rollout {min(depths)}-{max(depths)}, hack {hacks}/{len(rows)}")
+          f"data, turns/rollout {min(depths)}-{max(depths)}, split {split}, "
+          f"{label} {passed}/{len(rows)}")
     print(f"statistic: {unit}")
 
     max_turns = max(len(s) for s in seqs)
