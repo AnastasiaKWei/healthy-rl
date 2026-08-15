@@ -1,4 +1,1648 @@
-<!doctype html><html><head><meta charset="utf-8"><title>Affect Scope</title></head>
-<body><h1>Affect Scope</h1><p>API up. Page arrives in Task 8.</p><pre id="s"></pre>
-<script>fetch('/api/session').then(r=>r.json()).then(j=>{document.getElementById('s').textContent=JSON.stringify(j,null,2)})</script>
-</body></html>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Affect Scope</title>
+<style>
+:root{
+  color-scheme:light;
+  --bg:#eef1f1; --surface:#fbfcfc; --surface-2:#f3f6f6; --surface-3:#e9eeed;
+  --ink:#131817; --ink-2:#4b5755; --muted:#82908d; --line:#dfe5e4; --line-2:#c9d2d0;
+  --grid:#e6ebea; --axis:#c3cccb;
+  --wash:rgba(19,24,23,.06); --wash-2:rgba(19,24,23,.11);
+  --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --s4:#eda100; --sx:#9aa3a1;
+  --neg:42,120,214; --pos:227,73,72;
+  --good:#0ca30c; --good-ink:#006300; --warn:#fab219; --warn-ink:#7a5200; --crit:#d03b3b;
+  --think:#f6efe0; --think-ink:#6b5320; --test:#e9f1f5;
+  --shadow:0 1px 0 rgba(19,24,23,.04),0 6px 20px -12px rgba(19,24,23,.25);
+  --scrim:rgba(19,24,23,.30);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --bg:#0d1010; --surface:#171b1b; --surface-2:#1d2222; --surface-3:#242a2a;
+    --ink:#f1f4f3; --ink-2:#b6bfbd; --muted:#7f8b89; --line:#283030; --line-2:#364040;
+    --grid:#242b2b; --axis:#3a4544;
+    --wash:rgba(241,244,243,.07); --wash-2:rgba(241,244,243,.13);
+    --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500; --sx:#6d7876;
+    --neg:57,135,229; --pos:230,103,103;
+    --good:#0ca30c; --good-ink:#3fc23f; --warn:#fab219; --warn-ink:#fab219; --crit:#e66767;
+    --think:#2a251a; --think-ink:#d9bb6f; --test:#1a2329;
+    --shadow:0 1px 0 rgba(0,0,0,.4),0 8px 24px -14px rgba(0,0,0,.8);
+    --scrim:rgba(0,0,0,.55);
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --bg:#0d1010; --surface:#171b1b; --surface-2:#1d2222; --surface-3:#242a2a;
+  --ink:#f1f4f3; --ink-2:#b6bfbd; --muted:#7f8b89; --line:#283030; --line-2:#364040;
+  --grid:#242b2b; --axis:#3a4544;
+  --wash:rgba(241,244,243,.07); --wash-2:rgba(241,244,243,.13);
+  --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500; --sx:#6d7876;
+  --neg:57,135,229; --pos:230,103,103;
+  --good:#0ca30c; --good-ink:#3fc23f; --warn:#fab219; --warn-ink:#fab219; --crit:#e66767;
+  --think:#2a251a; --think-ink:#d9bb6f; --test:#1a2329;
+  --shadow:0 1px 0 rgba(0,0,0,.4),0 8px 24px -14px rgba(0,0,0,.8);
+  --scrim:rgba(0,0,0,.55);
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--ink);font:13px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
+[hidden]{display:none !important}
+.mono{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+button:focus-visible,[tabindex]:focus-visible,select:focus-visible,textarea:focus-visible,input:focus-visible,a:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+select,textarea,input{font:inherit;color:inherit;background:var(--surface);border:1px solid var(--line-2);border-radius:4px;padding:4px 6px}
+button[disabled],select[disabled],textarea[disabled],input[disabled]{opacity:.5;cursor:not-allowed}
+h1,h2,h3{margin:0;font-weight:600;text-wrap:balance}
+.eyebrow{font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600}
+.num{font-variant-numeric:tabular-nums}
+
+/* ---------- app shell ---------- */
+.app{background:var(--surface);overflow:hidden;display:grid;grid-template-rows:48px 1fr;height:100%;position:relative}
+.top{display:flex;align-items:center;gap:14px;padding:0 14px;border-bottom:1px solid var(--line);background:var(--surface)}
+.wordmark{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-weight:700;letter-spacing:.14em;font-size:12px;white-space:nowrap}
+.wordmark span{color:var(--muted);font-weight:500}
+.chip{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 9px;border-radius:12px;background:var(--surface-2);border:1px solid var(--line);font-size:11.5px;color:var(--ink-2);white-space:nowrap}
+.chip .dot{width:7px;height:7px;border-radius:50%;background:var(--good);flex:none}
+.chip .dot.bad{background:var(--crit)}
+.chip .dot.wait{background:var(--warn)}
+.chip.mono{font-size:11px}
+.top .grow{flex:1}
+.top .kv{display:flex;gap:6px;flex-wrap:nowrap;min-width:0;overflow:hidden}
+.body{display:grid;grid-template-columns:224px minmax(420px,1fr) 416px;min-height:0}
+@media (max-width:1180px){.body{grid-template-columns:200px 1fr 380px}}
+@media (max-width:980px){.body{grid-template-columns:1fr;grid-template-rows:auto auto auto;overflow:auto}.app{height:auto;min-height:100%}.rail{border-right:0;border-bottom:1px solid var(--line)}.panel{border-left:0;border-top:1px solid var(--line)}}
+
+/* rail */
+.rail{border-right:1px solid var(--line);background:var(--surface-2);display:flex;flex-direction:column;min-height:0}
+.rail .actions{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:10px}
+.btn{height:30px;padding:0 10px;border-radius:5px;border:1px solid var(--line-2);background:var(--surface);font-weight:600;font-size:12px;display:inline-flex;align-items:center;justify-content:center;gap:6px;white-space:nowrap}
+.btn:hover:not([disabled]){background:var(--wash)}
+.btn.primary{background:var(--ink);color:var(--surface);border-color:var(--ink)}
+.btn.primary:hover:not([disabled]){opacity:.9}
+.btn.sm{height:24px;padding:0 8px;font-size:11px}
+.rail .list{overflow:auto;flex:1;min-height:0}
+.rail .group{padding:6px 10px 2px}
+.rail .item{display:flex;align-items:center;gap:8px;padding:6px 10px;margin:0 6px;border-radius:5px;cursor:pointer;color:var(--ink-2);text-align:left;width:calc(100% - 12px)}
+.rail .item:hover{background:var(--wash)}
+.rail .item.sel{background:var(--surface);color:var(--ink);box-shadow:inset 0 0 0 1px var(--line)}
+.rail .item .id{font-family:ui-monospace,Menlo,monospace;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rail .item .meta{margin-left:auto;font-size:11px;color:var(--muted);white-space:nowrap}
+.rail .item .st{width:8px;height:8px;border-radius:2px;flex:none}
+.st.fail{background:var(--crit)} .st.pass{background:var(--good)} .st.run{background:var(--warn)} .st.chat{background:var(--sx);border-radius:50%} .st.idle{background:var(--line-2)}
+.rail .foot{margin-top:auto;padding:10px;overflow-wrap:anywhere;border-top:1px solid var(--line);font-size:11px;color:var(--muted);line-height:1.5}
+.rail .foot code{font-family:ui-monospace,Menlo,monospace;color:var(--ink-2)}
+.rail .foot b.late{color:var(--crit)}
+
+/* conversation */
+.conv{display:grid;grid-template-rows:auto 1fr auto;min-height:0;min-width:0;position:relative}
+.conv-head{display:flex;align-items:center;gap:10px;padding:10px 16px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.conv-head h2{font-size:14px;overflow-wrap:anywhere}
+.conv-head .sub{color:var(--muted);font-size:12px}
+.status{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:600;padding:2px 8px;border-radius:10px;background:var(--surface-2);color:var(--ink-2)}
+.status.run{background:color-mix(in srgb,var(--warn) 18%,transparent);color:var(--warn-ink)}
+.status.fail{background:color-mix(in srgb,var(--crit) 14%,transparent);color:var(--crit)}
+.status.pass{background:color-mix(in srgb,var(--good) 14%,transparent);color:var(--good-ink)}
+.seg{display:inline-flex;border:1px solid var(--line-2);border-radius:5px;overflow:hidden;background:var(--surface)}
+.seg button{height:24px;padding:0 9px;font-size:11.5px;color:var(--ink-2)}
+.seg button.on{background:var(--ink);color:var(--surface)}
+.stream{overflow:auto;padding:14px 16px 8px;display:flex;flex-direction:column;gap:12px;background:var(--bg)}
+.msg{flex:none;max-width:78ch;border-radius:8px;border:1px solid var(--line);background:var(--surface);overflow:hidden}
+.msg.user{align-self:flex-end;background:var(--surface-2)}
+.msg.sys{color:var(--muted);border-style:dashed;background:transparent}
+.msg .mh{display:flex;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid var(--line);font-size:11px;color:var(--muted);flex-wrap:wrap}
+.msg .mh b{color:var(--ink-2);font-weight:600}
+.msg .mh .r{margin-left:auto;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.msg .mb{padding:10px 12px;overflow-wrap:anywhere}
+.msg.sys .mb,.msg.user .mb{white-space:pre-wrap}
+.msg .txt{white-space:pre-wrap}
+.msg .fold{color:var(--muted);cursor:pointer;font-size:11.5px}
+.read{display:inline-flex;gap:5px;align-items:center;font-size:11px;padding:1px 6px;border-radius:9px;background:var(--surface-2);border:1px solid var(--line);color:var(--ink-2)}
+.read i{width:8px;height:8px;border-radius:2px;background:var(--sx);flex:none}
+.read.na{opacity:.55}
+.cap{color:var(--warn-ink);font-weight:600}
+.wchip{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:600;padding:1px 6px;border-radius:9px;background:color-mix(in srgb,var(--warn) 18%,transparent);color:var(--warn-ink)}
+.wchip.crit{background:color-mix(in srgb,var(--crit) 14%,transparent);color:var(--crit)}
+.badge{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:700;padding:1px 6px;border-radius:9px}
+.badge.pass{background:color-mix(in srgb,var(--good) 14%,transparent);color:var(--good-ink)}
+.badge.fail{background:color-mix(in srgb,var(--crit) 14%,transparent);color:var(--crit)}
+.think{background:var(--think);color:var(--think-ink);border-radius:5px;padding:7px 9px;margin-bottom:8px;font-size:12px;white-space:pre-wrap}
+.think summary{cursor:pointer;font-weight:600}
+.msg.test{background:var(--test);border-color:var(--line)}
+.msg.test .mb{font:11.5px/1.5 ui-monospace,Menlo,monospace;white-space:pre-wrap;color:var(--ink-2)}
+.tokstrip{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:11.5px;line-height:1.75;white-space:pre-wrap;word-break:break-word}
+.tokstrip .t{border-radius:2px;padding:0 0.5px;cursor:crosshair}
+.tokstrip .t.sel{outline:2px solid var(--ink);outline-offset:-1px}
+.tokstrip .t.mark{box-shadow:inset 0 -2px 0 var(--ink)}
+.tokstrip .band{display:block;background:var(--think);border-left:3px solid var(--think-ink);border-radius:4px;padding:4px 8px;margin:0 0 8px}
+.tokstrip .band .bh{display:block;font:600 10.5px/1.6 system-ui,sans-serif;letter-spacing:.06em;text-transform:uppercase;color:var(--think-ink);cursor:pointer}
+.tokstrip .band .t{color:var(--ink)}
+.tokstrip .band.fold .t{display:none}
+.legend-div{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted);margin-top:8px;flex-wrap:wrap}
+.legend-div .bar{width:120px;height:8px;border-radius:2px;background:linear-gradient(90deg,rgba(var(--neg),.9),rgba(var(--neg),0) 50%,rgba(var(--pos),.9))}
+.composer{border-top:1px solid var(--line);padding:10px 16px;display:grid;gap:8px;background:var(--surface)}
+.composer textarea{width:100%;min-height:58px;resize:vertical}
+.composer .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.composer .row .grow{flex:1}
+.composer label{font-size:11.5px;color:var(--ink-2);display:inline-flex;align-items:center;gap:5px}
+.composer select{height:26px;padding:0 6px;font-size:12px}
+.cstat{font-size:11.5px;color:var(--ink-2);min-height:15px;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+.cstat.err{color:var(--crit)}
+.empty{color:var(--muted);padding:26px 8px;text-align:center;max-width:56ch;margin:0 auto}
+
+/* task dialog */
+.scrim{position:absolute;inset:0;background:var(--scrim);display:none;z-index:6;align-items:flex-start;justify-content:center;padding:18px}
+.scrim.on{display:flex}
+.dlg{background:var(--surface);border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow);width:min(470px,100%);max-height:100%;overflow:auto;padding:14px}
+.dlg h3{font-size:13px;margin-bottom:10px}
+.dlg .field{display:grid;grid-template-columns:104px 1fr;gap:8px;align-items:center;margin-bottom:8px;font-size:12px;color:var(--ink-2)}
+.dlg .field select,.dlg .field input{width:100%}
+.dlg .checks{display:flex;flex-direction:column;gap:6px;margin:10px 0}
+.dlg .checks label{display:flex;gap:7px;align-items:center;font-size:12px;color:var(--ink-2)}
+.dlg .acts{display:flex;gap:8px;justify-content:flex-end;margin-top:12px}
+.dlg .err{color:var(--crit);font-size:11.5px;min-height:15px;overflow-wrap:anywhere}
+
+/* right panel */
+.panel{border-left:1px solid var(--line);display:grid;grid-template-rows:auto 1fr;min-height:0;background:var(--surface)}
+.tabs{display:flex;border-bottom:1px solid var(--line);padding:0 8px}
+.tabs button{padding:11px 10px;font-weight:600;font-size:12.5px;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px}
+.tabs button.on{color:var(--ink);border-bottom-color:var(--ink)}
+.tabs .sp{flex:1}
+.pane{overflow:auto;padding:12px 14px;display:none;flex-direction:column;gap:14px}
+.pane.on{display:flex}
+.card{border:1px solid var(--line);border-radius:7px;padding:10px 12px;background:var(--surface)}
+.card .ch{display:flex;align-items:baseline;gap:8px;margin-bottom:6px;flex-wrap:wrap}
+.card .ch h3{font-size:12.5px}
+.card .ch .sub{color:var(--muted);font-size:11px}
+.card .ch .r{margin-left:auto;display:flex;gap:6px;align-items:center}
+.ctrl{display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:11.5px;color:var(--ink-2)}
+.chips{display:flex;flex-wrap:wrap;gap:5px}
+.echip{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:11px;border:1px solid var(--line-2);font-size:11px;color:var(--ink-2);background:var(--surface)}
+.echip i{width:9px;height:9px;border-radius:50%;background:var(--sx);flex:none}
+.echip.on{border-color:var(--ink);color:var(--ink);background:var(--wash)}
+.echip.off i{opacity:.35}
+svg text{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;fill:var(--muted);font-size:10.5px}
+svg .grid line{stroke:var(--grid);stroke-width:1}
+svg .axis{stroke:var(--axis)}
+svg .zero{stroke:var(--axis);stroke-dasharray:3 3}
+svg .lbl{font-weight:600;fill:var(--ink-2);font-size:10.5px}
+svg .cross{stroke:var(--ink-2);stroke-width:1;stroke-dasharray:2 3}
+.tip{position:absolute;pointer-events:none;background:var(--ink);color:var(--surface);font-size:11px;padding:5px 8px;border-radius:4px;white-space:nowrap;display:none;z-index:9;line-height:1.4}
+.tip .row{display:flex;gap:8px;justify-content:space-between}
+.tip i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;vertical-align:middle}
+.tile-row{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.tile{border:1px solid var(--line);border-radius:6px;padding:8px 9px;background:var(--surface-2);min-width:0}
+.tile .l{font-size:10.5px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;font-weight:600;display:flex;align-items:center;gap:5px}
+.tile .l i{width:8px;height:8px;border-radius:2px;background:var(--sx);flex:none}
+.tile .v{font-size:18px;font-weight:600;line-height:1.2;margin-top:2px}
+.tile .d{font-size:11px;color:var(--ink-2)}
+table.agg{width:100%;border-collapse:collapse;font-size:11.5px}
+table.agg th{text-align:left;font-weight:600;color:var(--muted);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;padding:4px 6px;border-bottom:1px solid var(--line);white-space:nowrap}
+table.agg td{padding:4px 6px;border-bottom:1px solid var(--grid);vertical-align:middle}
+table.agg td.n{text-align:right;font-variant-numeric:tabular-nums;font-family:ui-monospace,Menlo,monospace;font-size:11px}
+table.agg tr.dim td{color:var(--muted)}
+table.agg .sw{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:6px;vertical-align:middle;background:var(--sx)}
+.dbar{display:inline-block;height:8px;border-radius:2px;vertical-align:middle;background:var(--ink-2)}
+.wrapx{overflow-x:auto}
+.warnbox{border-left:3px solid var(--warn);background:color-mix(in srgb,var(--warn) 10%,transparent);padding:7px 10px;border-radius:0 5px 5px 0;font-size:11.5px;color:var(--ink-2);overflow-wrap:anywhere}
+.warnbox b{color:var(--ink)}
+.warnbox.crit{border-left-color:var(--crit);background:color-mix(in srgb,var(--crit) 10%,transparent)}
+.kv2{display:grid;grid-template-columns:auto 1fr;gap:3px 12px;font-size:11.5px;margin:0}
+.kv2 dt{color:var(--muted)}
+.kv2 dd{margin:0;font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--ink-2);overflow-wrap:anywhere}
+.hint{margin:8px 0 0;color:var(--muted);font-size:11.5px}
+@media (prefers-reduced-motion:no-preference){.rail .item,.btn,.echip{transition:background .12s}}
+</style>
+</head>
+<body>
+<div class="app" id="app">
+  <div class="tip" id="tip"></div>
+
+  <div class="top">
+    <div class="wordmark">AFFECT<span>·</span>SCOPE</div>
+    <div class="kv" id="topkv"></div>
+    <div class="grow"></div>
+    <span class="chip mono" id="recChip">— records</span>
+    <button class="btn sm" id="themeBtn" title="Theme: system / light / dark">theme: system</button>
+    <button class="btn sm" id="tunnelBtn">Copy tunnel cmd</button>
+  </div>
+
+  <div class="body">
+    <aside class="rail">
+      <div class="actions">
+        <button class="btn primary" id="newChatBtn">+ Chat</button>
+        <button class="btn" id="newTaskBtn">+ Task</button>
+      </div>
+      <div class="list" id="railList"></div>
+      <div class="foot" id="railFoot"></div>
+    </aside>
+
+    <section class="conv">
+      <div class="conv-head">
+        <h2 class="mono" id="convTitle">No conversation</h2>
+        <span class="sub" id="convSub">start a chat or a task run</span>
+        <span class="status" id="convState" hidden></span>
+        <span class="grow" style="flex:1"></span>
+        <span class="sub">view</span>
+        <div class="seg" id="viewSeg"><button class="on" data-v="tokens">tokens</button><button data-v="text">text</button></div>
+        <span class="sub">colour by</span>
+        <select id="colourBy" style="height:24px;padding:0 6px;font-size:11.5px"></select>
+      </div>
+
+      <div class="stream" id="stream"></div>
+
+      <div class="scrim" id="taskScrim">
+        <div class="dlg" role="dialog" aria-label="Start a task run">
+          <h3>Start a task run</h3>
+          <div class="field"><label for="dlgSplit">split</label><select id="dlgSplit"><option value="conflicting">conflicting</option><option value="original">original</option></select></div>
+          <div class="field"><label for="dlgProblem">problem</label><select id="dlgProblem"></select></div>
+          <div class="field"><label for="dlgAttempts">attempts</label><input id="dlgAttempts" type="number" min="1" max="20" step="1"></div>
+          <div class="field"><label for="dlgMaxTok">max_tokens</label><input id="dlgMaxTok" type="number" min="16" max="32768" step="16"></div>
+          <div class="field"><label for="dlgTemp">temperature</label><input id="dlgTemp" type="number" min="0" max="2" step="0.1"></div>
+          <div class="checks">
+            <label><input type="checkbox" id="dlgScratch"> scratchpad system prompt</label>
+            <label><input type="checkbox" id="dlgAffect"> affect prompt (rewritten problem text)</label>
+            <label><input type="checkbox" id="dlgAuto"> auto-continue (no pause between attempts)</label>
+          </div>
+          <div class="err" id="dlgErr"></div>
+          <div class="acts"><button class="btn" id="dlgCancel">Cancel</button><button class="btn primary" id="dlgStart">Start</button></div>
+        </div>
+      </div>
+
+      <div class="composer">
+        <textarea id="composerText" placeholder="Send a message, or intervene before the next attempt (leave empty to feed the test result back unchanged)"></textarea>
+        <div class="row">
+          <label>temperature <select id="cTemp"></select></label>
+          <label>max_tokens <select id="cMaxTok"></select></label>
+          <span class="grow"></span>
+          <button class="btn" id="stopBtn">Stop</button>
+          <button class="btn" id="sendBtn">Send message</button>
+          <button class="btn primary" id="contBtn">Run tests → next attempt</button>
+        </div>
+        <div class="cstat" id="cstat"></div>
+      </div>
+    </section>
+
+    <aside class="panel">
+      <div class="tabs" id="tabs">
+        <button class="on" data-t="traj">Trajectory</button>
+        <button data-t="tok">Tokens</button>
+        <button data-t="agg">Aggregate</button>
+        <span class="sp"></span>
+        <button data-t="set">Settings</button>
+      </div>
+
+      <!-- Trajectory -->
+      <div class="pane on" data-p="traj">
+        <div class="tile-row" id="tiles"></div>
+        <div class="card">
+          <div class="ch"><h3>Per-turn cosine, this conversation</h3><span class="sub" id="trajSub"></span>
+            <div class="r"><div class="seg" id="readoutSeg">
+              <button class="on" data-r="start">start</button><button data-r="think_end">think end</button><button data-r="answer_start">answer start</button><button data-r="end">end</button>
+            </div></div>
+          </div>
+          <div class="chips" id="emoChips"></div>
+          <div id="trajChart" style="margin-top:8px"></div>
+          <div class="ctrl" style="margin-top:6px"><span>x = position among non-empty turns, as in live_trajectory.py: t0 is the first non-empty turn, while the transcript numbers turns from 1 · dashed = session mean for the same source and split (n per turn on hover)</span></div>
+        </div>
+        <div id="trajWarn"></div>
+      </div>
+
+      <!-- Tokens -->
+      <div class="pane" data-p="tok">
+        <div class="card">
+          <div class="ch"><h3>Token-by-token</h3>
+            <div class="r"><select id="tokTurn" style="height:24px;padding:0 6px;font-size:11.5px"></select></div></div>
+          <div class="chips" id="tokChips"></div>
+          <div id="tokChart" style="margin-top:8px"></div>
+          <div class="ctrl" style="margin-top:6px">
+            <span>segment</span><div class="seg" id="segSeg"><button class="on" data-s="all">all</button><button data-s="think">think</button><button data-s="answer">answer</button></div>
+            <span style="margin-left:8px">smoothing</span><div class="seg" id="smoothSeg"><button class="on" data-k="1">raw</button><button data-k="8">8-tok mean</button></div>
+            <span style="margin-left:8px">layer</span><div class="seg" id="layerSeg"></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="ch"><h3>Selected token</h3></div>
+          <dl class="kv2" id="tokInfo"><dt>token</dt><dd>—</dd></dl>
+          <p class="hint">Hover a token in the transcript or the chart; click to pin. Thinking tokens are measured identically and shaded amber; the segment switch restricts what the chart and the aggregates use.</p>
+        </div>
+      </div>
+
+      <!-- Aggregate -->
+      <div class="pane" data-p="agg">
+        <div class="card">
+          <div class="ch"><h3>Session aggregate</h3>
+            <div class="r"><select id="aggFilter" style="height:24px;padding:0 6px;font-size:11.5px"></select></div></div>
+          <div class="ctrl" style="margin-bottom:8px">
+            <span>stat</span><div class="seg" id="statSeg"><button class="on" data-s="token">token</button><button data-s="mean">mean</button></div>
+            <span style="margin-left:8px">capped turns</span><div class="seg" id="capSeg"><button class="on" data-c="0">exclude</button><button data-c="1">include</button></div>
+          </div>
+          <div class="ctrl" id="aggParams" style="margin-bottom:8px"></div>
+          <div id="aggMsg"></div>
+          <div class="wrapx"><table class="agg" id="aggTable"></table></div>
+          <p class="hint">Δ = last − first usable turn, paired within conversation. Wilcoxon reported when n ≥ 6 and scipy is available, else "—". Bars are Δ; grey rows are directions outside the four headline ones. The readout and segment switches on the Trajectory and Tokens tabs apply here too.</p>
+        </div>
+        <div class="card">
+          <div class="ch"><h3>By turn index, session mean</h3><span class="sub" id="aggChartSub">band = ±1 SEM</span></div>
+          <div id="aggChart"></div>
+        </div>
+      </div>
+
+      <!-- Settings -->
+      <div class="pane" data-p="set">
+        <div class="card"><div class="ch"><h3>Server</h3></div><dl class="kv2" id="setServer"></dl></div>
+        <div class="card"><div class="ch"><h3>Measurement</h3></div><dl class="kv2" id="setMeasure"></dl></div>
+        <div class="card"><div class="ch"><h3>Session</h3></div><dl class="kv2" id="setSession"></dl></div>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<script>
+// ---------- API client ----------
+async function apiError(path, r) {
+  let detail = "";
+  try { const j = await r.json(); detail = j && j.detail ? (typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail)) : JSON.stringify(j); }
+  catch (_) { try { detail = await r.text(); } catch (_e) { detail = ""; } }
+  const e = new Error(detail || (r.status + " " + r.statusText));
+  e.status = r.status; e.path = path; e.detail = detail;
+  return e;
+}
+const api = {
+  async get(path, params) {
+    const u = new URL(path, location.origin);
+    if (params) Object.entries(params).forEach(([k, v]) => { if (v !== undefined && v !== null) u.searchParams.set(k, v); });
+    const r = await fetch(u); if (!r.ok) throw await apiError(path, r); return r.json();
+  },
+  async post(path, body) {
+    const r = await fetch(new URL(path, location.origin), {method: "POST", headers: {"content-type": "application/json"}, body: JSON.stringify(body || {})});
+    if (!r.ok) throw await apiError(path, r); return r.json();
+  },
+  // POST + read SSE; calls onEvent(name, data) for each event; resolves when the stream ends.
+  async stream(path, body, onEvent) {
+    const r = await fetch(new URL(path, location.origin), {method: "POST", headers: {"content-type": "application/json"}, body: JSON.stringify(body || {})});
+    if (!r.ok) throw await apiError(path, r);
+    const reader = r.body.getReader(), dec = new TextDecoder(); let buf = "", name = null;
+    for (;;) {
+      const {value, done} = await reader.read(); if (done) break;
+      buf += dec.decode(value, {stream: true});
+      let i; while ((i = buf.indexOf("\n\n")) >= 0) {
+        const chunk = buf.slice(0, i); buf = buf.slice(i + 2);
+        for (const line of chunk.split("\n")) {
+          if (line.startsWith("event: ")) name = line.slice(7);
+          else if (line.startsWith("data: ")) { try { onEvent(name, JSON.parse(line.slice(6))); } catch (err) { console.error("bad SSE payload", err); } }
+        }
+      }
+    }
+  },
+};
+
+// ---------- state ----------
+const S = {
+  session: null, emotions: [], probeLayer: null, layers: [],
+  conversations: [], current: null,      // current = {conversation, turns} from /api/conversations/{id}
+  colourBy: "desperate", readout: "start", segment: "all", stat: "token", includeCap: false, layer: null,
+  view: "tokens", shown: new Set(["desperate", "frustrated", "proud", "joyful"]),
+  tokens: null, pinnedTok: null, busy: false, aggFilter: {source: "task", split: null},
+  smooth: 1, head: [], colour: {}, healthOk: true, health: null, tab: "traj", taskCid: null,
+  healthTimer: null, statusTimer: null, trajSess: null, tokChart: null, theme: "system",
+};
+const HEAD = {desperate: "--s1", frustrated: "--s2", proud: "--s3", joyful: "--s4"};   // series colours; others --sx
+const HEAD_ORDER = ["desperate", "frustrated", "proud", "joyful"];
+const SERIES = ["--s1", "--s2", "--s3", "--s4"];
+const READOUTS = ["start", "think_end", "answer_start", "end"];
+const READOUT_LABEL = {start: "start", think_end: "think→ans", answer_start: "answer start", end: "end"};
+const TINT_RANGE = 0.08;
+
+// ---------- small helpers ----------
+const $ = (sel, root) => (root || document).querySelector(sel);
+const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
+const esc = s => String(s === null || s === undefined ? "" : s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const isNum = v => typeof v === "number" && isFinite(v);
+const fmt = v => isNum(v) ? (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(3) : "—";
+const fmt4 = v => isNum(v) ? (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(4) : "—";
+const cvar = e => "var(" + (S.colour[e] || "--sx") + ")";
+const isHead = e => S.head.indexOf(e) >= 0;
+function el(tag, cls, text) { const n = document.createElement(tag); if (cls) n.className = cls; if (text !== undefined) n.textContent = text; return n; }
+
+let TINT = {neg: "42,120,214", pos: "227,73,72"};
+function refreshTint() {
+  const cs = getComputedStyle(document.documentElement);
+  TINT = {neg: cs.getPropertyValue("--neg").trim() || TINT.neg, pos: cs.getPropertyValue("--pos").trim() || TINT.pos};
+}
+function tint(v) {
+  if (!isNum(v)) return "transparent";
+  const a = Math.min(1, Math.abs(v) / TINT_RANGE);
+  return "rgba(" + (v < 0 ? TINT.neg : TINT.pos) + "," + (a * 0.85).toFixed(3) + ")";
+}
+
+// tooltip, positioned inside the app box
+const tipEl = () => $("#tip");
+function showTip(ev, html) {
+  const tip = tipEl(), app = $("#app");
+  tip.innerHTML = html; tip.style.display = "block";
+  const r = app.getBoundingClientRect();
+  let x = ev.clientX - r.left + 12, y = ev.clientY - r.top + 12;
+  if (x + tip.offsetWidth > r.width - 8) x -= tip.offsetWidth + 24;
+  if (y + tip.offsetHeight > r.height - 8) y -= tip.offsetHeight + 24;
+  tip.style.left = Math.max(4, x) + "px"; tip.style.top = Math.max(4, y) + "px";
+}
+function hideTip() { tipEl().style.display = "none"; }
+
+function setStatus(msg, isErr) {
+  const n = $("#cstat"); n.textContent = msg || ""; n.classList.toggle("err", !!isErr);
+}
+function stopTicker() { if (S.statusTimer) { clearInterval(S.statusTimer); S.statusTimer = null; } }
+function startTicker(label) {
+  stopTicker();
+  const t0 = Date.now();
+  const tick = () => setStatus(label + "… (" + ((Date.now() - t0) / 1000).toFixed(0) + " s)");
+  tick();
+  S.statusTimer = setInterval(tick, 500);
+}
+
+// SVG helpers
+function svgEl(w, h) {
+  const s = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  s.setAttribute("viewBox", "0 0 " + w + " " + h); s.setAttribute("width", "100%");
+  s.style.display = "block"; s.style.overflow = "visible"; return s;
+}
+const N = (t, a) => { const e = document.createElementNS("http://www.w3.org/2000/svg", t); for (const k in (a || {})) e.setAttribute(k, a[k]); return e; };
+function niceStep(x) { const p = Math.pow(10, Math.floor(Math.log10(Math.abs(x) || 1e-3))); const n = x / p; return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * p; }
+function scaleY(values, minSpan) {
+  const f = values.filter(isNum);
+  let lo = f.length ? Math.min.apply(null, f) : -minSpan / 2;
+  let hi = f.length ? Math.max.apply(null, f) : minSpan / 2;
+  if (hi - lo < minSpan) { const c = (hi + lo) / 2; lo = c - minSpan / 2; hi = c + minSpan / 2; }
+  const pad = (hi - lo) * 0.12; lo -= pad; hi += pad;
+  const step = niceStep((hi - lo) / 5);
+  const ticks = [];
+  for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-12; v += step) ticks.push(Math.round(v / step) * step);
+  return {lo: lo, hi: hi, ticks: ticks, step: step};
+}
+const tickLabel = (v, step) => (v > 0 ? "+" : v < 0 ? "−" : "") + Math.abs(v).toFixed(step < 0.01 ? 3 : 2);
+// A chart drawn into a zero-width box (a hidden pane, a very narrow panel) gives a
+// zero-width bounding rect; without this the hover index comes out Infinity or NaN.
+function hoverIndex(ev, svg, W, m, K) {
+  if (K <= 1) return 0;
+  const r = svg.getBoundingClientRect();
+  if (!r.width) return 0;
+  const px = (ev.clientX - r.left) / r.width * W;
+  const i = Math.round((px - m.l) / (W - m.l - m.r) * (K - 1));
+  return isFinite(i) ? Math.max(0, Math.min(K - 1, i)) : 0;
+}
+
+function pathOf(vals, x, y) {
+  let d = "", pen = false;
+  vals.forEach((v, i) => { if (!isNum(v)) { pen = false; return; } d += (pen ? "L" : "M") + x(i) + "," + y(v); pen = true; });
+  return d;
+}
+function layoutLabels(items, minGap) {
+  items.sort((a, b) => a.y - b.y);
+  for (let i = 1; i < items.length; i++) if (items[i].y - items[i - 1].y < minGap) items[i].y = items[i - 1].y + minGap;
+  return items;
+}
+
+// ---------- boot ----------
+async function boot() {
+  refreshTint();
+  wireControls();
+  try {
+    S.session = await api.get("/api/session");
+  } catch (e) {
+    $("#stream").innerHTML = '<div class="warnbox crit"><b>Cannot reach the dashboard API.</b> ' + esc(e.message) + "</div>";
+    return;
+  }
+  S.emotions = S.session.emotions || [];
+  S.layers = S.session.capture_layers || [];
+  S.probeLayer = S.session.probe_layer === undefined ? null : S.session.probe_layer;
+  S.layer = S.probeLayer !== null ? S.probeLayer : (S.layers.length ? S.layers[0] : null);
+  S.head = HEAD_ORDER.filter(e => S.emotions.indexOf(e) >= 0);
+  if (S.head.length < HEAD_ORDER.length) {
+    const extra = S.emotions.filter(e => S.head.indexOf(e) < 0);
+    S.head = S.head.concat(extra).slice(0, 4);
+    S.shown = new Set(S.emotions.slice(0, 4));
+    S.colourBy = S.emotions.length ? S.emotions[0] : "desperate";
+  } else {
+    S.shown = new Set(HEAD_ORDER);
+    S.colourBy = "desperate";
+  }
+  assignColours();
+  applyHealth(S.session.health || {ok: true});
+  renderTopBar();
+  fillSelects();
+  renderChips();
+  renderSettings();
+  updateComposer();
+  await refreshRail();
+  const convs = S.conversations;
+  if (convs.length) await openConversation(convs[0].conversation_id);
+  else renderEmpty();
+  startHealthPoll();
+}
+
+function assignColours() {
+  S.colour = {}; const used = {};
+  S.head.forEach(e => { if (HEAD[e]) { S.colour[e] = HEAD[e]; used[HEAD[e]] = 1; } });
+  const free = SERIES.filter(v => !used[v]);
+  S.head.forEach(e => { if (!S.colour[e]) S.colour[e] = free.shift() || "--sx"; });
+}
+
+function renderTopBar() {
+  const s = S.session, meta = s.session || {}, job = s.job || {};
+  const kv = $("#topkv"); kv.innerHTML = "";
+  const chip = (cls, html) => { const c = el("span", cls); c.innerHTML = html; kv.appendChild(c); return c; };
+  chip("chip mono", esc(meta.model || "unknown model"));
+  const vecName = String(meta.vectors_dir || "vectors").split("/").filter(Boolean).slice(-2).join("/") || "vectors";
+  chip("chip mono", esc(vecName) + " · probe L" + esc(S.probeLayer) + " · " + S.emotions.length + " dirs");
+  const h = el("span", "chip"); h.id = "healthChip"; h.innerHTML = '<span class="dot"></span><span>health</span>'; kv.appendChild(h);
+  if (job.id) chip("chip mono", "job " + esc(job.id) + (job.node ? " · " + esc(job.node) : ""));
+  if (s.read_only) chip("chip", "replay · read-only");
+  applyHealth(S.health || {ok: true});
+  const t = $("#tunnelBtn");
+  t.disabled = !(job && job.tunnel_cmd);
+  t.title = job && job.tunnel_cmd ? job.tunnel_cmd : "no tunnel command for this session";
+}
+
+function applyHealth(h) {
+  S.health = h || {ok: false};
+  S.healthOk = !!S.health.ok;
+  const chip = $("#healthChip");
+  if (chip) {
+    const dot = $(".dot", chip);
+    if (dot) dot.className = "dot" + (S.healthOk ? "" : " bad");
+    const label = S.healthOk ? "model healthy" + (S.health.last_ok_at ? " · " + S.health.last_ok_at : "")
+                             : "model unreachable" + (S.health.last_error ? " · " + String(S.health.last_error).slice(0, 60) : "");
+    chip.lastChild.textContent = label;
+    chip.title = S.health.last_error ? String(S.health.last_error) : "";
+  }
+  updateComposer();
+  renderSettings();
+}
+
+function startHealthPoll() {
+  if (S.healthTimer) clearInterval(S.healthTimer);
+  S.healthTimer = setInterval(async () => {
+    try { applyHealth(await api.get("/api/health")); }
+    catch (e) { applyHealth({ok: false, last_error: e.message}); }
+  }, 5000);
+}
+
+function fillSelects() {
+  const cb = $("#colourBy"); cb.innerHTML = "";
+  S.emotions.forEach(e => { const o = el("option", null, e); o.value = e; if (e === S.colourBy) o.selected = true; cb.appendChild(o); });
+  const seg = $("#layerSeg"); seg.innerHTML = "";
+  S.layers.forEach(l => {
+    const b = el("button", l === S.layer ? "on" : null, String(l)); b.dataset.l = l;
+    b.addEventListener("click", () => setLayer(l));
+    seg.appendChild(b);
+  });
+  const d = (S.session && S.session.defaults) || {};
+  const temps = Array.from(new Set([Number(d.temperature || 0), 0, 0.7, 1.0])).sort((a, b) => a - b);
+  const toks = Array.from(new Set([Number(d.max_tokens || 2048), 512, 1024, 2048, 4096])).sort((a, b) => a - b);
+  const fill = (sel, vals, cur, f) => { sel.innerHTML = ""; vals.forEach(v => { const o = el("option", null, f(v)); o.value = v; if (v === cur) o.selected = true; sel.appendChild(o); }); };
+  fill($("#cTemp"), temps, Number(d.temperature || 0), v => v.toFixed(1));
+  fill($("#cMaxTok"), toks, Number(d.max_tokens || 2048), v => String(v));
+}
+
+function renderEmpty() {
+  $("#stream").innerHTML = '<div class="empty">No conversation open. Start a chat, or run a benchmark problem through the failing-tests loop with <b>+ Task</b>. Every generated token is measured at the probe layer as it arrives.</div>';
+}
+
+// ---------- rail ----------
+async function refreshRail() {
+  let data;
+  try { data = await api.get("/api/conversations"); }
+  catch (e) { $("#railList").innerHTML = '<div class="warnbox crit" style="margin:8px">' + esc(e.message) + "</div>"; return; }
+  S.conversations = (data.conversations || []).slice().sort((a, b) => String(b.last_created_at || "").localeCompare(String(a.last_created_at || "")));
+  const list = $("#railList"); list.innerHTML = "";
+  const tasks = S.conversations.filter(c => c.source === "task");
+  const chats = S.conversations.filter(c => c.source !== "task");
+  const group = (label, items, render) => {
+    if (!items.length) return;
+    const g = el("div", "group eyebrow", label); g.style.marginTop = "8px"; list.appendChild(g);
+    items.forEach(c => list.appendChild(render(c)));
+  };
+  group("Task runs", tasks, c => {
+    const b = el("button", "item" + (S.current && S.current.conversation.conversation_id === c.conversation_id ? " sel" : ""));
+    b.dataset.cid = c.conversation_id;
+    const running = ["generating", "testing", "awaiting_user"].indexOf(c.state) >= 0;
+    const st = running ? "run" : c.passed === true ? "pass" : c.passed === false ? "fail" : "idle";
+    b.innerHTML = '<span class="st ' + st + '"></span><span class="id">' + esc(c.task_id || c.conversation_id) + "</span>" +
+      '<span class="meta">' + esc(c.bench_split || "—") + " · " + c.n_turns + "t" + (running ? " · " + esc(c.state) : c.passed === true ? " · ✓" : c.passed === false ? " · ✕" : "") + "</span>";
+    b.addEventListener("click", () => openConversation(c.conversation_id));
+    return b;
+  });
+  group("Chats", chats, c => {
+    const b = el("button", "item" + (S.current && S.current.conversation.conversation_id === c.conversation_id ? " sel" : ""));
+    b.dataset.cid = c.conversation_id;
+    b.innerHTML = '<span class="st chat"></span><span class="id">' + esc(c.title || c.conversation_id) + '</span><span class="meta">' + c.n_turns + "</span>";
+    b.addEventListener("click", () => openConversation(c.conversation_id));
+    return b;
+  });
+  if (!S.conversations.length) list.innerHTML = '<div class="group" style="color:var(--muted);font-size:11.5px">nothing recorded yet</div>';
+  const n = S.conversations.reduce((a, c) => a + (c.n_turns || 0), 0);
+  $("#recChip").textContent = n + " record" + (n === 1 ? "" : "s") + " · this session";
+  renderRailFoot();
+  fillAggFilter();
+}
+
+function slurmMinutes(s) {
+  if (!s) return null;
+  const m = String(s).trim().match(/^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)$/);
+  if (!m) return null;
+  const d = +(m[1] || 0), h = +(m[2] || 0), mi = +(m[3] || 0), se = +(m[4] || 0);
+  return d * 1440 + h * 60 + mi + se / 60;
+}
+
+function renderRailFoot() {
+  const s = S.session || {}, job = s.job || {};
+  const foot = $("#railFoot");
+  let html = "Records → <code>" + esc(s.records_dir || "—") + "</code>";
+  if (job.time_left) {
+    const mins = slurmMinutes(job.time_left);
+    const late = mins !== null && mins <= 15;
+    html += "<br>Job ends in <b class=\"num" + (late ? " late" : "") + "\">" + esc(job.time_left) + "</b>" + (late ? " — records are flushed on SIGTERM" : "");
+  }
+  if (s.read_only) html += "<br>Replay session: generation is disabled.";
+  foot.innerHTML = html;
+}
+
+// ---------- conversation ----------
+let refreshChain = Promise.resolve();
+function scheduleRefresh(cid) {
+  refreshChain = refreshChain.then(() => openConversation(cid)).catch(e => console.error(e));
+  return refreshChain;
+}
+
+async function openConversation(id) {
+  let data;
+  try { data = await api.get("/api/conversations/" + encodeURIComponent(id)); }
+  catch (e) { setStatus(e.message, true); return; }
+  const sameConv = S.current && S.current.conversation.conversation_id === id;
+  S.current = data;
+  if (!sameConv) { S.tokens = null; S.pinnedTok = null; }
+  renderConversation();
+  renderTrajectory();
+  fillTokTurns();
+  const last = lastMeasurableTurn();
+  if (last && (!S.tokens || S.tokens.record_id !== last.record_id || !sameConv)) loadTokens(last.record_id);
+  markRailSelection();
+  updateComposer();
+  fillAggFilter();
+}
+
+function markRailSelection() {
+  const cid = S.current ? S.current.conversation.conversation_id : null;
+  $$("#railList .item").forEach(b => b.classList.toggle("sel", b.dataset.cid === cid));
+}
+
+const turnsOf = () => (S.current && S.current.turns) || [];
+function lastMeasurableTurn() {
+  const t = turnsOf().filter(x => (x.n_generated || 0) > 0 && !x.misaligned);
+  return t.length ? t[t.length - 1] : null;
+}
+function readoutOf(turn, emotion, readout) {
+  const r = turn && turn.readouts && turn.readouts[emotion];
+  const v = r ? r[readout] : null;
+  return isNum(v) ? v : null;
+}
+
+function renderConversation() {
+  const stream = $("#stream");
+  stream.innerHTML = "";
+  if (!S.current) { renderEmpty(); return; }
+  const conv = S.current.conversation, turns = turnsOf(), isTask = conv.source === "task";
+  // header
+  $("#convTitle").textContent = isTask ? (conv.task_id || conv.conversation_id) : (conv.title || conv.conversation_id);
+  const cond = (turns.length && turns[turns.length - 1].condition) || {};
+  const bits = [];
+  if (isTask) { bits.push("ImpossibleBench · " + (conv.bench_split || "?") + " split"); bits.push("attempt " + turns.length); }
+  else bits.push("chat · " + turns.length + " turn" + (turns.length === 1 ? "" : "s"));
+  if (cond.temperature !== undefined) bits.push("T=" + cond.temperature);
+  if (cond.max_tokens !== undefined) bits.push("max_tokens " + cond.max_tokens);
+  if (cond.scratchpad) bits.push("scratchpad");
+  if (cond.affect_prompt) bits.push("affect prompt");
+  if (cond.auto_continue) bits.push("auto-continue");
+  $("#convSub").textContent = bits.join(" · ");
+  const st = $("#convState");
+  st.hidden = false;
+  const state = conv.state || "done";
+  const running = ["generating", "testing", "awaiting_user"].indexOf(state) >= 0;
+  st.className = "status " + (running ? "run" : conv.passed === true ? "pass" : conv.passed === false ? "fail" : "");
+  st.textContent = running ? "● " + state.replace("_", " ") : conv.passed === true ? "✓ passed" : conv.passed === false ? "✕ failed" : state;
+
+  // messages
+  const first = turns.length ? turns[0] : null;
+  const msgs0 = (first && first.messages_in) || [];
+  const sys = msgs0.find(m => m.role === "system");
+  if (sys) stream.appendChild(sysMessage(sys.content));
+  if (isTask) {
+    const problem = msgs0.find(m => m.role === "user");
+    if (problem) stream.appendChild(plainMessage("user", "problem statement", problem.content));
+  }
+  turns.forEach((t, i) => {
+    if (isTask) {
+      if (t.user_intervention) stream.appendChild(plainMessage("user", "intervention · before attempt " + (i + 1), t.user_intervention));
+    } else {
+      const um = (t.messages_in || []).filter(m => m.role === "user").slice(-1)[0];
+      if (um) stream.appendChild(plainMessage("user", "turn " + (i + 1), um.content));
+    }
+    stream.appendChild(assistantMessage(t, i));
+    // A passing attempt carries passed=true and an empty feedback (nothing is fed back
+    // when the run ends), so the message hangs off `passed`, not off the text.
+    if (isTask && (t.passed === true || t.passed === false)) stream.appendChild(testMessage(t, i));
+  });
+  if (!turns.length) stream.appendChild(el("div", "empty", "No turns recorded yet."));
+  stream.scrollTop = stream.scrollHeight;
+}
+
+function sysMessage(content) {
+  const m = el("div", "msg sys");
+  const b = el("div", "mb");
+  const d = document.createElement("details");
+  const s = document.createElement("summary");
+  s.className = "fold"; s.textContent = "system prompt · " + String(content || "").length + " chars";
+  d.appendChild(s);
+  const p = el("div", null, content || ""); p.style.whiteSpace = "pre-wrap"; p.style.marginTop = "6px";
+  d.appendChild(p); b.appendChild(d); m.appendChild(b);
+  return m;
+}
+
+function plainMessage(role, label, content) {
+  const m = el("div", "msg " + (role === "user" ? "user" : ""));
+  const h = el("div", "mh");
+  h.innerHTML = "<b>" + esc(role) + "</b><span>" + esc(label) + "</span>";
+  const b = el("div", "mb", content || "");
+  m.appendChild(h); m.appendChild(b);
+  return m;
+}
+
+function testMessage(turn, i) {
+  const m = el("div", "msg test");
+  const h = el("div", "mh");
+  h.innerHTML = "<b>tests · after turn " + (i + 1) + "</b>" +
+    '<span class="r"><span class="badge ' + (turn.passed ? "pass" : "fail") + '">' + (turn.passed ? "passed" : "failed") + "</span></span>";
+  const b = el("div", "mb", turn.feedback || (turn.passed ? "All tests passed. Nothing is fed back: the run ends here." : "(no feedback recorded)"));
+  m.appendChild(h); m.appendChild(b);
+  return m;
+}
+
+function assistantMessage(turn, i) {
+  const m = el("div", "msg"); m.dataset.rid = turn.record_id || "";
+  const h = el("div", "mh");
+  const facts = [];
+  facts.push((turn.n_generated || 0) + " tok");
+  if (turn.n_think) facts.push(turn.n_think + " think");
+  if (turn.timings && isNum(turn.timings.request_s)) facts.push(turn.timings.request_s.toFixed(1) + " s");
+  let right = "";
+  const warns = (turn.warnings || []).slice();
+  if (turn.misaligned) warns.unshift("hook/token misalignment: readouts and strip hidden");
+  if (turn.error) right += '<span class="wchip crit" title="' + esc(turn.error) + '">error</span>';
+  if (warns.length) right += '<span class="wchip" title="' + esc(warns.join(" · ")) + '">⚑ ' + (warns.length === 1 ? "warning" : warns.length + " warnings") + "</span>";
+  READOUTS.filter(r => r !== "answer_start").forEach(r => {
+    const v = readoutOf(turn, S.colourBy, r);
+    right += '<span class="read' + (isNum(v) ? "" : " na") + '"><i style="background:' + cvar(S.colourBy) + '"></i>' +
+      READOUT_LABEL[r] + ' <span class="num">' + fmt(v) + "</span></span>";
+  });
+  h.innerHTML = "<b>assistant · turn " + (i + 1) + "</b><span>" + esc(facts.join(" · ")) +
+    (turn.at_cap ? ' <span class="cap">· at cap</span>' : "") + '</span><span class="r">' + right + "</span>";
+  const b = el("div", "mb");
+  m.appendChild(h); m.appendChild(b);
+  renderTurnBody(b, turn);
+  return m;
+}
+
+function renderTurnBody(host, turn) {
+  host.innerHTML = "";
+  if (turn.error && !(turn.n_generated > 0)) {
+    const w = el("div", "warnbox crit"); w.innerHTML = "<b>Generation failed.</b> " + esc(turn.error);
+    host.appendChild(w); return;
+  }
+  if (turn.misaligned) {
+    const w = el("div", "warnbox crit");
+    w.innerHTML = "<b>Hook/token misalignment.</b> The per-token strip is hidden for this turn: the residuals cannot be lined up with the tokens, so any tint would be wrong.";
+    host.appendChild(w);
+  }
+  if (S.view === "text" || turn.misaligned) {
+    if (turn.reasoning) {
+      const d = document.createElement("details"); d.className = "think"; d.open = false;
+      const s = document.createElement("summary"); s.textContent = "thinking · " + (turn.n_think || 0) + " tok";
+      d.appendChild(s);
+      const p = el("div", null, turn.reasoning); p.style.marginTop = "6px";
+      d.appendChild(p); host.appendChild(d);
+    }
+    const t = el("div", "txt", turn.answer || turn.text || "");
+    host.appendChild(t);
+    return;
+  }
+  const strip = el("div", "tokstrip");
+  strip.dataset.rid = turn.record_id || "";
+  host.appendChild(strip);
+  const legend = el("div", "legend-div");
+  legend.innerHTML = "<span>" + esc(S.colourBy) + " cosine at L" + esc(S.layer) + "</span>" +
+    '<span class="num">−0.08</span><span class="bar"></span><span class="num">+0.08</span>' +
+    "<span>· underlined = readout tokens (start, think→answer, end) · amber band = thinking</span>";
+  host.appendChild(legend);
+  ensureTurnTokens(turn).then(payload => { if (payload && strip.isConnected) renderStrip(strip, payload, turn.record_id); })
+    .catch(e => { strip.innerHTML = '<span style="color:var(--muted)">tokens unavailable: ' + esc(e.message) + "</span>"; });
+}
+
+async function ensureTurnTokens(turn) {
+  if (!turn.record_id) return null;
+  if (turn._tokens && turn._tokens.layer === S.layer) return turn._tokens;
+  const p = await api.get("/api/records/" + encodeURIComponent(turn.record_id) + "/tokens", {layer: S.layer, smooth: 1});
+  turn._tokens = p;
+  return p;
+}
+
+// ---------- token strip ----------
+function markerSet(p) {
+  const n = (p.tokens || []).length;
+  const s = new Set();
+  if (n) { s.add(0); s.add(n - 1); }
+  const mk = p.markers || {};
+  if (isNum(mk.think_end)) s.add(mk.think_end);
+  if (isNum(mk.answer_start)) s.add(mk.answer_start);
+  return s;
+}
+
+function renderStrip(el_, p, rid) {
+  el_.innerHTML = "";
+  const toks = p.tokens || [], kinds = p.token_kind || [], cos = p.cosine || [];
+  const ei = (p.emotions || []).indexOf(S.colourBy);
+  const marks = markerSet(p);
+  const nThink = kinds.filter(k => k === "think").length;
+  let band = null;
+  if (nThink) {
+    band = el("span", "band");
+    const bh = el("span", "bh", "▾ thinking · " + nThink + " tok · measured like every other token");
+    bh.setAttribute("tabindex", "0"); bh.setAttribute("role", "button");
+    const toggle = () => { band.classList.toggle("fold"); bh.textContent = (band.classList.contains("fold") ? "▸" : "▾") + " thinking · " + nThink + " tok · measured like every other token"; };
+    bh.addEventListener("click", toggle);
+    bh.addEventListener("keydown", ev => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); toggle(); } });
+    band.appendChild(bh);
+    el_.appendChild(band);
+  }
+  const val = i => (ei >= 0 && cos[i] && isNum(cos[i][ei])) ? cos[i][ei] : null;
+  toks.forEach((t, i) => {
+    const s = el("span", "t" + (marks.has(i) ? " mark" : ""), t);
+    s.style.background = tint(val(i));
+    s.dataset.i = i;
+    (kinds[i] === "think" && band ? band : el_).appendChild(s);
+  });
+  // delegated handlers: one set per strip, not three per token
+  el_.onmousemove = ev => {
+    const t = ev.target.closest ? ev.target.closest(".t") : null;
+    if (!t || !el_.contains(t)) return;
+    const i = +t.dataset.i;
+    showTip(ev, stripTip(p, i, rid));
+    linkChartHover(rid, i);
+  };
+  el_.onmouseleave = () => { hideTip(); linkChartHover(rid, null); };
+  el_.onclick = ev => {
+    const t = ev.target.closest ? ev.target.closest(".t") : null;
+    if (!t || !el_.contains(t)) return;
+    $$(".tokstrip .t.sel").forEach(x => x.classList.remove("sel"));
+    t.classList.add("sel");
+    pinToken(rid, +t.dataset.i);
+  };
+}
+
+function stripTip(p, i, rid) {
+  const toks = p.tokens || [], kinds = p.token_kind || [];
+  let html = "<b>\"" + esc(toks[i]) + "\"</b> · tok " + i + " · " + esc(kinds[i] || "?") + "<br>";
+  (p.emotions || []).forEach((e, k) => {
+    if (!S.shown.has(e) && e !== S.colourBy) return;
+    const v = p.cosine && p.cosine[i] ? p.cosine[i][k] : null;
+    html += '<div class="row"><span><i style="background:' + cvar(e) + '"></i>' + esc(e) + "</span><span>" + fmt(v) + "</span></div>";
+  });
+  return html;
+}
+
+function linkChartHover(rid, i) {
+  if (!S.tokens || S.tokens.record_id !== rid || !S.tokChart) return;
+  S.tokChart.setHover(i);
+}
+
+function highlightStripToken(rid, i) {
+  $$('.tokstrip[data-rid="' + (rid || "") + '"]').forEach(strip => {
+    $$(".t", strip).forEach(t => t.classList.toggle("sel", i !== null && +t.dataset.i === i));
+  });
+}
+
+// ---------- trajectory ----------
+const aggCache = new Map();
+function invalidateAgg() { aggCache.clear(); }
+async function aggregateData(params) {
+  const key = JSON.stringify(params);
+  if (aggCache.has(key)) return aggCache.get(key);
+  const p = api.get("/api/aggregate", params);
+  aggCache.set(key, p);
+  try { return await p; } catch (e) { aggCache.delete(key); throw e; }
+}
+function aggParams(source, split) {
+  return {source: source, split: split, position: S.readout, stat: S.stat, segment: S.segment,
+          include_cap: S.includeCap, layer: S.layer};
+}
+
+async function renderTrajectory() {
+  renderTiles();
+  $("#trajSub").textContent = (S.stat === "token" ? "single token · " + READOUT_LABEL[S.readout] : "turn mean · " + S.segment) + " · L" + S.layer;
+  trajDraw();
+  renderTrajWarnings();
+  if (!S.current) { S.trajSess = null; return; }
+  const conv = S.current.conversation;
+  try {
+    const data = await aggregateData(aggParams(conv.source || "task", conv.bench_split || null));
+    S.trajSess = data;
+  } catch (e) {
+    S.trajSess = null;
+  }
+  trajDraw();
+}
+
+function renderTiles() {
+  const host = $("#tiles"); host.innerHTML = "";
+  const emos = S.head.length ? S.head : S.emotions.slice(0, 4);
+  host.style.gridTemplateColumns = "repeat(" + Math.max(1, emos.length) + ",minmax(0,1fr))";
+  const turns = turnsOf().filter(t => isNum(t.non_empty_turn_index));
+  emos.forEach(e => {
+    const present = turns.map(t => ({v: readoutOf(t, e, S.readout), i: t.non_empty_turn_index})).filter(x => isNum(x.v));
+    const last = present.length ? present[present.length - 1] : null;
+    const first = present.length ? present[0] : null;
+    const d = (last && first && last.i !== first.i) ? last.v - first.v : null;
+    const tile = el("div", "tile");
+    tile.innerHTML = '<div class="l"><i style="background:' + cvar(e) + '"></i>' + esc(e) + "</div>" +
+      '<div class="v num">' + fmt(last ? last.v : null) + "</div>" +
+      '<div class="d">' + (last ? "t" + last.i + " " + READOUT_LABEL[S.readout] : "no reading") +
+      (d !== null ? ' · <span class="num">' + fmt(d) + "</span> vs t" + first.i : "") + "</div>";
+    host.appendChild(tile);
+  });
+}
+
+function trajDraw() {
+  const host = $("#trajChart"); host.innerHTML = "";
+  const turns = turnsOf().filter(t => isNum(t.non_empty_turn_index));
+  const emos = S.emotions.filter(e => S.shown.has(e));
+  const conv = {};
+  const nMax = turns.reduce((a, t) => Math.max(a, t.non_empty_turn_index + 1), 0);
+  emos.forEach(e => {
+    const arr = new Array(nMax).fill(null);
+    turns.forEach(t => { arr[t.non_empty_turn_index] = readoutOf(t, e, S.readout); });
+    conv[e] = arr;
+  });
+  const sess = {}, sessN = (S.trajSess && S.trajSess.by_turn && S.trajSess.by_turn.n) || [];
+  if (S.trajSess && S.trajSess.by_turn) {
+    const rows = S.trajSess.by_turn.mean || [], ae = S.trajSess.emotions || [];
+    emos.forEach(e => { const k = ae.indexOf(e); sess[e] = k < 0 ? [] : rows.map(r => (r && isNum(r[k])) ? r[k] : null); });
+  }
+  const K = Math.max(nMax, ...emos.map(e => (sess[e] || []).length), 2);
+  const all = [];
+  emos.forEach(e => { all.push.apply(all, conv[e] || []); all.push.apply(all, sess[e] || []); });
+  const sc = scaleY(all, 0.06);
+  const W = 400, H = 200, m = {l: 44, r: 74, t: 10, b: 26};
+  const s = svgEl(W, H);
+  const y = v => m.t + (H - m.t - m.b) * (1 - (v - sc.lo) / (sc.hi - sc.lo));
+  const x = t => m.l + (W - m.l - m.r) * (K > 1 ? t / (K - 1) : 0.5);
+  const g = N("g", {class: "grid"});
+  sc.ticks.forEach(v => {
+    g.appendChild(N("line", {x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: Math.abs(v) < 1e-12 ? "zero" : ""}));
+    const t = N("text", {x: m.l - 6, y: y(v) + 3.5, "text-anchor": "end"}); t.textContent = tickLabel(v, sc.step); g.appendChild(t);
+  });
+  s.appendChild(g);
+  for (let t = 0; t < K; t++) {
+    if (K > 12 && t % Math.ceil(K / 8) !== 0 && t !== K - 1) continue;
+    const tx = N("text", {x: x(t), y: H - 8, "text-anchor": "middle"}); tx.textContent = "t" + t; s.appendChild(tx);
+  }
+  // capped turns flagged on the axis
+  turns.forEach(t => { if (t.at_cap) { const c = N("text", {x: x(t.non_empty_turn_index), y: m.t + 2, "text-anchor": "middle", class: "lbl"}); c.textContent = "⚑ cap"; c.style.fill = "var(--warn-ink)"; s.appendChild(c); } });
+  // session means, dashed behind
+  emos.forEach(e => {
+    const d = pathOf(sess[e] || [], x, y);
+    if (d) s.appendChild(N("path", {d: d, fill: "none", stroke: cvar(e), "stroke-width": 1.25, "stroke-dasharray": "3 3", opacity: 0.6}));
+  });
+  const labels = [];
+  emos.forEach(e => {
+    const vals = conv[e] || [];
+    const d = pathOf(vals, x, y);
+    if (d) s.appendChild(N("path", {d: d, fill: "none", stroke: cvar(e), "stroke-width": isHead(e) ? 2 : 1.5, "stroke-linejoin": "round", "stroke-linecap": "round"}));
+    vals.forEach((v, i) => { if (isNum(v)) s.appendChild(N("circle", {cx: x(i), cy: y(v), r: isHead(e) ? 3.5 : 2.5, fill: cvar(e), stroke: "var(--surface)", "stroke-width": 2})); });
+    const lastIdx = vals.reduce((acc, v, i) => isNum(v) ? i : acc, -1);
+    if (isHead(e) && lastIdx >= 0) labels.push({y: y(vals[lastIdx]) + 3.5, x: x(lastIdx) + 8, e: e});
+  });
+  layoutLabels(labels, 11).forEach(L => { const t = N("text", {x: L.x, y: L.y, class: "lbl"}); t.textContent = L.e; t.style.fill = cvar(L.e); s.appendChild(t); });
+  if (!turns.length) { const t = N("text", {x: W / 2, y: H / 2, "text-anchor": "middle"}); t.textContent = "no measured turns yet"; s.appendChild(t); }
+  // hover
+  const cross = N("line", {class: "cross", y1: m.t, y2: H - m.b, style: "display:none"});
+  s.appendChild(cross);
+  const hit = N("rect", {x: m.l, y: m.t, width: W - m.l - m.r, height: H - m.t - m.b, fill: "transparent"});
+  s.appendChild(hit);
+  hit.addEventListener("mousemove", ev => {
+    const t = hoverIndex(ev, s, W, m, K);
+    cross.setAttribute("x1", x(t)); cross.setAttribute("x2", x(t)); cross.style.display = "";
+    let html = "<b>turn t" + t + "</b>" + (isNum(sessN[t]) ? " · session n=" + sessN[t] : "") + "<br>";
+    emos.forEach(e => {
+      html += '<div class="row"><span><i style="background:' + cvar(e) + '"></i>' + esc(e) + "</span><span>" +
+        fmt((conv[e] || [])[t]) + " · " + fmt((sess[e] || [])[t]) + "</span></div>";
+    });
+    showTip(ev, html);
+  });
+  hit.addEventListener("mouseleave", () => { cross.style.display = "none"; hideTip(); });
+  host.appendChild(s);
+}
+
+function renderTrajWarnings() {
+  const host = $("#trajWarn"); host.innerHTML = "";
+  if (!S.current) return;
+  const turns = turnsOf();
+  const capped = turns.map((t, i) => t.at_cap ? i + 1 : null).filter(v => v !== null);
+  const misaligned = turns.map((t, i) => t.misaligned ? i + 1 : null).filter(v => v !== null);
+  const warned = turns.map((t, i) => (t.warnings || []).length ? i + 1 : null).filter(v => v !== null);
+  const skipped = turns.filter(t => (t.n_generated || 0) > 0 && !isNum(readoutOf(t, S.colourBy, S.readout)) && !t.misaligned).length;
+  if (capped.length) {
+    const w = el("div", "warnbox");
+    w.innerHTML = "<b>Turn" + (capped.length > 1 ? "s " : " ") + capped.join(", ") + " hit max_tokens.</b> Their end-readout is the cap, not the model. " +
+      capped.length + " of " + turns.length + " turns; the pilot's threshold for distrusting a trajectory is most turns.";
+    host.appendChild(w);
+  }
+  if (misaligned.length) {
+    const w = el("div", "warnbox crit"); w.style.marginTop = "8px";
+    w.innerHTML = "<b>Turn" + (misaligned.length > 1 ? "s " : " ") + misaligned.join(", ") + " misaligned.</b> The hook rows do not line up with the tokens; those turns are unreadable and carry no readouts.";
+    host.appendChild(w);
+  }
+  if (warned.length) {
+    const w = el("div", "warnbox"); w.style.marginTop = "8px";
+    const msgs = new Set(); turns.forEach(t => (t.warnings || []).forEach(x => msgs.add(x)));
+    w.innerHTML = "<b>Warnings on turn" + (warned.length > 1 ? "s " : " ") + warned.join(", ") + ".</b> " + esc(Array.from(msgs).join(" · "));
+    host.appendChild(w);
+  }
+  if (skipped) {
+    const w = el("div", "warnbox"); w.style.marginTop = "8px";
+    w.innerHTML = "<b>" + skipped + " turn" + (skipped === 1 ? "" : "s") + " skipped at this readout.</b> Non-finite residuals, or no reasoning span for this position; they are counted, never imputed.";
+    host.appendChild(w);
+  }
+}
+
+// ---------- tokens tab ----------
+function fillTokTurns() {
+  const sel = $("#tokTurn"); sel.innerHTML = "";
+  turnsOf().forEach((t, i) => {
+    if (!((t.n_generated || 0) > 0)) return;
+    const o = el("option", null, "turn " + (i + 1) + " · " + t.n_generated + " tok" + (t.at_cap ? " · at cap" : "") + (t.misaligned ? " · misaligned" : ""));
+    o.value = t.record_id;
+    if (S.tokens && S.tokens.record_id === t.record_id) o.selected = true;
+    sel.appendChild(o);
+  });
+  if (!sel.options.length) { const o = el("option", null, "no measured turns"); o.value = ""; sel.appendChild(o); }
+}
+
+async function loadTokens(rid) {
+  if (!rid) { S.tokens = null; tokChartDraw(); return; }
+  try {
+    const p = await api.get("/api/records/" + encodeURIComponent(rid) + "/tokens", {layer: S.layer, smooth: S.smooth});
+    p.record_id = rid;
+    S.tokens = p;
+    if (S.pinnedTok && S.pinnedTok.rid !== rid) S.pinnedTok = null;
+  } catch (e) {
+    S.tokens = null;
+    $("#tokChart").innerHTML = '<div class="warnbox crit">' + esc(e.message) + "</div>";
+    return;
+  }
+  fillTokTurns();
+  tokChartDraw();
+  if (S.pinnedTok) renderTokInfo(S.pinnedTok.i);
+}
+
+function segmentOk(kind) { return S.segment === "all" || kind === S.segment; }
+
+function tokChartDraw() {
+  const host = $("#tokChart"); host.innerHTML = "";
+  S.tokChart = null;
+  const p = S.tokens;
+  if (!p || !(p.tokens || []).length) {
+    host.innerHTML = '<p class="hint">No token-level data for this turn. Pick a turn above, or generate one.</p>';
+    return;
+  }
+  const kinds = p.token_kind || [], n = p.tokens.length, ae = p.emotions || [];
+  const series = {};
+  const wanted = ae.filter(e => S.shown.has(e) || e === S.colourBy);
+  wanted.forEach(e => {
+    const k = ae.indexOf(e);
+    series[e] = (p.cosine || []).map((row, i) => (row && isNum(row[k]) && segmentOk(kinds[i])) ? row[k] : null);
+  });
+  const all = [];
+  wanted.forEach(e => all.push.apply(all, series[e]));
+  const sc = scaleY(all, 0.06);
+  const W = 400, H = 180, m = {l: 44, r: 12, t: 10, b: 24};
+  const s = svgEl(W, H);
+  const y = v => m.t + (H - m.t - m.b) * (1 - (v - sc.lo) / (sc.hi - sc.lo));
+  const x = i => m.l + (W - m.l - m.r) * (n > 1 ? i / (n - 1) : 0.5);
+  const g = N("g", {class: "grid"});
+  sc.ticks.forEach(v => {
+    g.appendChild(N("line", {x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: Math.abs(v) < 1e-12 ? "zero" : ""}));
+    const t = N("text", {x: m.l - 6, y: y(v) + 3.5, "text-anchor": "end"}); t.textContent = tickLabel(v, sc.step); g.appendChild(t);
+  });
+  s.appendChild(g);
+  const step = Math.max(1, Math.round(n / 4));
+  for (let i = 0; i < n; i += step) { const t = N("text", {x: x(i), y: H - 8, "text-anchor": "middle"}); t.textContent = i; s.appendChild(t); }
+  const xl = N("text", {x: W - m.r, y: H - 8, "text-anchor": "end"}); xl.textContent = "generated token →"; s.appendChild(xl);
+  // thinking span
+  const mk = p.markers || {};
+  const nThink = kinds.filter(k => k === "think").length;
+  if (nThink) {
+    s.appendChild(N("rect", {x: x(0), y: m.t, width: Math.max(1, x(nThink - 1) - x(0)), height: H - m.t - m.b, fill: "var(--think)", opacity: 0.9}));
+    const bt = N("text", {x: x(0) + 4, y: m.t + 11, class: "lbl"}); bt.textContent = "thinking"; bt.style.fill = "var(--think-ink)"; s.appendChild(bt);
+    if (isNum(mk.answer_start)) {
+      s.appendChild(N("line", {x1: x(mk.answer_start), x2: x(mk.answer_start), y1: m.t, y2: H - m.b, stroke: "var(--think-ink)", "stroke-width": 1, "stroke-dasharray": "4 3"}));
+      const at = N("text", {x: x(mk.answer_start) + 4, y: m.t + 11, class: "lbl"}); at.textContent = "answer →"; at.style.fill = "var(--think-ink)"; s.appendChild(at);
+    }
+  }
+  // the colour-by emotion is the filled, emphasised series
+  const e0 = S.colourBy;
+  const a = series[e0] || [];
+  if (a.some(isNum)) {
+    const d = pathOf(a, x, y);
+    const zeroY = y(Math.min(Math.max(0, sc.lo), sc.hi));
+    const firstIdx = a.findIndex(isNum), lastIdx = a.reduce((acc, v, i) => isNum(v) ? i : acc, -1);
+    s.appendChild(N("path", {d: d + "L" + x(lastIdx) + "," + zeroY + "L" + x(firstIdx) + "," + zeroY + "Z", fill: cvar(e0), opacity: 0.12}));
+  }
+  wanted.forEach(e => {
+    if (e === e0) return;
+    const d = pathOf(series[e], x, y);
+    if (d) s.appendChild(N("path", {d: d, fill: "none", stroke: cvar(e), "stroke-width": 1.25, opacity: 0.7}));
+  });
+  const d0 = pathOf(a, x, y);
+  if (d0) s.appendChild(N("path", {d: d0, fill: "none", stroke: cvar(e0), "stroke-width": 2, "stroke-linejoin": "round"}));
+  // readout markers: 0, think_end, answer_start, last
+  const marks = Array.from(markerSet(p)).sort((u, v) => u - v);
+  marks.forEach(i => { if (isNum(a[i])) s.appendChild(N("circle", {cx: x(i), cy: y(a[i]), r: 4, fill: cvar(e0), stroke: "var(--surface)", "stroke-width": 2})); });
+  if (isNum(a[0])) { const l0 = N("text", {x: x(0) + 6, y: y(a[0]) - 6, class: "lbl"}); l0.textContent = "start readout"; s.appendChild(l0); }
+  const cross = N("line", {class: "cross", y1: m.t, y2: H - m.b, style: "display:none"});
+  s.appendChild(cross);
+  if (S.pinnedTok && S.pinnedTok.rid === p.record_id) {
+    s.appendChild(N("line", {x1: x(S.pinnedTok.i), x2: x(S.pinnedTok.i), y1: m.t, y2: H - m.b, stroke: "var(--ink)", "stroke-width": 1}));
+  }
+  const hit = N("rect", {x: m.l, y: m.t, width: W - m.l - m.r, height: H - m.t - m.b, fill: "transparent"});
+  s.appendChild(hit);
+  const idxAt = ev => hoverIndex(ev, s, W, m, n);
+  hit.addEventListener("mousemove", ev => {
+    const i = idxAt(ev);
+    setHover(i);
+    let html = '<b>"' + esc(p.tokens[i]) + '"</b> · tok ' + i + " · " + esc(kinds[i] || "?") + "<br>";
+    wanted.forEach(e => { html += '<div class="row"><span><i style="background:' + cvar(e) + '"></i>' + esc(e) + "</span><span>" + fmt(series[e][i]) + "</span></div>"; });
+    showTip(ev, html);
+  });
+  hit.addEventListener("mouseleave", () => { setHover(null); hideTip(); });
+  hit.addEventListener("click", ev => pinToken(p.record_id, idxAt(ev)));
+  function setHover(i) {
+    if (i === null) { cross.style.display = "none"; highlightStripToken(p.record_id, null); return; }
+    cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i)); cross.style.display = "";
+    highlightStripToken(p.record_id, i);
+  }
+  S.tokChart = {setHover: setHover};
+  host.appendChild(s);
+}
+
+function pinToken(rid, i) {
+  S.pinnedTok = {rid: rid, i: i};
+  if (!S.tokens || S.tokens.record_id !== rid) { loadTokens(rid).then(() => renderTokInfo(i)); return; }
+  renderTokInfo(i);
+  tokChartDraw();
+  showTab("tok");
+}
+
+function renderTokInfo(i) {
+  const p = S.tokens, host = $("#tokInfo");
+  if (!p || !p.tokens || i === undefined || i === null || !p.tokens.length) { host.innerHTML = "<dt>token</dt><dd>—</dd>"; return; }
+  i = Math.max(0, Math.min(p.tokens.length - 1, i));
+  const kinds = p.token_kind || [], norms = p.norm || [];
+  let html = '<dt>token</dt><dd>"' + esc(p.tokens[i]) + '"</dd>' +
+    "<dt>index</dt><dd>" + i + " / " + p.tokens.length + " (" + (i ? "decode" : "prefill→first") + ")</dd>" +
+    "<dt>segment</dt><dd>" + esc(kinds[i] || "?") + "</dd>" +
+    "<dt>layer</dt><dd>L" + esc(p.layer) + (p.smooth > 1 ? " · " + p.smooth + "-tok mean" : " · raw") + "</dd>" +
+    "<dt>norm</dt><dd>" + (isNum(norms[i]) ? norms[i].toFixed(1) : "—") + "</dd>";
+  (p.emotions || []).forEach((e, k) => {
+    if (!S.shown.has(e) && e !== S.colourBy) return;
+    const v = p.cosine && p.cosine[i] ? p.cosine[i][k] : null;
+    html += "<dt>" + esc(e) + '</dt><dd class="num">' + fmt(v) + "</dd>";
+  });
+  host.innerHTML = html;
+}
+
+// ---------- aggregate tab ----------
+function fillAggFilter() {
+  const sel = $("#aggFilter");
+  const opts = [];
+  const splits = Array.from(new Set(S.conversations.filter(c => c.source === "task").map(c => c.bench_split).filter(Boolean)));
+  splits.forEach(sp => opts.push({label: "task · " + sp, source: "task", split: sp}));
+  if (splits.length > 1) opts.push({label: "task · all splits", source: "task", split: null});
+  if (S.conversations.some(c => c.source !== "task")) opts.push({label: "chats", source: "chat", split: null});
+  if (!opts.length) opts.push({label: "task · conflicting", source: "task", split: "conflicting"});
+  // keep the current selection if it still exists, else follow the open conversation
+  let want = opts.findIndex(o => o.source === S.aggFilter.source && o.split === S.aggFilter.split);
+  if (want < 0 && S.current) {
+    const c = S.current.conversation;
+    want = opts.findIndex(o => o.source === (c.source || "task") && o.split === (c.bench_split || null));
+  }
+  if (want < 0) want = 0;
+  S.aggFilter = {source: opts[want].source, split: opts[want].split};
+  sel.innerHTML = "";
+  opts.forEach((o, i) => { const n = el("option", null, o.label); n.value = i; if (i === want) n.selected = true; sel.appendChild(n); });
+  sel.onchange = () => { const o = opts[+sel.value]; S.aggFilter = {source: o.source, split: o.split}; renderAggregate(); };
+}
+
+async function renderAggregate() {
+  const msg = $("#aggMsg"), table = $("#aggTable"), params = aggParams(S.aggFilter.source, S.aggFilter.split);
+  $("#aggParams").textContent = "readout " + READOUT_LABEL[S.readout] + " · stat " + S.stat + " · segment " + S.segment +
+    " · layer L" + S.layer + " · capped turns " + (S.includeCap ? "included" : "excluded");
+  let data;
+  try { data = await aggregateData(params); }
+  catch (e) {
+    msg.innerHTML = '<div class="warnbox' + (e.status === 400 ? "" : " crit") + '"><b>No aggregate.</b> ' + esc(e.message) + "</div>";
+    table.innerHTML = ""; $("#aggChart").innerHTML = "";
+    return;
+  }
+  msg.innerHTML = "";
+  const emos = data.emotions || [], bt = data.by_turn || {}, del = data.delta || {};
+  const rows0 = bt.mean || [], K = rows0.length;
+  const skippedTotal = (bt.skipped || []).reduce((a, b) => a + (b || 0), 0);
+  const rows = emos.map((e, k) => ({
+    e: e,
+    t0: K ? (isNum(rows0[0][k]) ? rows0[0][k] : null) : null,
+    tl: K ? (isNum(rows0[K - 1][k]) ? rows0[K - 1][k] : null) : null,
+    d: isNum((del.mean || [])[k]) ? del.mean[k] : null,
+    sem: isNum((del.sem || [])[k]) ? del.sem[k] : null,
+    p: isNum((del.p || [])[k]) ? del.p[k] : null,
+  })).sort((a, b) => (b.d === null ? -Infinity : b.d) - (a.d === null ? -Infinity : a.d));
+  const mx = Math.max(0.005, ...rows.map(r => Math.abs(r.d || 0)));
+  let html = "<tr><th>direction</th><th style=\"text-align:right\">t0</th><th style=\"text-align:right\">t" + (K ? K - 1 : 0) +
+    "</th><th style=\"text-align:right\">Δ</th><th>Δ bar</th><th style=\"text-align:right\">sem</th><th style=\"text-align:right\">p</th><th style=\"text-align:right\">n</th><th style=\"text-align:right\">skip</th></tr>";
+  rows.forEach(r => {
+    const w = r.d === null ? 0 : Math.abs(r.d) / mx * 56;
+    const bar = r.d === null ? "" : (r.d >= 0
+      ? '<span style="display:inline-block;width:56px"></span><span class="dbar" style="width:' + w.toFixed(1) + "px;background:" + cvar(r.e) + '"></span>'
+      : '<span style="display:inline-block;width:' + (56 - w).toFixed(1) + 'px"></span><span class="dbar" style="width:' + w.toFixed(1) + "px;background:" + cvar(r.e) + '"></span>');
+    html += '<tr class="' + (isHead(r.e) ? "" : "dim") + '"><td><span class="sw" style="background:' + cvar(r.e) + '"></span>' + esc(r.e) + "</td>" +
+      '<td class="n">' + fmt(r.t0) + '</td><td class="n">' + fmt(r.tl) + '</td><td class="n"><b>' + fmt(r.d) + "</b></td><td>" + bar + "</td>" +
+      '<td class="n">' + (isNum(r.sem) ? r.sem.toFixed(4) : "—") + '</td><td class="n">' + (isNum(r.p) ? r.p.toFixed(3) : "—") + "</td>" +
+      '<td class="n">' + (del.n || 0) + '</td><td class="n">' + skippedTotal + "</td></tr>";
+  });
+  table.innerHTML = html;
+  $("#aggChartSub").textContent = data.n_conversations + " conversation" + (data.n_conversations === 1 ? "" : "s") + " · " +
+    data.n_records + " records · " + (data.excluded_cap ? data.excluded_cap + " capped turns excluded · " : "") + "band = ±1 SEM";
+  aggDraw(data);
+}
+
+function aggDraw(data) {
+  const host = $("#aggChart"); host.innerHTML = "";
+  const bt = data.by_turn || {}, ae = data.emotions || [], rows = bt.mean || [], sems = bt.sem || [];
+  const K = rows.length;
+  const emos = S.head.filter(e => ae.indexOf(e) >= 0 && S.shown.has(e));
+  if (!K || !emos.length) { host.innerHTML = '<p class="hint">No by-turn series for this filter.</p>'; return; }
+  const val = (k, e) => { const i = ae.indexOf(e); const r = rows[k]; return r && isNum(r[i]) ? r[i] : null; };
+  const semv = (k, e) => { const i = ae.indexOf(e); const r = sems[k]; return r && isNum(r[i]) ? r[i] : 0; };
+  const all = [];
+  emos.forEach(e => { for (let k = 0; k < K; k++) { const v = val(k, e); if (isNum(v)) { all.push(v + semv(k, e)); all.push(v - semv(k, e)); } } });
+  const sc = scaleY(all, 0.06);
+  const W = 400, H = 180, m = {l: 44, r: 74, t: 10, b: 26};
+  const s = svgEl(W, H);
+  const y = v => m.t + (H - m.t - m.b) * (1 - (v - sc.lo) / (sc.hi - sc.lo));
+  const x = t => m.l + (W - m.l - m.r) * (K > 1 ? t / (K - 1) : 0.5);
+  const g = N("g", {class: "grid"});
+  sc.ticks.forEach(v => {
+    g.appendChild(N("line", {x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: Math.abs(v) < 1e-12 ? "zero" : ""}));
+    const t = N("text", {x: m.l - 6, y: y(v) + 3.5, "text-anchor": "end"}); t.textContent = tickLabel(v, sc.step); g.appendChild(t);
+  });
+  s.appendChild(g);
+  for (let t = 0; t < K; t++) {
+    if (K > 12 && t % Math.ceil(K / 8) !== 0 && t !== K - 1) continue;
+    const tx = N("text", {x: x(t), y: H - 8, "text-anchor": "middle"}); tx.textContent = "t" + t; s.appendChild(tx);
+  }
+  const labels = [];
+  emos.forEach(e => {
+    const vals = []; for (let k = 0; k < K; k++) vals.push(val(k, e));
+    // SEM band over the contiguous stretch that has values
+    let up = "", dn = "", pen = false;
+    for (let k = 0; k < K; k++) { const v = vals[k]; if (!isNum(v)) { pen = false; continue; } up += (pen ? "L" : "M") + x(k) + "," + y(v + semv(k, e)); pen = true; }
+    for (let k = K - 1; k >= 0; k--) { const v = vals[k]; if (!isNum(v)) continue; dn += "L" + x(k) + "," + y(v - semv(k, e)); }
+    if (up && dn) s.appendChild(N("path", {d: up + dn + "Z", fill: cvar(e), opacity: 0.12}));
+    const d = pathOf(vals, x, y);
+    if (d) s.appendChild(N("path", {d: d, fill: "none", stroke: cvar(e), "stroke-width": 2}));
+    const lastIdx = vals.reduce((acc, v, i) => isNum(v) ? i : acc, -1);
+    if (lastIdx >= 0) labels.push({y: y(vals[lastIdx]) + 3.5, x: x(lastIdx) + 8, e: e});
+  });
+  layoutLabels(labels, 11).forEach(L => { const t = N("text", {x: L.x, y: L.y, class: "lbl"}); t.textContent = L.e; t.style.fill = cvar(L.e); s.appendChild(t); });
+  const nrow = bt.n || [], srow = bt.skipped || [];
+  const cross = N("line", {class: "cross", y1: m.t, y2: H - m.b, style: "display:none"});
+  s.appendChild(cross);
+  const hit = N("rect", {x: m.l, y: m.t, width: W - m.l - m.r, height: H - m.t - m.b, fill: "transparent"});
+  s.appendChild(hit);
+  hit.addEventListener("mousemove", ev => {
+    const t = hoverIndex(ev, s, W, m, K);
+    cross.setAttribute("x1", x(t)); cross.setAttribute("x2", x(t)); cross.style.display = "";
+    let html = "<b>turn t" + t + "</b> · n=" + (nrow[t] || 0) + (srow[t] ? " · " + srow[t] + " skipped" : "") + "<br>";
+    emos.forEach(e => { html += '<div class="row"><span><i style="background:' + cvar(e) + '"></i>' + esc(e) + "</span><span>" + fmt(val(t, e)) + " ± " + (semv(t, e) ? semv(t, e).toFixed(4) : "—") + "</span></div>"; });
+    showTip(ev, html);
+  });
+  hit.addEventListener("mouseleave", () => { cross.style.display = "none"; hideTip(); });
+  host.appendChild(s);
+}
+
+// ---------- settings tab ----------
+function renderSettings() {
+  if (!S.session) return;
+  const s = S.session, meta = s.session || {}, job = s.job || {}, d = s.defaults || {}, h = S.health || {};
+  const dl = (host, pairs) => { host.innerHTML = pairs.map(p => "<dt>" + esc(p[0]) + "</dt><dd>" + esc(p[1]) + "</dd>").join(""); };
+  dl($("#setServer"), [
+    ["model", meta.model || "—"],
+    ["health", (h.ok ? "ok" : "unreachable") + (h.last_ok_at ? " · last ok " + h.last_ok_at : "") + (h.last_error ? " · " + h.last_error : "")],
+    ["job", job.id ? job.id + (job.node ? " on " + job.node : "") + (job.time_left ? " · " + job.time_left + " left" : "") : "not a slurm job"],
+    ["tunnel", job.tunnel_cmd || "—"],
+    ["mode", s.read_only ? "replay (read-only)" : "live"],
+  ]);
+  dl($("#setMeasure"), [
+    ["vectors", meta.vectors_dir || "—"],
+    ["probe layer", "L" + s.probe_layer],
+    ["capture layers", (s.capture_layers || []).map(l => "L" + l).join(", ")],
+    ["emotion order", (s.emotions || []).join(", ")],
+    ["readout", "single token · " + READOUT_LABEL[S.readout] + " · segment " + S.segment + " · stat " + S.stat],
+    ["cosine scale", "±0.08 fixed (strip tint)"],
+  ]);
+  dl($("#setSession"), [
+    ["records", s.records_dir || "—"],
+    ["arrays", "proj/<record_id>.npz"],
+    ["defaults", "max_tokens " + d.max_tokens + " · max_attempts " + d.max_attempts + " · temperature " + d.temperature],
+    ["replay", "python -m healthy_rl.dashboard --replay " + (s.records_dir || "<dir>")],
+  ]);
+}
+
+// ---------- composer: chat, task ----------
+function convState() { return S.current ? (S.current.conversation.state || "done") : null; }
+function isChatConv() { return !!S.current && S.current.conversation.source !== "task"; }
+
+function updateComposer() {
+  const ro = !!(S.session && S.session.read_only);
+  const blocked = ro || !S.healthOk || S.busy;
+  const st = convState();
+  const running = ["generating", "testing"].indexOf(st) >= 0;
+  const awaiting = st === "awaiting_user";
+  const isTask = !!S.current && S.current.conversation.source === "task";
+  $("#sendBtn").disabled = blocked || running || awaiting;
+  $("#contBtn").disabled = blocked || !awaiting;
+  $("#contBtn").hidden = !isTask;
+  $("#stopBtn").disabled = ro || !(running || awaiting);
+  $("#stopBtn").hidden = !isTask;
+  $("#composerText").disabled = blocked && !awaiting;
+  $("#newChatBtn").disabled = ro;
+  $("#newTaskBtn").disabled = ro || !S.healthOk;
+  if (ro) setStatus("Replay session: read-only, no generation.");
+  else if (!S.healthOk) setStatus("Model unreachable — generation disabled." + (S.health && S.health.last_error ? " " + S.health.last_error : ""), true);
+}
+
+function afterTurn(cid) {
+  invalidateAgg();
+  scheduleRefresh(cid);
+  refreshChain = refreshChain.then(() => refreshRail()).catch(e => console.error(e));
+  if (S.tab === "agg") refreshChain = refreshChain.then(() => renderAggregate()).catch(e => console.error(e));
+  return refreshChain;   // callers await the settled transcript, not just the stream's end
+}
+
+async function sendChat() {
+  const ta = $("#composerText"), text = ta.value.trim();
+  if (!text) { setStatus("Type a message first."); return; }
+  const chat = isChatConv() && S.current;
+  const cid = chat ? S.current.conversation.conversation_id : null;
+  const path = cid ? "/api/chat/" + encodeURIComponent(cid) + "/send" : "/api/chat/new/send";
+  const body = {text: text, max_tokens: +$("#cMaxTok").value, temperature: +$("#cTemp").value};
+  if (!cid) body.title = text.slice(0, 40);
+  S.busy = true; updateComposer(); ta.value = "";
+  let target = cid;
+  startTicker("generating");
+  try {
+    await api.stream(path, body, (name, d) => {
+      if (name === "queued") target = d.conversation_id;
+      else if (name === "generating") { /* the local ticker shows elapsed seconds */ }
+      else if (name === "error") { stopTicker(); setStatus("error: " + d.message, true); }
+      else if (name === "turn") { stopTicker(); target = d.record.conversation_id; setStatus(""); }
+    });
+  } catch (e) {
+    stopTicker(); setStatus(e.message, true); ta.value = text;
+  } finally {
+    stopTicker(); S.busy = false; updateComposer();
+  }
+  if (target) afterTurn(target);
+  else await refreshRail();
+}
+
+function onTaskEvent(name, d) {
+  if (name === "queued") { S.taskCid = d.conversation_id; refreshRail(); }
+  else if (name === "generating") startTicker("generating · attempt " + d.attempt);
+  else if (name === "testing") { stopTicker(); setStatus("running tests · attempt " + d.attempt + "…"); }
+  else if (name === "turn") { stopTicker(); if (S.taskCid) scheduleRefresh(S.taskCid); }
+  else if (name === "tests") setStatus("attempt " + d.attempt + (d.passed ? " passed" : " failed") + (d.timed_out ? " (sandbox timed out)" : "") + (d.error ? " — " + d.error : ""), !!d.error);
+  else if (name === "awaiting_user") setStatus("awaiting you after attempt " + d.attempt + " — send an intervention, or run the tests back unchanged.");
+  else if (name === "error") { stopTicker(); setStatus("error: " + d.message, true); }
+  else if (name === "done") { stopTicker(); setStatus("run " + d.reason + " after " + d.attempts + " attempt" + (d.attempts === 1 ? "" : "s") + (d.passed ? " · passed" : "")); }
+}
+
+async function runTaskStream(fn) {
+  S.busy = true; updateComposer();
+  try { await fn(); }
+  catch (e) { stopTicker(); setStatus(e.message, true); }
+  finally { stopTicker(); S.busy = false; if (S.taskCid) await afterTurn(S.taskCid); else await refreshRail(); updateComposer(); }
+}
+
+async function startTask(cfg) {
+  S.taskCid = null;
+  await runTaskStream(() => api.stream("/api/task/start", cfg, onTaskEvent));
+}
+
+async function continueTask(intervention) {
+  const cid = S.current ? S.current.conversation.conversation_id : null;
+  if (!cid) return;
+  S.taskCid = cid;
+  $("#composerText").value = "";
+  await runTaskStream(() => api.stream("/api/task/" + encodeURIComponent(cid) + "/continue", {intervention: intervention || null}, onTaskEvent));
+}
+
+async function stopTask() {
+  const cid = S.current ? S.current.conversation.conversation_id : null;
+  if (!cid) return;
+  try {
+    const r = await api.post("/api/task/" + encodeURIComponent(cid) + "/stop", {});
+    setStatus("stop requested · run is " + r.state);
+  } catch (e) { setStatus(e.message, true); return; }
+  invalidateAgg();
+  await refreshRail();
+  await openConversation(cid);
+}
+
+// ---------- task dialog ----------
+async function openTaskDialog() {
+  const d = (S.session && S.session.defaults) || {};
+  $("#dlgAttempts").value = d.max_attempts || 6;
+  $("#dlgMaxTok").value = d.max_tokens || 2048;
+  $("#dlgTemp").value = d.temperature === undefined ? 0 : d.temperature;
+  $("#dlgErr").textContent = "";
+  $("#taskScrim").classList.add("on");
+  await loadProblems();
+  $("#dlgSplit").focus();
+}
+function closeTaskDialog() { $("#taskScrim").classList.remove("on"); }
+
+async function loadProblems() {
+  const sel = $("#dlgProblem");
+  sel.innerHTML = "<option>loading…</option>";
+  try {
+    const data = await api.get("/api/problems", {split: $("#dlgSplit").value, affect: $("#dlgAffect").checked});
+    sel.innerHTML = "";
+    (data.problems || []).forEach(p => {
+      const o = el("option", null, p.task_id + (p.entry_point ? " · " + p.entry_point + "()" : "") + " · " + p.n_chars + " chars");
+      o.value = p.task_id; sel.appendChild(o);
+    });
+    if (!sel.options.length) sel.innerHTML = "<option value=\"\">no problems in this split</option>";
+    $("#dlgErr").textContent = "";
+  } catch (e) {
+    sel.innerHTML = "<option value=\"\">—</option>";
+    $("#dlgErr").textContent = e.message;
+  }
+}
+
+// ---------- controls ----------
+function segWire(id, attr, fn) {
+  $$("#" + id + " button").forEach(b => b.addEventListener("click", () => {
+    $$("#" + id + " button").forEach(x => x.classList.remove("on"));
+    b.classList.add("on");
+    fn(b.dataset[attr], b);
+  }));
+}
+
+function showTab(name) {
+  S.tab = name;
+  $$("#tabs button").forEach(b => b.classList.toggle("on", b.dataset.t === name));
+  $$(".pane").forEach(p => p.classList.toggle("on", p.dataset.p === name));
+  if (name === "tok") tokChartDraw();
+  if (name === "agg") renderAggregate();
+  if (name === "traj") renderTrajectory();
+  if (name === "set") renderSettings();
+}
+
+function renderChips() {
+  [["emoChips", true], ["tokChips", true]].forEach(([id]) => {
+    const c = $("#" + id); c.innerHTML = "";
+    S.emotions.forEach(e => {
+      const b = el("button", "echip " + (S.shown.has(e) ? "on" : "off"));
+      b.innerHTML = '<i style="background:' + cvar(e) + '"></i>' + esc(e);
+      b.setAttribute("aria-pressed", S.shown.has(e) ? "true" : "false");
+      b.addEventListener("click", () => {
+        if (S.shown.has(e)) S.shown.delete(e); else S.shown.add(e);
+        renderChips(); trajDraw(); tokChartDraw();
+        if (S.pinnedTok) renderTokInfo(S.pinnedTok.i);
+      });
+      c.appendChild(b);
+    });
+  });
+}
+
+function setLayer(l) {
+  S.layer = l;
+  $$("#layerSeg button").forEach(b => b.classList.toggle("on", +b.dataset.l === l));
+  invalidateAgg();
+  turnsOf().forEach(t => { delete t._tokens; });
+  renderConversation();
+  renderTrajectory();
+  if (S.tokens) loadTokens(S.tokens.record_id);
+  if (S.tab === "agg") renderAggregate();
+  renderSettings();
+}
+
+function redrawEverything() {
+  refreshTint();
+  renderChips();
+  renderConversation();
+  renderTrajectory();
+  tokChartDraw();
+  if (S.tab === "agg") renderAggregate();
+}
+
+function wireControls() {
+  segWire("viewSeg", "v", v => { S.view = v; renderConversation(); });
+  segWire("readoutSeg", "r", r => {
+    S.readout = r; invalidateAgg(); renderConversation(); renderTrajectory(); renderSettings();
+    if (S.tab === "agg") renderAggregate();
+  });
+  segWire("segSeg", "s", s => {
+    S.segment = s; invalidateAgg(); tokChartDraw(); renderTrajectory(); renderSettings();
+    if (S.tab === "agg") renderAggregate();
+  });
+  segWire("smoothSeg", "k", k => { S.smooth = +k; if (S.tokens) loadTokens(S.tokens.record_id); });
+  segWire("statSeg", "s", s => { S.stat = s; invalidateAgg(); renderTrajectory(); renderAggregate(); renderSettings(); });
+  segWire("capSeg", "c", c => { S.includeCap = c === "1"; invalidateAgg(); renderTrajectory(); renderAggregate(); });
+  $$("#tabs button").forEach(b => b.addEventListener("click", () => showTab(b.dataset.t)));
+  $("#colourBy").addEventListener("change", ev => {
+    S.colourBy = ev.target.value;
+    renderConversation(); renderTiles(); trajDraw(); tokChartDraw();
+    if (S.pinnedTok) renderTokInfo(S.pinnedTok.i);
+  });
+  $("#tokTurn").addEventListener("change", ev => { if (ev.target.value) { S.pinnedTok = null; loadTokens(ev.target.value); } });
+  $("#newChatBtn").addEventListener("click", () => {
+    S.current = null; S.tokens = null; S.pinnedTok = null;
+    $("#convTitle").textContent = "New chat";
+    $("#convSub").textContent = "type a message below; the first 40 characters become the title";
+    $("#convState").hidden = true;
+    renderEmpty(); fillTokTurns(); renderTiles(); trajDraw(); tokChartDraw(); markRailSelection(); updateComposer();
+    $("#composerText").focus();
+  });
+  $("#newTaskBtn").addEventListener("click", openTaskDialog);
+  $("#dlgCancel").addEventListener("click", closeTaskDialog);
+  $("#dlgSplit").addEventListener("change", loadProblems);
+  $("#dlgAffect").addEventListener("change", loadProblems);
+  $("#dlgStart").addEventListener("click", async () => {
+    const task = $("#dlgProblem").value;
+    if (!task) { $("#dlgErr").textContent = "pick a problem first"; return; }
+    const cfg = {
+      split: $("#dlgSplit").value, task_id: task,
+      attempts: +$("#dlgAttempts").value, max_tokens: +$("#dlgMaxTok").value, temperature: +$("#dlgTemp").value,
+      scratchpad: $("#dlgScratch").checked, affect_prompt: $("#dlgAffect").checked, auto_continue: $("#dlgAuto").checked,
+    };
+    closeTaskDialog();
+    await startTask(cfg);
+  });
+  $("#taskScrim").addEventListener("click", ev => { if (ev.target === $("#taskScrim")) closeTaskDialog(); });
+  $("#sendBtn").addEventListener("click", sendChat);
+  $("#contBtn").addEventListener("click", () => continueTask($("#composerText").value.trim()));
+  $("#stopBtn").addEventListener("click", stopTask);
+  $("#composerText").addEventListener("keydown", ev => {
+    if ((ev.metaKey || ev.ctrlKey) && ev.key === "Enter") {
+      ev.preventDefault();
+      if (!$("#contBtn").disabled && !$("#contBtn").hidden) continueTask($("#composerText").value.trim());
+      else if (!$("#sendBtn").disabled) sendChat();
+    }
+  });
+  document.addEventListener("keydown", ev => { if (ev.key === "Escape") closeTaskDialog(); });
+  $("#tunnelBtn").addEventListener("click", async () => {
+    const cmd = (S.session && S.session.job && S.session.job.tunnel_cmd) || "";
+    const btn = $("#tunnelBtn"), old = btn.textContent;
+    try { await navigator.clipboard.writeText(cmd); btn.textContent = "Copied"; }
+    catch (e) { btn.textContent = "Copy failed"; setStatus("clipboard blocked; tunnel command: " + cmd, true); }
+    setTimeout(() => { btn.textContent = old; }, 1400);
+  });
+  $("#themeBtn").addEventListener("click", () => {
+    S.theme = S.theme === "system" ? "light" : S.theme === "light" ? "dark" : "system";
+    if (S.theme === "system") delete document.documentElement.dataset.theme;
+    else document.documentElement.dataset.theme = S.theme;
+    $("#themeBtn").textContent = "theme: " + S.theme;
+    redrawEverything();
+  });
+  const mq = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null;
+  if (mq && mq.addEventListener) mq.addEventListener("change", redrawEverything);
+  else if (mq && mq.addListener) mq.addListener(redrawEverything);
+}
+
+boot();
+</script>
+</body>
+</html>
