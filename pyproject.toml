@@ -19,6 +19,9 @@ dependencies = [
     "httpx>=0.27",
 ]
 
+[project.entry-points."vllm.general_plugins"]
+healthy_rl_gemma4 = "healthy_rl.vllm_plugins:register"
+
 [dependency-groups]
 dev = ["pytest>=8.0"]
 
