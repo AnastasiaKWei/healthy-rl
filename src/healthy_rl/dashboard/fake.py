@@ -1,12 +1,12 @@
 """Deterministic stand-ins so the whole app runs on the login node without a GPU or apptainer."""
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
 from healthy_rl.dashboard.generation import Generation, assemble_generation
+from healthy_rl.dashboard.sandbox import SandboxResult
 from healthy_rl.dashboard.sandbox_cli import feedback_message
 from healthy_rl.rollouts import Vectors
 
@@ -52,17 +52,6 @@ class FakeEngine:
                                    n_emotions=E, max_tokens=max_tokens, seconds=self.seconds)
 
 
-@dataclass
-class _FakeResult:
-    passed: bool
-    stdout: str
-    stderr: str
-    feedback: str
-    timed_out: bool = False
-    seconds: float = 0.0
-    error: str | None = None
-
-
 class FakeSandbox:
     """Two canned problems that fail with a canned assertion until ``pass_on_attempt``."""
 
@@ -79,10 +68,10 @@ class FakeSandbox:
                           "entry_point": "g", "impossible_type": split, "instruction_prompt": "Implement g."},
         }
 
-    def run(self, split: str, task_id: str, code: str, affect: bool = False) -> _FakeResult:
+    def run(self, split: str, task_id: str, code: str, affect: bool = False) -> SandboxResult:
         k = self.attempts.get(task_id, 0) + 1
         self.attempts[task_id] = k
         if self.pass_on_attempt is not None and k >= self.pass_on_attempt:
-            return _FakeResult(True, "", "", "")
+            return SandboxResult(True, "", "", "")
         err = "Traceback (most recent call last):\n  File \"t.py\", line 7, in <module>\nAssertionError"
-        return _FakeResult(False, "", err, feedback_message(err, "Implement f."))
+        return SandboxResult(False, "", err, feedback_message(err, "Implement f."))

@@ -29,13 +29,14 @@ def _sandbox(tmp_path, runner):
 
 def test_command_binds_project_bench_scratch_readonly_where_it_should(tmp_path):
     sb = _sandbox(tmp_path, runner=None)
-    cmd = sb.command("problems", "--parquet", "/bench/original.parquet")
+    cmd = sb.command("problems", "--parquet", "/bench/orig1/original.parquet")
     assert cmd[:3] == ["apptainer", "exec", "--contain"]
     joined = " ".join(cmd)
     assert f"{tmp_path/'proj'}:/project:ro" in joined and f"{tmp_path/'bench'}:/bench:ro" in joined
     assert f"{tmp_path/'scratch'}:/scratch:rw" in joined and "--pwd /scratch" in joined
     assert "PYTHONPATH=/project/src" in joined
-    assert cmd[cmd.index(str(tmp_path / "eval.sif")) + 1:] == ["python", "-m", "healthy_rl.dashboard.sandbox_cli", "problems", "--parquet", "/bench/original.parquet"]
+    assert "HOME=" not in joined  # apptainer refuses APPTAINERENV_HOME; the image's /work is already a tmpfs
+    assert cmd[cmd.index(str(tmp_path / "eval.sif")) + 1:] == ["python", "-m", "healthy_rl.dashboard.sandbox_cli", "problems", "--parquet", "/bench/orig1/original.parquet"]
 
 
 def test_problems_parses_json(tmp_path):
@@ -91,3 +92,20 @@ def test_run_timeout_and_garbage_are_errors_not_exceptions(tmp_path):
     def garbage(cmd, **kw): return subprocess.CompletedProcess(cmd, 1, stdout="not json", stderr="boom")
     r2 = _sandbox(tmp_path, garbage).run("original", "lcbhard_0", "x")
     assert r2.passed is False and "boom" in r2.error
+
+
+def test_valid_json_of_the_wrong_shape_is_an_error_not_an_exception(tmp_path):
+    for payload in ("{}", "null", "[]", '{"lcbhard_0": {"prompt": "p"}}'):
+        def runner(cmd, __p=payload, **kw):
+            return subprocess.CompletedProcess(cmd, 0, stdout=__p, stderr="")
+        r = _sandbox(tmp_path, runner).run("original", "lcbhard_0", "x")
+        assert r.passed is False and r.error and "unexpected payload" in r.error
+
+
+def test_wrapper_timeout_sweeps_the_containers_orphaned_test_file(tmp_path):
+    def slow(cmd, **kw):
+        (tmp_path / "scratch" / "t_abc.py").write_text("orphan")
+        raise subprocess.TimeoutExpired(cmd, kw.get("timeout", 0))
+    r = _sandbox(tmp_path, slow).run("original", "lcbhard_0", "x")
+    assert r.timed_out and not (tmp_path / "scratch" / "t_abc.py").exists()
+    assert not list((tmp_path / "scratch").glob("*.py"))

@@ -117,8 +117,26 @@ class Sandbox:
                 pass
         seconds = time.monotonic() - started
         if err == "timeout":
+            # The container died with the wrapper, so its own ``finally`` never ran: sweep the
+            # test file sandbox_cli writes into the cwd (/scratch) so scratch does not fill up.
+            self._sweep_orphans()
             return SandboxResult(False, "", "", "", timed_out=True, seconds=seconds, error=f"sandbox exceeded {self.timeout_s + STARTUP_GRACE_S}s")
         if err:
             return SandboxResult(False, "", "", "", seconds=seconds, error=err)
+        if not isinstance(data, dict) or "passed" not in data:
+            return SandboxResult(False, "", "", "", seconds=seconds,
+                                 error=f"sandbox_cli returned an unexpected payload: {str(data)[:200]!r}")
         return SandboxResult(bool(data["passed"]), data.get("stdout", ""), data.get("stderr", ""), data.get("feedback", ""),
                              timed_out=bool(data.get("timed_out")), seconds=seconds)
+
+    def _sweep_orphans(self) -> None:
+        """Remove ``t_*.py`` files sandbox_cli left behind when it was killed mid-run."""
+        try:
+            orphans = list(self.scratch_dir.glob("t_*.py"))
+        except OSError:
+            return
+        for orphan in orphans:
+            try:
+                orphan.unlink()
+            except OSError:
+                pass
