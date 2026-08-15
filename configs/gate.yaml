@@ -1,0 +1,36 @@
+# Stage 5: logit-lens sanity gate on the emotion directions. CPU / login node.
+#
+# Reads the unembedding straight off the checkpoint (ruling R2), never through the
+# vLLM server: the weight is static and the GPUs are scarce.
+stage: gate
+version: v1
+model_dir: ${MODEL_DIR}
+model: gemma-4-31B-it
+
+# Which stage 4 artifact to read ($ARTIFACT_DIR/vectors/<model>/<version>).
+vectors_version: v1
+
+# Layer to gate at. Defaults to the probe_layer stage 4 recorded.
+probe_layer: null
+
+top_k: 30
+
+# `latin_initial_rate` counts a Latin-script top token sharing this many leading
+# characters with the emotion word: "desp" catches despair / desperation / desper.
+latin_initial_prefix: 4
+
+# Apply the final RMSNorm weight before the unembedding. `no_norm` is reported
+# alongside either way, so the result can be checked for sensitivity to this.
+apply_final_norm: true
+# Gemma's RMSNorm is x * (1 + w) when the checkpoint stores zero-centered weights.
+# These checkpoints do not (their norm weights have mean ~1 or ~11, not ~0), and
+# vLLM's gemma4.py uses the plain x * w form, so this stays false. `final_norm_stats`
+# in gate.json records the weight's mean/min/max so the choice stays checkable.
+rms_norm_zero_centered: false
+
+# Vocab rows per streamed slice of the unembedding. 16384 x 5376 float32 ~ 350 MB.
+vocab_chunk_rows: 16384
+
+# Pass/fail. Recorded, never raised: a failed gate is this stage's whole point.
+self_token_rate_threshold: 0.5
+latin_initial_rate_threshold: 0.7
