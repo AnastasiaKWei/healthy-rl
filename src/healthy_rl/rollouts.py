@@ -63,6 +63,8 @@ __all__ = [
     "load_vectors",
     "check_provider",
     "make_zstd_threadsafe",
+    "preflight_provider",
+    "provider_base_url",
     "read_all_shards",
     "select_sweep_from_dir",
     "run_rollouts",
@@ -878,6 +880,7 @@ class RunState:
     samples_without_hook: int = 0
     turn_errors: list[str] = field(default_factory=list)
     hook_failures: list[str] = field(default_factory=list)
+    sample_errors: list[str] = field(default_factory=list)
 
 
 _STATE: RunState | None = None
@@ -998,6 +1001,21 @@ def register_sample_hook() -> None:
 # here instead depends only on documented-ish provider surface, and it is the
 # same twenty lines either way.
 ATTEMPT_TIMEOUT_S = 3600
+
+
+def provider_base_url(base_url: str) -> str:
+    """The base URL Inspect's OpenAI-compatible provider needs: ending in ``/v1``.
+
+    ``slurm/serve.slurm`` exports ``HEALTHY_RL_SERVER_URL=http://127.0.0.1:PORT``
+    with no suffix, which is right for ``/health`` and for vllm-lens's
+    ``/v1/hooks/*`` endpoints -- ``LensClient`` and ``wait_for_health`` build those
+    off the root. The OpenAI SDK instead appends ``/chat/completions`` directly to
+    its base, so the same URL yields ``/chat/completions``, which vLLM does not
+    serve: every request 404s while preflight, on the raw HTTP path, passes.
+    Hence one normalisation, used only where the provider is constructed.
+    """
+    trimmed = base_url.rstrip("/")
+    return trimmed if trimmed.endswith("/v1") else f"{trimmed}/v1"
 
 
 def _transform_config(config):
@@ -1141,7 +1159,7 @@ def check_provider() -> str:
 
     get_model(
         f"{provider}/healthy-rl-provider-check",
-        base_url="http://127.0.0.1:1/v1",
+        base_url=provider_base_url("http://127.0.0.1:1"),
         memoize=False,
         config=GenerateConfig(max_tokens=1),
     )
@@ -1193,6 +1211,9 @@ def _record_sample(sample: Any) -> None:
         state.stash.discard(key for _, key in residual_keys)
 
     score, passed = _sample_score(sample)
+    sample_error = getattr(getattr(sample, "error", None), "message", None)
+    if sample_error:
+        state.sample_errors.append(str(sample_error))
     record = {
         "run_id": state.run_id,
         "model": state.model_name,
@@ -1219,7 +1240,7 @@ def _record_sample(sample: Any) -> None:
         "residuals": str(residual_path) if residual_path else None,
         "hook_data": has_hook_data,
         "turn_errors": turn_errors,
-        "sample_error": getattr(getattr(sample, "error", None), "message", None),
+        "sample_error": sample_error,
         "total_time": getattr(sample, "total_time", None),
     }
     state.writer.write(record)
@@ -1451,6 +1472,73 @@ def preflight(base_url: str, model_name: str, vectors: Vectors, cfg: Mapping[str
         "expected_norm": {str(k): v for k, v in vectors.mean_residual_norm.items()},
         "baseline_text": probe.text,
         "steered_text": steered.text,
+    }
+
+
+def preflight_provider(
+    provider: str,
+    base_url: str,
+    model_name: str,
+    vectors: Vectors,
+    cfg: Mapping[str, Any],
+    hook: Any,
+) -> dict:
+    """One real generation through the Inspect provider, before any rollout runs.
+
+    ``preflight`` drives ``LensClient`` over raw HTTP, so it validates the server
+    and the hook but never touches the provider's own URL construction or its
+    ``extra_args`` transform. That gap let a missing ``/v1`` suffix 404 every
+    single rollout while preflight passed. This closes it: the assertion is that
+    the provider produces tokens AND that emotion data came back with them, which
+    is precisely what a rollout record needs.
+    """
+    import asyncio
+
+    from inspect_ai.model import ChatMessageUser, GenerateConfig, get_model
+
+    model = get_model(
+        f"{provider}/{model_name}",
+        base_url=provider_base_url(base_url),
+        memoize=False,
+        config=GenerateConfig(
+            max_tokens=int(cfg.get("preflight_max_tokens", 16)),
+            temperature=0.0,
+            extra_body={"extra_args": {"apply_hooks": [hook]}},
+        ),
+    )
+    prompt = str(cfg.get("preflight_prompt", "Say hello."))
+    try:
+        output = asyncio.run(model.generate(input=[ChatMessageUser(content=prompt)]))
+    except Exception as exc:
+        raise RuntimeError(
+            f"preflight: a generation through the Inspect provider failed against "
+            f"{provider_base_url(base_url)} -- {type(exc).__name__}: {exc}. "
+            "preflight's raw-HTTP checks passed, so the server is up and the hook "
+            "works; this is the provider's own request path.\n" + _PROVIDER_FALLBACK_HINT
+        ) from exc
+
+    completion = (output.completion or "").strip()
+    turn = (output.metadata or {}).get("healthy_rl") or {}
+    stats = turn.get("stats") or {}
+    if not completion:
+        raise RuntimeError(
+            f"preflight: the provider returned no tokens (stop_reason="
+            f"{getattr(output, 'stop_reason', None)}, error={output.error!r}). Every "
+            "rollout would record zero generated tokens."
+        )
+    missing = [layer for layer in vectors.capture_layers if str(layer) not in stats]
+    if missing:
+        raise RuntimeError(
+            f"preflight: a generation through the provider produced tokens but no "
+            f"emotion data at layer(s) {missing} (got {sorted(stats)}, "
+            f"error={turn.get('error')!r}). The hook is not reaching the server on "
+            "the provider's request path even though it works over raw HTTP."
+        )
+    return {
+        "base_url": provider_base_url(base_url),
+        "completion": completion,
+        "n_generated": turn.get("n_generated"),
+        "layers": sorted(stats),
     }
 
 
@@ -1696,9 +1784,12 @@ def run_rollouts(
     # Shard-specific by default: shards share the output directory, and giving
     # each its own Inspect log tree keeps them from contending over the realtime
     # log buffer.
+    # The output directory is on shared disk; the container's INSPECT_LOG_DIR
+    # points at per-job scratch. Prefer the output directory so the eval logs sit
+    # next to the records they explain, and keep them per-shard so shards sharing
+    # a directory do not contend over the realtime log buffer.
     log_dir = str(
         cfg.get("inspect_log_dir")
-        or os.environ.get("INSPECT_LOG_DIR")
         or (out / "inspect-logs" / f"shard{shard_index}of{shard_count}")
     )
     sweep: SweepSelection | None = None
@@ -1728,6 +1819,10 @@ def run_rollouts(
         summary["provider"] = provider
         checkpoint()
         summary["preflight"] = preflight(base_url, model_name, vectors, cfg)
+        checkpoint()
+        summary["preflight_provider"] = preflight_provider(
+            provider, base_url, model_name, vectors, cfg, hook
+        )
         checkpoint()
 
         with JsonlWriter(jsonl_path) as writer:
@@ -1810,7 +1905,7 @@ def run_rollouts(
                     ]
                 model = get_model(
                     f"{provider}/{model_name}",
-                    base_url=base_url,
+                    base_url=provider_base_url(base_url),
                     memoize=False,
                     config=GenerateConfig(
                         temperature=float(cfg.get("temperature", 1.0)),
@@ -1875,10 +1970,18 @@ def run_rollouts(
                         f"(status {statuses})"
                     )
                 if state.samples_seen and state.samples_without_hook == state.samples_seen:
-                    raise RuntimeError(
-                        f"none of the {state.samples_seen} rollouts so far carried emotion "
-                        "data: the projection hook is not reaching the server during "
+                    # Report the sample error first when there is one: an empty
+                    # record usually means the request never reached the model at
+                    # all (a 404, a refused connection), not a hook problem.
+                    cause = (
+                        f"every rollout failed with: {state.sample_errors[-1]}"
+                        if state.sample_errors
+                        else "the projection hook is not reaching the server during "
                         "Inspect generation, even though preflight passed"
+                    )
+                    raise RuntimeError(
+                        f"none of the {state.samples_seen} rollouts so far carried "
+                        f"emotion data -- {cause}"
                     )
 
         summary["complete"] = True

@@ -226,6 +226,10 @@ def reexec_in_container(argv: list[str]) -> None:
 
     results = Path(artifacts) / "rollouts"
     results.mkdir(parents=True, exist_ok=True)
+    # Per-invocation scratch on real disk, under the same rw bind. Named for the
+    # job so concurrent shards on one node never share a HOME or a log directory.
+    tag = os.environ.get("SLURM_JOB_ID") or str(os.getpid())
+    scratch = f"/out/rollouts/.scratch/{tag}"
     inner = f"/project/{Path(__file__).resolve().relative_to(project.resolve())}"
 
     cmd = [
@@ -237,9 +241,18 @@ def reexec_in_container(argv: list[str]) -> None:
         "--env", f"{IN_CONTAINER_ENV}=1",
         "--env", "HEALTHY_RL_ARTIFACT_ROOT=/artifacts",
         "--env", "HEALTHY_RL_ARTIFACT_OUT=/out",
-        # Empty so the driver falls back to <out_dir>/inspect-logs on shared disk;
-        # the image's default points into the RAM-backed overlay.
-        "--env", "INSPECT_LOG_DIR=",
+        # Everything Inspect writes must land on the /out bind, which is real
+        # disk. `--writable-tmpfs` is a small RAM-backed overlay, and the image's
+        # own defaults (HOME=/work, INSPECT_LOG_DIR=/work/inspect-logs) point
+        # into it -- a long run fills it and dies with ENOSPC while *writing its
+        # log*, losing the run's record along with it. Unsetting INSPECT_LOG_DIR
+        # is not enough: Inspect's trace log goes to platformdirs' user data dir,
+        # which follows HOME/XDG_DATA_HOME.
+        "--env", f"HOME={scratch}",
+        "--env", f"TMPDIR={scratch}/tmp",
+        "--env", f"XDG_DATA_HOME={scratch}/data",
+        "--env", f"XDG_CACHE_HOME={scratch}/cache",
+        "--env", f"INSPECT_LOG_DIR={scratch}/inspect-logs",
     ]
     for name in (
         "HEALTHY_RL_SERVER_URL",
