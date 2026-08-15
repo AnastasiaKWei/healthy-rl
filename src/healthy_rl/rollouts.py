@@ -61,6 +61,7 @@ __all__ = [
     "JsonlWriter",
     "output_dir",
     "load_vectors",
+    "check_provider",
     "make_zstd_threadsafe",
     "read_all_shards",
     "select_sweep_from_dir",
@@ -447,7 +448,14 @@ def expand_work(
 
 
 def parse_shard(value: str | None) -> tuple[int, int]:
-    """``"1/3"`` -> ``(1, 3)``. ``None`` means the single shard ``(0, 1)``."""
+    """``"1/3"`` -> ``(1, 3)``. ``None`` means the single shard ``(0, 1)``.
+
+    **Ruling R30: do not pass the shard as a bare ``--shard 0/3`` argv value.**
+    ``scripts/run_rollouts.py`` re-execs into apptainer with ``--pwd /project``,
+    and apptainer path-resolves the bare ``0/3`` into ``/project/0/3``. Use
+    ``$HEALTHY_RL_SHARD`` or a generated per-shard config (``configs/shards/``);
+    the driver's setting precedence handles both.
+    """
     if value in (None, ""):
         return (0, 1)
     assert value is not None
@@ -980,12 +988,58 @@ def register_sample_hook() -> None:
     _HOOK_REGISTERED = True
 
 
+# vllm-lens's own Inspect provider is deliberately NOT used. At inspect_ai
+# 0.3.258 `vllm_lens.inspect_provider.VLLMLensAPI` is not a class at all: the
+# `@modelapi` decorator has already replaced it with a registration *function*,
+# so subclassing it fails with "function() argument 'code' must be code, not
+# str". The real class is recoverable from the decorator's closure, but that
+# depends on Inspect decorator internals. Subclassing Inspect's own
+# OpenAI-compatible `VLLMAPI` and doing the extra_args -> vllm_xargs transform
+# here instead depends only on documented-ish provider surface, and it is the
+# same twenty lines either way.
+ATTEMPT_TIMEOUT_S = 3600
+
+
+def _transform_config(config):
+    """``extra_body["extra_args"]`` -> ``extra_body["vllm_xargs"]``, serialised.
+
+    Hooks and steering vectors travel as JSON strings inside ``vllm_xargs``,
+    which is the wire format the vllm-lens server plugin reads (see
+    ``VLLMLensClient._build_xargs``). Inspect passes ``config.extra_body``
+    through to the request body untouched.
+
+    The copy is shallow on purpose: ``model_copy(deep=True)`` would clone the
+    steering tensor and re-pickle the hook on every single generation.
+    """
+    import json as _json
+
+    extra_body = getattr(config, "extra_body", None)
+    if not extra_body or "extra_args" not in extra_body:
+        return config
+
+    extra_args = dict(extra_body["extra_args"])
+    xargs: dict[str, Any] = {}
+    vectors = extra_args.pop("apply_steering_vectors", None)
+    if vectors is not None:
+        xargs["apply_steering_vectors"] = _json.dumps([v.model_dump() for v in vectors])
+    hooks = extra_args.pop("apply_hooks", None)
+    if hooks is not None:
+        xargs["apply_hooks"] = _json.dumps([h.model_dump() for h in hooks])
+    capture = extra_args.pop("output_residual_stream", None)
+    if capture is not None:
+        xargs["output_residual_stream"] = _json.dumps(capture)
+    xargs.update(extra_args)
+
+    updated = {key: value for key, value in extra_body.items() if key != "extra_args"}
+    updated["vllm_xargs"] = xargs
+    return config.model_copy(update={"extra_body": updated})
+
+
 def _register_inspect_extensions() -> str:
     """Register the model provider and the sample hook. Returns the provider name.
 
     Registration is by import side effect in Inspect, so this is done once,
-    lazily, from inside the container where ``inspect_ai`` and
-    ``vllm_lens.inspect_provider`` are both importable.
+    lazily, from inside the container.
     """
     global _REGISTERED
     register_sample_hook()
@@ -994,40 +1048,104 @@ def _register_inspect_extensions() -> str:
         return PROVIDER_NAME
     provider_name = PROVIDER_NAME
 
+    from contextvars import ContextVar
+
+    from inspect_ai.model._generate_config import GenerateConfig
     from inspect_ai.model._model_output import ModelOutput
+    from inspect_ai.model._providers.vllm import VLLMAPI
     from inspect_ai.model._registry import modelapi
-    from vllm_lens.inspect_provider import VLLMLensAPI
+    from vllm_lens._helpers._serialize import deserialize_hook_results
+
+    pending: ContextVar[dict | None] = ContextVar("healthy_rl_hook_results", default=None)
 
     @modelapi(name=provider_name)
-    class HealthyRLLensAPI(VLLMLensAPI):
-        """vllm-lens provider that reduces hook output before Inspect logs it.
+    class HealthyRLLensAPI(VLLMAPI):
+        """Talks to the vllm-lens server and reduces hook output before logging.
 
-        ``vllm_lens`` hands back raw tensors in ``ModelOutput.metadata``. Those
-        cannot survive the eval log (and would bloat it enormously), so they are
-        collapsed here to the 14 numbers a turn that the record needs, with full
-        residuals parked in the stash under a uuid.
+        The server returns raw projection tensors alongside the completion.
+        Those cannot survive Inspect's eval log and would bloat it enormously, so
+        they are collapsed here to the 14 numbers a turn that the record needs,
+        with full residuals parked in the stash under a uuid.
         """
 
+        def __init__(self, model_name, base_url=None, api_key=None, config=None, **kwargs):
+            config = config if config is not None else GenerateConfig()
+            if getattr(config, "attempt_timeout", None) is None:
+                config = config.merge(GenerateConfig(attempt_timeout=ATTEMPT_TIMEOUT_S))
+            super().__init__(
+                model_name=model_name,
+                base_url=base_url,
+                api_key=api_key,
+                config=config,
+                **kwargs,
+            )
+
+        def on_response(self, response: dict) -> None:  # type: ignore[override]
+            # vLLM's response carries `hook_results` as an extra key; pydantic's
+            # extra="allow" keeps it through model_dump().
+            pending.set(response.get("hook_results"))
+
         async def generate(self, input, tools, tool_choice, config):  # type: ignore[override]
-            result = await super().generate(input, tools, tool_choice, config)
-            output = result[0] if isinstance(result, tuple) else result
-            # Unconditional: a turn with no hook results still needs a
-            # `healthy_rl` entry, or the record would be silently indistinguishable
-            # from one this provider never saw.
-            if isinstance(output, ModelOutput):
-                if output.metadata is None:
-                    output.metadata = {}
-                metadata = output.metadata
-                for bulky in ("activations", "prompt_token_ids", "token_ids"):
-                    metadata.pop(bulky, None)
-                raw = metadata.pop("hook_results", None)
-                state = _state()
-                turn = summarise_hook_results(raw, state.vectors, state.stash)
-                metadata["healthy_rl"] = asdict(turn)
-            return result
+            token = pending.set(None)
+            try:
+                result = await super().generate(
+                    input, tools, tool_choice, _transform_config(config)
+                )
+                raw = pending.get()
+                output = result[0] if isinstance(result, tuple) else result
+                # Unconditional: a turn with no hook results still needs a
+                # `healthy_rl` entry, or the record would be indistinguishable
+                # from one this provider never saw.
+                if isinstance(output, ModelOutput):
+                    if output.metadata is None:
+                        output.metadata = {}
+                    state = _state()
+                    turn = summarise_hook_results(
+                        deserialize_hook_results(raw) if raw else None,
+                        state.vectors,
+                        state.stash,
+                    )
+                    output.metadata["healthy_rl"] = asdict(turn)
+                if isinstance(result, tuple):
+                    _strip_model_call(result[1])
+                return result
+            finally:
+                pending.reset(token)
 
     _REGISTERED = True
     return provider_name
+
+
+def _strip_model_call(call: Any) -> None:
+    """Drop the bulky vllm-lens fields from the logged API response."""
+    response = getattr(call, "response", None)
+    if isinstance(response, dict):
+        for key in ("activations", "hook_results", "prompt_token_ids"):
+            response.pop(key, None)
+        for choice in response.get("choices") or []:
+            if isinstance(choice, dict):
+                choice.pop("token_ids", None)
+
+
+def check_provider() -> str:
+    """Build the provider once, before anything slow, and fail loudly if it cannot.
+
+    The class body itself used to be the failure point -- subclassing vllm-lens's
+    ``VLLMLensAPI``, which ``@modelapi`` had already replaced with a function --
+    and it blew up only after the model had loaded. Registration and a throwaway
+    construction now happen in the first seconds of the stage, so this class of
+    failure costs ten seconds rather than a model load.
+    """
+    provider = _register_inspect_extensions()
+    from inspect_ai.model import GenerateConfig, get_model
+
+    get_model(
+        f"{provider}/healthy-rl-provider-check",
+        base_url="http://127.0.0.1:1/v1",
+        memoize=False,
+        config=GenerateConfig(max_tokens=1),
+    )
+    return provider
 
 
 def _record_sample(sample: Any) -> None:
@@ -1603,7 +1721,12 @@ def run_rollouts(
     checkpoint()
 
     try:
-        provider = _register_inspect_extensions()
+        # First, and before anything slow: prove the Inspect provider can be
+        # registered and constructed. This used to blow up only after the server
+        # was up and the model loaded.
+        provider = check_provider()
+        summary["provider"] = provider
+        checkpoint()
         summary["preflight"] = preflight(base_url, model_name, vectors, cfg)
         checkpoint()
 

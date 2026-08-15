@@ -255,7 +255,7 @@ def reexec_in_container(argv: list[str]) -> None:
         if value:
             cmd += ["--env", f"{name}={value}"]
     cmd += ["--pwd", "/project", str(sif), "python", inner]
-    cmd += [_translate_path(a, project, Path(artifacts), results) for a in argv]
+    cmd += _translate_argv(argv, project, Path(artifacts), results)
 
     print(f"handing over to {sif.name} ({reason})\n  {' '.join(cmd)}", flush=True)
     sys.stdout.flush()
@@ -266,30 +266,57 @@ def reexec_in_container(argv: list[str]) -> None:
         print(f"WARNING: could not exec apptainer: {exc}", file=sys.stderr, flush=True)
 
 
-def _translate_path(arg: str, project: Path, artifacts: Path, results: Path) -> str:
-    """Rewrite a host path argument to where it is bound inside the container.
+PATH_FLAGS = ("--config", "--out-dir", "--artifact-root")
 
-    ``--config configs/rollouts.yaml`` is relative to the repo on the host and to
-    nothing at all inside ``--contain``, so paths have to be mapped rather than
-    passed through.
+
+def _translate_argv(
+    argv: list[str], project: Path, artifacts: Path, results: Path
+) -> list[str]:
+    """Rewrite the PATH-VALUED arguments to where they are bound in the container.
+
+    Only the values of ``PATH_FLAGS`` are touched. Rewriting anything that merely
+    looks path-shaped is how ``--model Qwen3.6-27B`` became
+    ``/project/Qwen3.6-27B`` and ``--shard 0/3`` became ``/project/0/3``
+    (Ruling R30). Being explicit about which flags carry paths removes the whole
+    class of mistake.
     """
-    if not arg or arg.startswith("-"):
-        return arg
-    # Only rewrite things that are actually paths. A bare `--model Qwen3.6-27B`
-    # would otherwise resolve against the cwd and come out as /project/Qwen3.6-27B.
-    if "/" not in arg and not Path(arg).exists():
+    out: list[str] = []
+    translate_next = False
+    for arg in argv:
+        if translate_next:
+            out.append(_translate_path(arg, project, artifacts, results))
+            translate_next = False
+            continue
+        flag, sep, value = arg.partition("=")
+        if sep and flag in PATH_FLAGS:
+            out.append(f"{flag}={_translate_path(value, project, artifacts, results)}")
+        else:
+            out.append(arg)
+            translate_next = arg in PATH_FLAGS
+    return out
+
+
+def _translate_path(arg: str, project: Path, artifacts: Path, results: Path) -> str:
+    """Map one host path onto its container bind point."""
+    if not arg:
         return arg
     candidate = Path(arg)
     absolute = candidate if candidate.is_absolute() else (Path.cwd() / candidate)
+    # Resolve both sides: PROJECT_DIR and ARTIFACT_DIR are given as one mount
+    # path while the cwd resolves to another for the same filesystem.
     try:
         absolute = absolute.resolve()
     except OSError:
         return arg
     for host_root, container_root in (
-        (results.resolve(), Path("/out/rollouts")),
-        (artifacts.resolve(), Path("/artifacts")),
-        (project.resolve(), Path("/project")),
+        (results, Path("/out/rollouts")),
+        (artifacts, Path("/artifacts")),
+        (project, Path("/project")),
     ):
+        try:
+            host_root = host_root.resolve()
+        except OSError:
+            continue
         try:
             return str(container_root / absolute.relative_to(host_root))
         except ValueError:
