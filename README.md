@@ -66,7 +66,28 @@ open viewer/transcripts.html
 `viewer/transcripts.html` is self-contained — no server, works offline. Amber blocks
 are what the model thought privately, teal is what the tests graded.
 
+## Documentation
+
+Read these before extending the pilot — several confident-looking results from the
+first pass are wrong, and the reasons are recorded rather than rediscovered.
+
+| Doc | What's in it |
+|---|---|
+| [docs/findings.md](docs/findings.md) | What was measured, what survived scrutiny, and a list of **withdrawn claims** |
+| [docs/measurement.md](docs/measurement.md) | How the probes are built and read; the granularity and position traps |
+| [docs/infrastructure.md](docs/infrastructure.md) | Cluster shape and the dependency bugs, most of which fail silently |
+| [docs/runs.md](docs/runs.md) | Version naming, run registry, record fields |
+| [docs/elicitation.md](docs/elicitation.md) | Prior work, elicitation candidates, measurement risks |
+
 ## Status
 
-Step 0 in progress. Early result: models produce plenty of affect language when asked
-how they feel, but almost none spontaneously — see the transcripts.
+Step 1 (pilot) has a result. Under six turns of unsatisfiable tests, four emotion
+directions move with a consistent sign across three models: `desperate` and
+`frustrated` rise, `joyful` and `proud` fall, all p < 1e-4. Magnitudes are the same
+order as the emotion-vector paper's observational contrasts and 2-3x smaller. Three
+of eight candidate models produce directions that fail the logit-lens gate and were
+never used. Full numbers and caveats: [docs/findings.md](docs/findings.md).
+
+Step 0 finding still stands and is the confound the project exists to examine:
+models produce plenty of affect language when asked how they feel, and almost none
+spontaneously.
