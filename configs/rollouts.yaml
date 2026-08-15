@@ -20,18 +20,28 @@ version: v1
 
 # --- server, read by slurm/serve.slurm before it allocates the node -----------
 serve:
-  # Rollouts need a genuinely large window: message_limit 30 with max_attempts 3
-  # feeds full test-failure output back each round, so transcripts get long. On a
-  # 2-GPU node holding a ~60-69 GB bf16 model at tp=2, weights take ~17-18 GB per
-  # GPU and 0.90 utilisation leaves roughly 55 GB per GPU for KV. A 32B-class
-  # model with GQA costs on the order of 130 KB per token per GPU at tp=2, so
-  # 12288 tokens x 12 concurrent sequences is about 19 GB -- comfortably inside
-  # the budget, with headroom for the prefix cache. Going wider buys throughput
-  # only if the rollouts are actually generation-bound; vLLM preempts rather than
-  # failing if KV runs short, so this is a throughput knob, not a crash risk.
+  # Sized for the cluster's real hardware: every GPU node here is 2 x A100-40G
+  # (80 GB total) or 2 x L40S-46G (92 GB total) -- there are no 80 GB cards, so
+  # the KV budget is much tighter than a 2x80 GB node would give.
+  #
+  # At tp=2 with utilisation 0.92 (~73 GB usable on A100-40G):
+  #   Qwen3.6-27B  ~54 GB weights -> ~19 GB for KV
+  #   Olmo-3.1-32B ~64 GB weights -> ~9 GB for KV   <- the binding constraint
+  # Olmo costs roughly 260 KB of KV per token (64 layers, GQA), so ~9 GB is about
+  # 35k tokens of KV: three or four full-length sequences resident at once.
+  #
+  # max_model_len stays at 12288 rather than 8192 because exceeding it is a HARD
+  # request failure, while running short of KV only makes vLLM preempt and
+  # recompute. message_limit 30 with max_attempts 3 feeds full test-failure
+  # output back each round, and stderr from a failing test can be long, so an
+  # 8192 window would risk killing rollouts outright to buy throughput.
+  # max_num_seqs 8 matches the rollout concurrency below; Olmo will preempt at
+  # that depth and Qwen will not. If serve logs show heavy preemption on Olmo,
+  # the L40S nodes (92 GB total, ~20 GB KV for Olmo) are the cheaper fix than
+  # shortening the window.
   max_model_len: 12288
-  gpu_memory_utilization: 0.90
-  max_num_seqs: 12
+  gpu_memory_utilization: 0.92
+  max_num_seqs: 8
 
 # --- dataset ------------------------------------------------------------------
 # The scaffold is
@@ -77,11 +87,13 @@ max_tokens: 2048
 # --- concurrency --------------------------------------------------------------
 # Matches serve.max_num_seqs: each in-flight sample holds one server slot and one
 # local sandbox subprocess. This is what sets the overnight wall clock, together
-# with --shard I/N, which splits the expanded rollout list across nodes.
-max_connections: 12
-max_samples: 12
-max_subprocesses: 12
-max_sandboxes: 12
+# with --shard I/N, which splits the expanded rollout list across nodes. Left at
+# 8 deliberately -- the local sandbox spawning one subprocess per in-flight
+# sample is the real constraint and is better measured than guessed.
+max_connections: 8
+max_samples: 8
+max_subprocesses: 8
+max_sandboxes: 8
 
 # --- measurement --------------------------------------------------------------
 # Per-token projections onto all 14 directions are kept at every capture layer
