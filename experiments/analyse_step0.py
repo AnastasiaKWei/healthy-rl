@@ -158,7 +158,9 @@ def load_units(logdir: str, before: str | None = None) -> dict:
             continue
         key = (Path(f).parent.name, log.eval.task_args.get("split"))
         for s in log.samples or []:
-            units[key][str(s.id)] = s
+            # (task, epoch): with --epochs>1 the same task id recurs once per epoch,
+            # and keying on the id alone silently discards all but the last.
+            units[key][(str(s.id), getattr(s, "epoch", 1))] = s
     return units
 
 
@@ -194,10 +196,10 @@ def main() -> None:
         print(f"no successful logs under {logdir}")
         return
 
-    print(f"{'arm':42s} {'split':12s} {'pass':>5} {'turns':>6} "
+    print(f"{'arm':56s} {'split':12s} {'pass':>5} {'turns':>6} "
           f"{'NEG':>6} {'neg/t':>6} {'POS':>6} {'pos/t':>6} "
           f"{'EPIST':>6} {'epi/t':>6} {'gaveup':>7}")
-    print("-" * 116)
+    print("-" * 130)
     for (arm, split) in sorted(units):
         samples = units[(arm, split)].values()
         agg = Counter()
@@ -207,7 +209,7 @@ def main() -> None:
                 npass += 1
             agg.update(measure(s))
         t = agg["turns"] or 1
-        print(f"{arm[:42]:42s} {split:12s} {npass:>2}/{len(list(samples)):<2} "
+        print(f"{arm[:56]:56s} {split:12s} {npass:>2}/{len(list(samples)):<2} "
               f"{agg['turns']:>6} {agg['neg']:>6} {agg['neg']/t:>6.2f} "
               f"{agg['pos']:>6} {agg['pos']/t:>6.2f} "
               f"{agg['epistemic']:>6} {agg['epistemic']/t:>6.2f} {agg['gave_up']:>7}")
