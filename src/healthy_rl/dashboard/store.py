@@ -37,10 +37,13 @@ class SessionStore:
         self.arrays_dir = self.root / ARRAYS_DIR
         self.arrays_dir.mkdir(parents=True, exist_ok=True)
         self._writer: JsonlWriter | None = None
-        # One dashboard session appends from several threads at once -- a task
-        # run and a chat send can be in flight together -- and they share one
-        # file handle. Without this, two records interleave on that handle and
-        # the JSONL grows a torn line that no reader can parse.
+        # One dashboard session appends from several threads at once: a task run
+        # and a chat send can be in flight together. The JSONL itself does not
+        # tear -- a record is one buffered write to a handle opened O_APPEND --
+        # so the race is the lazy construction below. Unsynchronised, several
+        # threads each see ``_writer is None`` and open their own handle: the
+        # losers are dropped without being closed (a leaked fd apiece) and the
+        # rows they wrote go uncounted by the survivor.
         self._lock = threading.Lock()
 
     @classmethod

@@ -216,6 +216,45 @@ def create_app(state: AppState) -> FastAPI:
         if st.read_only:
             raise HTTPException(409, "replay session is read-only")
 
+    def _split(split: str) -> str:
+        """Reject an unknown split here rather than let the sandbox 500 on it."""
+        mapping = getattr(st.sandbox, "split_parquets", None)
+        known = tuple(mapping) if mapping else ("conflicting", "original")
+        if split not in known:
+            raise HTTPException(400, f"split must be one of {sorted(known)}")
+        return split
+
+    def _problems(split: str, affect: bool) -> dict:
+        try:
+            return st.problems(_split(split), affect)
+        except ValueError as exc:  # a sandbox that knows its own splits better than we do
+            raise HTTPException(400, str(exc)) from None
+
+    def _rehydrate_chat(cid: str) -> ChatSession:
+        """Rebuild a ChatSession for a conversation whose session object is gone.
+
+        Without this a send to an unknown id starts a *fresh* session under that
+        id: the conversation grows a second turn 0 with no history, and a send
+        aimed at a task conversation quietly writes a chat record into it.
+        History is replayed from the last record's ``messages_in`` plus its own
+        reply, which is exactly what the next turn's prompt would have been.
+        """
+        recs = [r for r in st.store.records() if r["conversation_id"] == cid]
+        if not recs:
+            raise HTTPException(404, f"no conversation {cid}")
+        if any(r.get("source") != "chat" for r in recs):
+            raise HTTPException(409, "conversation is not a chat")
+        last = recs[-1]
+        cond = last.get("condition") or {}
+        chat = ChatSession(st.engine, st.store, V, conversation_id=cid, title=recs[0].get("title"),
+                           max_tokens=int(cond.get("max_tokens", st.cfg.get("max_tokens", 2048))),
+                           temperature=float(cond.get("temperature", st.cfg.get("temperature", 0.0))))
+        chat.messages = [dict(m) for m in last.get("messages_in", [])] + [{"role": "assistant", "content": last.get("text", "")}]
+        chat.turn = len(recs)
+        chat._non_empty = sum(1 for r in recs if r.get("n_generated", 0) > 0)
+        st.chats[cid] = chat
+        return chat
+
     @app.get("/", response_class=HTMLResponse)
     def index():
         return (STATIC / "index.html").read_text(encoding="utf-8")
@@ -267,21 +306,23 @@ def create_app(state: AppState) -> FastAPI:
         text = str(body.get("text", "")).strip()
         if not text:
             raise HTTPException(400, "empty message")
-        if cid == "new" or cid not in st.chats:
-            chat = ChatSession(st.engine, st.store, V, conversation_id=None if cid == "new" else cid,
-                               title=body.get("title") or text[:40],
-                               system_prompt=SCRATCHPAD_SYSTEM_PROMPT if body.get("scratchpad") else None,
-                               max_tokens=int(body.get("max_tokens", st.cfg.get("max_tokens", 2048))),
-                               temperature=float(body.get("temperature", st.cfg.get("temperature", 0.0))))
+        if cid == "new":
+            try:
+                chat = ChatSession(st.engine, st.store, V, title=body.get("title") or text[:40],
+                                   system_prompt=SCRATCHPAD_SYSTEM_PROMPT if body.get("scratchpad") else None,
+                                   max_tokens=int(body.get("max_tokens", st.cfg.get("max_tokens", 2048))),
+                                   temperature=float(body.get("temperature", st.cfg.get("temperature", 0.0))))
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(400, f"bad request body: {exc}") from None
             st.chats[chat.conversation_id] = chat
         else:
-            chat = st.chats[cid]
+            chat = st.chats.get(cid) or _rehydrate_chat(cid)
         return _sse(_queued_first({"conversation_id": chat.conversation_id, "turn_index": chat.turn},
                                   _pump(lambda: chat.send(text))))
 
     @app.get("/api/problems")
     def problems(split: str = "conflicting", affect: bool = False):
-        probs = st.problems(split, affect)
+        probs = _problems(split, affect)
         items = [{"task_id": tid, "entry_point": p.get("entry_point"), "n_chars": len(p.get("input", ""))}
                  for tid, p in probs.items()]
         order = {t: i for i, t in enumerate(sort_task_ids([i["task_id"] for i in items]))}
@@ -292,15 +333,20 @@ def create_app(state: AppState) -> FastAPI:
     async def task_start(request: Request):
         _writable()
         body = await request.json()
-        cfg = TaskConfig(split=body["split"], task_id=body["task_id"],
-                         attempts=int(body.get("attempts", st.cfg.get("max_attempts", 6))),
-                         max_tokens=int(body.get("max_tokens", st.cfg.get("max_tokens", 2048))),
-                         temperature=float(body.get("temperature", st.cfg.get("temperature", 0.0))),
-                         scratchpad=bool(body.get("scratchpad", False)),
-                         affect_prompt=bool(body.get("affect_prompt", False)),
-                         auto_continue=bool(body.get("auto_continue", False)))
+        try:
+            cfg = TaskConfig(split=str(body["split"]), task_id=str(body["task_id"]),
+                             attempts=int(body.get("attempts", st.cfg.get("max_attempts", 6))),
+                             max_tokens=int(body.get("max_tokens", st.cfg.get("max_tokens", 2048))),
+                             temperature=float(body.get("temperature", st.cfg.get("temperature", 0.0))),
+                             scratchpad=bool(body.get("scratchpad", False)),
+                             affect_prompt=bool(body.get("affect_prompt", False)),
+                             auto_continue=bool(body.get("auto_continue", False)))
+        except KeyError as exc:
+            raise HTTPException(400, f"missing {exc.args[0]!r}") from None
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(400, f"bad request body: {exc}") from None
         # Same affect flag as the run: the affect split rewrites the problem text.
-        probs = st.problems(cfg.split, cfg.affect_prompt)
+        probs = _problems(cfg.split, cfg.affect_prompt)
         if cfg.task_id not in probs:
             raise HTTPException(404, f"{cfg.task_id} not in the {cfg.split} split")
         run = TaskRun(cfg, probs[cfg.task_id], st.engine, st.sandbox, st.store, V)
@@ -362,8 +408,12 @@ def create_app(state: AppState) -> FastAPI:
         segment is not an end readout and is never dropped for the cap (ruling,
         2026-08-15).
         """
+        if source not in ("task", "chat"):
+            raise HTTPException(400, "source must be 'task' or 'chat'")
         if position not in stats.READOUTS or stat not in ("token", "mean") or segment not in stats.SEGMENTS:
             raise HTTPException(400, "bad position/stat/segment")
+        if split is not None:
+            _split(split)
         layer = _layer(layer)
         li = V.layer_index(layer)
         recs = [r for r in st.store.records() if r.get("source") == source]

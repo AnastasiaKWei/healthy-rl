@@ -1,17 +1,18 @@
 from __future__ import annotations
 
 import json
+from typing import Iterator
 
 import pytest
 from fastapi.testclient import TestClient
 
-from healthy_rl.dashboard.app import AppState, HealthMonitor, create_app
+from healthy_rl.dashboard.app import AppState, HealthMonitor, _pump, create_app
 from healthy_rl.dashboard.fake import FakeEngine, FakeSandbox
 from healthy_rl.dashboard.store import SessionStore
 
 
-def _state(tmp_path, **kw):
-    eng = FakeEngine()
+def _state(tmp_path, engine=None, **kw):
+    eng = engine or FakeEngine()
     store = SessionStore.create(tmp_path / "s", {"model": "fake", "emotions": eng.vectors.emotions, "probe_layer": 20})
     return AppState(engine=eng, sandbox=FakeSandbox(pass_on_attempt=2), store=store, vectors=eng.vectors,
                     cfg={"max_tokens": 8, "max_attempts": 3, "temperature": 0.0}, **kw)
@@ -190,3 +191,79 @@ def test_health_monitor_reports_the_failure_it_saw():
     mon.poll_once()
     s = mon.status()
     assert s["ok"] is False and s["last_ok_at"] is None and "not polled yet" not in s["last_error"]
+
+
+def test_chat_send_to_an_unknown_or_non_chat_conversation(client):
+    """A send must never invent an empty history under someone else's id."""
+    assert client.post("/api/chat/nope/send", json={"text": "hi"}).status_code == 404
+    with client.stream("POST", "/api/task/start", json={"split": "original", "task_id": "lcbhard_0",
+                                                        "attempts": 2, "auto_continue": True}) as r:
+        cid = [d for n, d in _sse(r) if n == "turn"][0]["record"]["conversation_id"]
+    r = client.post(f"/api/chat/{cid}/send", json={"text": "hi"})
+    assert r.status_code == 409 and "not a chat" in r.json()["detail"]
+
+
+def test_chat_rehydrates_from_the_store_when_the_session_object_is_gone(client, state):
+    with client.stream("POST", "/api/chat/new/send", json={"text": "hello", "title": "Hi"}) as r:
+        cid = _sse(r)[-1][1]["record"]["conversation_id"]
+    state.chats.clear()  # as after a restart, or a replay session opened read-write
+    with client.stream("POST", f"/api/chat/{cid}/send", json={"text": "more"}) as r:
+        rec = _sse(r)[-1][1]["record"]
+    assert rec["turn_index"] == 1 and rec["non_empty_turn_index"] == 1
+    roles_and_text = [(m["role"], m["content"]) for m in rec["messages_in"]]
+    assert roles_and_text[0] == ("user", "hello")
+    assert roles_and_text[1][0] == "assistant" and roles_and_text[-1] == ("user", "more")
+    turns = client.get(f"/api/conversations/{cid}").json()["turns"]
+    assert len(turns) == 2 and turns[0]["title"] == "Hi"
+
+
+def test_bad_request_bodies_and_params_are_400_not_500(client):
+    assert client.post("/api/task/start", json={"task_id": "lcbhard_0"}).status_code == 400
+    assert client.post("/api/task/start", json={"split": "original"}).status_code == 400
+    for bad in ({"attempts": "lots"}, {"max_tokens": "many"}, {"temperature": "warm"}):
+        body = {"split": "original", "task_id": "lcbhard_0", **bad}
+        assert client.post("/api/task/start", json=body).status_code == 400, bad
+    assert client.post("/api/task/start", json={"split": "sideways", "task_id": "lcbhard_0"}).status_code == 400
+    assert client.get("/api/aggregate", params={"source": "everything"}).status_code == 400
+    assert client.get("/api/problems", params={"split": "sideways"}).status_code == 400
+
+
+def test_sse_content_type(client):
+    with client.stream("POST", "/api/chat/new/send", json={"text": "hi"}) as r:
+        assert r.headers["content-type"].startswith("text/event-stream")
+        _sse(r)
+
+
+def test_pump_finishes_the_turn_when_the_stream_is_abandoned():
+    """``ChatSession.send`` appends the record last, so an abandoned generator loses the turn.
+
+    ``TestClient`` drains a StreamingResponse on close rather than cancelling it,
+    so this cannot be provoked through a route -- both implementations pass at
+    that level. The property is pinned here on ``_pump`` itself, against the
+    bare generator that shows what it is protecting against.
+    """
+    import time
+
+    def make(appended: list) -> "Iterator[dict]":
+        def work():
+            yield {"event": "queued", "data": {}}
+            time.sleep(0.2)
+            appended.append("record")  # ChatSession.send's store.append
+            yield {"event": "turn", "data": {}}
+        return work
+
+    bare: list = []
+    raw = make(bare)()
+    assert next(raw)["event"] == "queued"
+    raw.close()
+    time.sleep(0.4)
+    assert bare == [], "a bare generator is expected to lose the record; the contrast is the point"
+
+    pumped: list = []
+    stream = _pump(make(pumped))
+    assert next(stream)["event"] == "queued"
+    stream.close()
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline and not pumped:
+        time.sleep(0.02)
+    assert pumped == ["record"]
