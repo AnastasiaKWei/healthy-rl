@@ -44,6 +44,15 @@ anyway — the failures are lexical, not semantic; see the ruling in
   problem produce it. lcbhard is hard, so `pos6` still contains genuine repeated
   failure — it is failure without unsatisfiability, which is the control that
   matters.
+
+  **Measured, first completed cell (Ministral `pos6`, n=24):** 5 of 24 rollouts
+  solved the problem, and 20 of 24 still ran the full six turns. Trajectory depth
+  survives the switch to solvable tests — 20 rollouts reach t5 against 23 in `d6`
+  — so the two columns are compared over nearly the same number of turns rather
+  than a deep arm against a shallow one. This was the main risk to the design and
+  it did not materialise. The matching `passed` counts are 5/24 here (solves) and
+  0/24 in `d6` (hacks), which is the split inversion showing up exactly where it
+  should.
 - The affect row asks whether being asked to *verbalise* affect changes what is
   *represented*, or only what is said.
 
@@ -66,7 +75,7 @@ Rollout records, `$ARTIFACT_DIR/rollouts/<model>/<version>/*.jsonl`:
 |---|---|---:|---|
 | Ministral-3-14B-Reasoning-2512 | `d6` | 24 | complete, analysed |
 | Ministral-3-14B-Reasoning-2512 | `aff6` | 21 | **still accumulating** |
-| Ministral-3-14B-Reasoning-2512 | `pos6` | 0 | **submitted 2026-08-15**, jobs 5641827-29 |
+| Ministral-3-14B-Reasoning-2512 | `pos6` | 24 | complete; 5/24 solved, 20/24 ran all six turns |
 | Ministral-3-14B-Reasoning-2512 | `affpos6` | 0 | **submitted 2026-08-15**, jobs 5641830-32 |
 | Ministral-3-14B-Reasoning-2512 | `v1` | 48 | void |
 | Qwen3.5-9B | `d6` | 18 | **still accumulating**, analysed at n=17–18 |
