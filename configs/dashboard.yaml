@@ -1,0 +1,29 @@
+# Affect Scope: interactive dashboard stage (scripts/dashboard.py) under slurm/serve.slurm.
+stage: dashboard
+version: v1
+
+# --- server, read by slurm/serve.slurm before it allocates the node ----------
+# Same reasoning as configs/rollouts.yaml: 2 x A100-40G nodes, tp=2. One user,
+# so a small max_num_seqs; 12288 keeps six feedback rounds inside the window.
+serve:
+  max_model_len: 12288
+  gpu_memory_utilization: 0.90
+  max_num_seqs: 4
+
+# --- dashboard defaults (match configs/rollouts.yaml so runs are comparable) --
+dashboard:
+  max_tokens: 2048
+  max_attempts: 6
+  message_limit: 40
+  temperature: 0.0
+  sandbox_timeout_s: 30
+  # Split -> parquet, relative to the bench root. The two splits live in
+  # separate fetch directories because fetch_bench writes one fixed-name
+  # manifest per directory (docs/runs.md, "Bench artifacts").
+  split_parquets:
+    conflicting: v1/conflicting.parquet
+    original: orig1/original.parquet
+  # bench_dir / vectors_dir default to $ARTIFACT_DIR/bench and
+  # $ARTIFACT_DIR/vectors/<model>/v1; set only to point at another build.
+  # bench_dir: /path/to/bench
+  # vectors_dir: /path/to/vectors/<model>/<version>
