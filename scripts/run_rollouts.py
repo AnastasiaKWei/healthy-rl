@@ -37,7 +37,9 @@ from healthy_rl.rollouts import (
     output_dir,
     parse_shard,
     run_rollouts,
+    SCRATCHPAD_KEY,
     select_sweep_from_dir,
+    system_prompt_for,
 )
 
 DEFAULT_CONFIG = repo_root() / "configs" / "rollouts.yaml"
@@ -97,6 +99,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--no-resume",
         action="store_true",
         help="discard any existing rollouts.jsonl instead of continuing it",
+    )
+    parser.add_argument(
+        "--scratchpad-reasoning",
+        dest="scratchpad_reasoning",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "for non-CoT models: give every turn a system prompt asking the model to "
+            "think step by step inside private <SCRATCHPAD_REASONING> tags before it "
+            "answers (config key `scratchpad_reasoning`; --no-scratchpad-reasoning "
+            "forces it off). Use a separate out_dir from plain runs."
+        ),
     )
     return parser.parse_args(argv)
 
@@ -186,7 +200,7 @@ def _needs_container() -> str | None:
     return None
 
 
-def reexec_in_container(argv: list[str]) -> None:
+def reexec_in_container(argv: list[str], script: str | os.PathLike[str] | None = None) -> None:
     """Re-run this script inside ``apptainer/eval.sif``, if it is needed and present.
 
     ``slurm/serve.slurm`` activates the host ``.venv`` and runs stage drivers with
@@ -230,7 +244,8 @@ def reexec_in_container(argv: list[str]) -> None:
     # job so concurrent shards on one node never share a HOME or a log directory.
     tag = os.environ.get("SLURM_JOB_ID") or str(os.getpid())
     scratch = f"/out/rollouts/.scratch/{tag}"
-    inner = f"/project/{Path(__file__).resolve().relative_to(project.resolve())}"
+    me = Path(script) if script is not None else Path(__file__)
+    inner = f"/project/{me.resolve().relative_to(project.resolve())}"
 
     cmd = [
         "apptainer", "exec",
@@ -263,6 +278,7 @@ def reexec_in_container(argv: list[str]) -> None:
         "HEALTHY_RL_TIERS",
         "HEALTHY_RL_SWEEP_PROBLEMS",
         "HEALTHY_RL_OUT_DIR",
+        SCRATCHPAD_ENV,
     ):
         value = os.environ.get(name)
         if value:
@@ -345,6 +361,23 @@ def _setting(cli_value, env_name: str, cfg: dict, cfg_key: str):
     if env_value:
         return env_value.strip()
     return cfg.get(cfg_key) or None
+
+
+SCRATCHPAD_ENV = "HEALTHY_RL_SCRATCHPAD_REASONING"
+
+
+def resolve_scratchpad(cli_value: bool | None, cfg: dict) -> bool:
+    """``--[no-]scratchpad-reasoning``, else ``$HEALTHY_RL_SCRATCHPAD_REASONING``, else config.
+
+    An explicit CLI ``False`` (``--no-scratchpad-reasoning``) beats an environment
+    or config ``true``, which ``_setting``'s truthiness chain would not honour.
+    """
+    if cli_value is not None:
+        return bool(cli_value)
+    env_value = os.environ.get(SCRATCHPAD_ENV)
+    if env_value is not None and env_value.strip():
+        return system_prompt_for({SCRATCHPAD_KEY: env_value}) is not None
+    return system_prompt_for(cfg) is not None
 
 
 def _as_list(value) -> list[str] | None:
@@ -455,6 +488,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     sweep_problems = _as_list(sweep_value)
 
+    # The flag lands in cfg so that run_rollouts() and the manifest agree on it.
+    cfg = {**cfg, SCRATCHPAD_KEY: resolve_scratchpad(args.scratchpad_reasoning, cfg)}
+
     out_setting = _setting(args.out_dir, "HEALTHY_RL_OUT_DIR", cfg, "out_dir")
     out_dir = Path(out_setting) if out_setting else output_dir("rollouts", model, version)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -473,7 +509,8 @@ def main(argv: list[str] | None = None) -> int:
         f"rollouts: model={model} url={base_url} shard={shard[0]}/{shard[1]}\n"
         f"  vectors  {vectors_dir}\n"
         f"  bench    {bench_parquet}\n"
-        f"  out      {out_dir}",
+        f"  out      {out_dir}\n"
+        f"  scratchpad_reasoning={cfg[SCRATCHPAD_KEY]}",
         flush=True,
     )
 

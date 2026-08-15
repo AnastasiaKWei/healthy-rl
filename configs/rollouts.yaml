@@ -77,6 +77,20 @@ tier3_strength: 0.1
 # slice of the readout. --sweep-problems overrides this.
 # sweep_problems_override: [lcbhard_3, lcbhard_7, ...]
 
+# --- scratchpad reasoning (non-CoT models) -------------------------------------
+# On, every turn carries a system prompt asking the model to think step by step
+# inside private <SCRATCHPAD_REASONING> tags before it answers, so an instruct
+# checkpoint produces an explicit reasoning trace. Off for reasoning models,
+# which think natively. --scratchpad-reasoning / --no-scratchpad-reasoning and
+# $HEALTHY_RL_SCRATCHPAD_REASONING override this key. Use a separate out_dir
+# from plain runs (resume refuses to mix the two), and expect to need a larger
+# max_tokens: the scratchpad is generated before the answer. Grading uses
+# robust_find_code (last fenced block that parses), which is what makes a draft
+# block inside the scratchpad plus the real one after it score correctly.
+# scratchpad_system_prompt: replaces the default text (healthy_rl.rollouts.
+# SCRATCHPAD_SYSTEM_PROMPT); whatever was used is recorded in summary.json.
+scratchpad_reasoning: false
+
 # --- sampling -----------------------------------------------------------------
 # Temperature must be > 0: repeated samples of one problem at temperature 0 would
 # be identical rollouts.
