@@ -97,6 +97,15 @@ genuine result about the checkpoint — not an infrastructure problem. See
 
 Muse-Glimmer-30B is unsupported by vLLM entirely and was dropped.
 
+## Gate: final-norm key lookup misses NemotronH
+
+`scripts/gate.py::find_final_norm_key` tries three exact names and then a
+`.norm.weight` suffix. Nemotron-3-Nano stores its final norm as
+`backbone.norm_f.weight`, which matches neither, so the gate silently ran the
+`no_norm` variant as primary (`final_norm_stats: None` in its `gate.json`). The
+outcome did not change when recomputed with the norm, but the fallback is
+silent — check `final_norm_key` in `gate.json` for any new architecture.
+
 ## inspect_ai
 
 Pinned `>=0.3.258`. Two things that cost a night between them:

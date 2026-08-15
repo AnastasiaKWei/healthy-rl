@@ -34,6 +34,11 @@ contrast alone cannot:
 | **no affect prompt** | `d6` | `pos6` |
 | **affect prompt** | `aff6` | `affpos6` |
 
+Run on four models: Qwen3.5-9B, Ministral-3-14B-Reasoning-2512, Qwen3-14B and
+Nemotron-3-Nano-4B-BF16. The last two failed the logit-lens gate and are run
+anyway — the failures are lexical, not semantic; see the ruling in
+[findings.md](findings.md#instrument-gate).
+
 - The split column asks whether the rising `desperate`/`frustrated` trajectory
   needs the task to be *impossible*, or whether any six turns of a hard coding
   problem produce it. lcbhard is hard, so `pos6` still contains genuine repeated
@@ -74,16 +79,25 @@ Rollout records, `$ARTIFACT_DIR/rollouts/<model>/<version>/*.jsonl`:
 | gemma-3-12b-it | `aff6` | 24 | complete, analysed (turn-end only) |
 | Olmo-3.1-32B-Think | `v1` | 172 | void |
 | Qwen3.6-27B | `v1` | 0 | never produced records |
+| Qwen3-14B | `d6` | 0 | **submitted 2026-08-15**, jobs 5641928-30 |
+| Qwen3-14B | `aff6` | 0 | **submitted 2026-08-15**, jobs 5641931-33 |
+| Qwen3-14B | `pos6` | 0 | **submitted 2026-08-15**, jobs 5641934-36 |
+| Qwen3-14B | `affpos6` | 0 | **submitted 2026-08-15**, jobs 5641937-39 |
+| Nemotron-3-Nano-4B-BF16 | `d6` | 0 | **submitted 2026-08-15**, jobs 5641940-42 |
+| Nemotron-3-Nano-4B-BF16 | `aff6` | 0 | **submitted 2026-08-15**, jobs 5641943-45 |
+| Nemotron-3-Nano-4B-BF16 | `pos6` | 0 | **submitted 2026-08-15**, jobs 5641946-48 |
+| Nemotron-3-Nano-4B-BF16 | `affpos6` | 0 | **submitted 2026-08-15**, jobs 5641949-51 |
 
-gemma-3-12b-it has no `pos6`/`affpos6` cell: it is the flattest of the three
-measured models and the two 2x2s that matter are the ones on the models with a
-clear conflicting-split signal. Adding it is cheap if the split contrast turns
-out to carry the result.
+gemma-3-12b-it has no `pos6`/`affpos6` cell: it is the flattest of the measured
+models, and the 2x2s went to the models with a clear conflicting-split signal
+plus the two the gate had wrongly excluded. Adding it is cheap if the split
+contrast turns out to carry the result.
 
-Vectors exist for all eight gated models. Rollouts were only ever run on models
-that passed the gate; the 27B models (Olmo, Qwen3.6) are exempt from the
-"every new passing model runs the benchmark" rule because they predate it and
-are the wrong size for this question.
+Vectors exist for all eight gated models. Rollouts now cover six of them. The
+two that never ran are gemma-4-12B-it (the one genuine gate failure) and the
+27B models Olmo and Qwen3.6, which are exempt from the "every new passing model
+runs the benchmark" rule because they predate it and are the wrong size for this
+question.
 
 ## Reading a run
 

@@ -54,6 +54,44 @@ A failed gate is the stage's whole point, so failure is recorded and never
 raised. Run the gate before spending GPU hours on rollouts: it rejected three of
 eight candidate models for free. See [findings.md](findings.md#instrument-gate).
 
+### What the gate actually measures
+
+A qualitative read of all 8 × 14 top-30 lists (2026-08-15) says the two rates
+mostly measure **lexical form and language**, and only secondarily whether the
+direction is on target. Keep this in mind before trusting a rate:
+
+- **The realistic ceiling is ~0.6, not 0.93.** `loving` and `hostile` fail
+  self-token in 6 of 8 models (every model puts *gentle / tender / warmth* and
+  *intimidation / threats / venom* at the top), `sad` and `overwhelmed` fail in
+  6/8 (*sadness*, *dizzy / panic / nausea*), `joyful` in 4/8 (*joy*), `angry` and
+  `afraid` in 3/8 (*fury / rage*, *fear*). Gemma 3 is the exception because it
+  happens to rank adjectives and emojis high, not because the others are worse.
+- **`latin_initial` cannot see the obvious neighbours** for four words: *afraid*
+  → *fear* (different root), *angry* → *anger* (`angr` ≠ `ange`), *joyful* →
+  *joy* (3 chars < prefix 4), *loving* → *love* (`lovi` ≠ `love`). Those four
+  account for most of the "hard" cells in the table.
+- **Language share sets the bar.** Qwen3-14B's top-30s are 74% CJK, Qwen3.5/3.6
+  55%, Gemma 4 33% non-Latin, Gemma 3 12%, Ministral/Olmo/Nemotron ≤ 9%. A
+  Chinese-leaning residual leaves the English word ~8 slots to land in. This is
+  the entire difference between Qwen3-14B (fail) and Qwen3.5/3.6 (pass).
+- **The signs of a genuinely weak direction** are not "foreign tokens"; they
+  are punctuation and function words at the top (`-`, `(`, `、`, newline in
+  Gemma 4 `guilty`; Japanese particles も/の/は in its `sad`), rare single CJK
+  characters (Gemma 4 `exasperated`), and large disagreement between the
+  `norm_weight` and `no_norm` variants (Gemma 4 `nervous`: self-word rank 59,679
+  vs 8,126; every other model moves by a few places).
+- **Nemotron was gated without its final norm.** `find_final_norm_key` matches
+  the suffix `.norm.weight`; NemotronH stores `backbone.norm_f.weight`, so
+  `final_norm_stats` is `None` and `primary_variant` is `no_norm`. Recomputing
+  with the norm (mean 2.5, max 8.4) moves ranks by a few places and does not
+  change the outcome, but any future hybrid-Mamba checkpoint will hit the same
+  silent fallback.
+
+If the gate is revised, score the best rank of a per-emotion lexical family
+(and its translations) rather than exact-word presence in the top 30, and report
+a junk fraction (punctuation, function words, rare singleton characters) as the
+confusion signal.
+
 ## Granularity: single-token vs turn-mean
 
 **This is the single most important thing on this page.** The two statistics

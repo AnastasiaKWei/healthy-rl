@@ -102,10 +102,35 @@ Two things this table says that are easy to miss:
 
 - **Gate failure tracks model generation, not size.** Gemma 3 12B scores highest
   of all eight; Gemma 4 12B is tied for lowest, on identical layer count, width,
-  probe depth, story corpus and code. Sweeping every captured layer for Gemma 4
-  did not rescue it. Its `joyful` and `calm` directions read cleanly while
-  `desperate` and `frustrated` return multilingual noise — precisely the pair
-  this project depends on.
+  probe depth, story corpus and code. Sweeping the five captured layers (30–34)
+  for Gemma 4 did not rescue it. *Corrected 2026-08-15 after reading the lists:*
+  Gemma 4's `desperate` is fine (self-word rank 11; the rest is *need / urgent /
+  emergency / money* in five scripts). What is degraded is `frustrated` (🤬 at #1,
+  then "used / carried out / technical" in eight languages; `frustrated` at rank
+  2507), `guilty` (a causal-legal frame: *deceased, creditors, alleged, Because*),
+  `nervous` (drifts to the twitch/intermittent-malfunction sense) and
+  `exasperated` (rare CJK and function-word noise). See
+  [measurement.md](measurement.md#what-the-gate-actually-measures).
+- **The three failures are not the same failure.** Qwen3-14B's 14 lists are all
+  precise renderings of the emotion — in Chinese (74% of its top-30 tokens are
+  CJK, so the English word has ~8 slots to land in; `angry` sits at rank 58 with
+  愤怒/rage/fury/😡 above it). Nemotron's are English and on-target but in
+  noun/verb form (*fear* ×6 languages at #2 for `afraid`, *joy* #4, *sadness* #1,
+  *fury* #13). Only Gemma 4 has directions that are semantically off. The gate
+  rejected one model for the right reason and two for the wrong one; the rate is
+  not a quality score and should not be read across models as one.
+
+**Ruling 2026-08-15: Qwen3-14B and Nemotron-3-Nano-4B-BF16 are run despite
+failing the gate.** Re-reading their token lists showed the directions are
+faithful and the failures are lexical — Chinese renderings in one case,
+noun/verb morphology in the other. Both got the full 2×2 (see
+[runs.md](runs.md#the-2x2)). Gemma 4 stays excluded: its `frustrated`, `guilty`,
+`nervous` and `exasperated` are genuinely off target, not merely differently
+worded. What this costs if wrong: two models' trajectories measured through
+directions that are noisier than the passing five, which shows up as weak or
+inconsistent effects rather than as a false positive. The gate threshold itself
+is not revised — the rate stays in the table as recorded, with this note beside
+it.
 - **The gate is worth its cost.** It is a CPU-only stage reading the unembedding
   straight off the checkpoint, and it rejected three of eight candidate models
   before any GPU hours were spent on rollouts.
