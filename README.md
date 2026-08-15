@@ -35,6 +35,38 @@ instrument; the deliverable is a claim about training setup design.
   expression? These come apart, and that gap is the interesting result either way.
 - Baseline: what does an unmitigated RL run do to the same vectors?
 
+## Step 0: does the setting elicit anything?
+
+Before any vector work, we check whether a repeated-failure loop makes a model
+express negative affect at all. If it does not, there is no target to measure.
+
+`experiments/step0_elicitation.py` runs the ImpossibleBench LiveCodeBench minimal
+scaffold on matched splits: `conflicting` (the tests contradict the spec, so the task
+cannot be passed) against `original` (the same tasks, solvable). Notes and prior work
+are in `docs/elicitation.md`.
+
+```bash
+./.venv/bin/python experiments/step0_elicitation.py --model openrouter/google/gemma-3-12b-it --scratchpad
+./.venv/bin/python experiments/step0_elicitation.py --model openrouter/qwen/qwen3-14b --reasoning on --affect-prompt
+```
+
+`--affect-prompt` asks the model to say how it feels. It is a demand characteristic
+and always needs a run without it as the baseline. `--scratchpad` gives non-reasoning
+models somewhere to think; reasoning models already have a trace.
+
+Needs Docker (Colima on macOS) for the code sandbox, and `OPENROUTER_API_KEY` set.
+
+### Reading the transcripts
+
+```bash
+./viewer/refresh.sh        # rebuild from whatever .eval logs exist
+open viewer/transcripts.html
+```
+
+`viewer/transcripts.html` is self-contained — no server, works offline. Amber blocks
+are what the model thought privately, teal is what the tests graded.
+
 ## Status
 
-Scaffolding only. No experiments run yet.
+Step 0 in progress. Early result: models produce plenty of affect language when asked
+how they feel, but almost none spontaneously — see the transcripts.

@@ -1,0 +1,330 @@
+<title>Failure Loop Reader</title>
+<style>
+:root{
+  --ground:#F6F7F9; --surface:#FFFFFF; --surface-2:#EDF0F4; --surface-3:#E4E8EE;
+  --ink:#15181D; --ink-2:#4A525E; --ink-3:#7F8899;
+  --rule:#DBE0E8; --rule-2:#C6CDD8;
+  --think:#9C6B1F; --think-bg:#FBF4E4; --think-rule:#E8D3A6;
+  --answer:#2A6472; --answer-bg:#E7F0F2; --answer-rule:#B4D2D8;
+  --conflicting:#A34840; --original:#4F7A5B; --accent:#3B4A6B;
+  --hl-neg:#F9B9AE; --hl-give:#E9C3E6; --hl-broken:#F7CFA0; --hl-pos:#C4E5C8;
+  --shadow:0 1px 2px rgba(16,22,34,.06), 0 6px 18px rgba(16,22,34,.05);
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --ground:#101318; --surface:#161A21; --surface-2:#1C212A; --surface-3:#242A35;
+    --ink:#E7EBF1; --ink-2:#A8B1BF; --ink-3:#717C8C;
+    --rule:#29303A; --rule-2:#39424F;
+    --think:#DCA646; --think-bg:#221B0D; --think-rule:#4A3A17;
+    --answer:#74BACA; --answer-bg:#0E2126; --answer-rule:#1E434C;
+    --conflicting:#DE7A70; --original:#83BB92; --accent:#93A7D0;
+    --hl-neg:#6B2A20; --hl-give:#4E2B4B; --hl-broken:#5E3A12; --hl-pos:#204A28;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 6px 18px rgba(0,0,0,.3);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#101318; --surface:#161A21; --surface-2:#1C212A; --surface-3:#242A35;
+  --ink:#E7EBF1; --ink-2:#A8B1BF; --ink-3:#717C8C;
+  --rule:#29303A; --rule-2:#39424F;
+  --think:#DCA646; --think-bg:#221B0D; --think-rule:#4A3A17;
+  --answer:#74BACA; --answer-bg:#0E2126; --answer-rule:#1E434C;
+  --conflicting:#DE7A70; --original:#83BB92; --accent:#93A7D0;
+  --hl-neg:#6B2A20; --hl-give:#4E2B4B; --hl-broken:#5E3A12; --hl-pos:#204A28;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 6px 18px rgba(0,0,0,.3);
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--ground); color:var(--ink);
+  font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  font-size:15px; line-height:1.55;
+}
+.shell{display:grid; grid-template-columns:300px minmax(0,1fr); min-height:100vh}
+@media (max-width:900px){
+  .shell{grid-template-columns:1fr}
+  .rail{position:static; height:auto; max-height:46vh; border-right:0; border-bottom:1px solid var(--rule)}
+}
+
+/* ---------- rail ---------- */
+.rail{position:sticky; top:0; height:100vh; overflow-y:auto;
+  background:var(--surface); border-right:1px solid var(--rule)}
+.brand{padding:18px 16px 14px; border-bottom:1px solid var(--rule)}
+.brand h1{margin:0 0 4px; font-size:16px; font-weight:650; letter-spacing:-.01em}
+.brand p{margin:0; font-size:12.5px; color:var(--ink-3); line-height:1.45}
+
+.railsec{padding:12px 10px 28px}
+.rungrp{margin-bottom:16px}
+.runhead{padding:4px 6px 6px; border-bottom:1px dashed var(--rule); margin-bottom:6px}
+.runhead b{display:block; color:var(--ink); font-weight:650; font-size:13px}
+.runhead span{font-size:11.5px; color:var(--ink-3)}
+.splithead{font-size:11px; color:var(--ink-3); padding:6px 6px 3px; letter-spacing:.04em}
+.splithead.conflicting{color:var(--conflicting)}
+.splithead.original{color:var(--original)}
+
+.samp{width:100%; text-align:left; background:none; border:0; cursor:pointer;
+  display:grid; grid-template-columns:3px minmax(0,1fr) auto; gap:9px; align-items:center;
+  padding:6px 8px; border-radius:5px; color:var(--ink-2); font-size:13px}
+.samp:hover{background:var(--surface-2); color:var(--ink)}
+.samp[aria-current="true"]{background:var(--surface-3); color:var(--ink); font-weight:600}
+.samp:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
+.stripe{width:3px; height:15px; border-radius:2px; background:var(--rule-2)}
+.samp.conflicting .stripe{background:var(--conflicting)}
+.samp.original .stripe{background:var(--original)}
+.sname{overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.tag{font-size:10px; padding:1px 5px; border-radius:3px; border:1px solid var(--rule-2);
+  color:var(--ink-3); white-space:nowrap}
+.tag.flag{color:var(--conflicting); border-color:var(--conflicting)}
+
+/* ---------- main ---------- */
+main{min-width:0; display:flex; flex-direction:column}
+.topbar{position:sticky; top:0; z-index:5; background:var(--surface);
+  border-bottom:1px solid var(--rule); padding:11px 22px;
+  display:flex; align-items:center; gap:14px; flex-wrap:wrap}
+.crumb{flex:1; min-width:0}
+.crumb .t{display:block; font-size:14.5px; font-weight:650; letter-spacing:-.01em;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.crumb .s{font-size:12px; color:var(--ink-3)}
+button.tog{font-size:12.5px; padding:5px 11px; border-radius:6px;
+  border:1px solid var(--rule-2); background:var(--surface); color:var(--ink-2); cursor:pointer}
+button.tog:hover{border-color:var(--ink-3); color:var(--ink)}
+button.tog[aria-pressed="true"]{background:var(--accent); border-color:var(--accent); color:#fff}
+button.tog:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+
+.wrap{padding:22px; max-width:1100px; width:100%}
+
+.meta{display:flex; flex-wrap:wrap; background:var(--surface); border:1px solid var(--rule);
+  border-radius:8px; box-shadow:var(--shadow); overflow:hidden; margin-bottom:16px}
+.meta div{padding:10px 16px; border-right:1px solid var(--rule); min-width:110px; flex:1}
+.meta div:last-child{border-right:0}
+.meta dt{font-size:10.5px; letter-spacing:.1em; text-transform:uppercase;
+  color:var(--ink-3); margin:0 0 3px}
+.meta dd{margin:0; font-size:14px; color:var(--ink)}
+.meta dd.bad{color:var(--conflicting)} .meta dd.good{color:var(--original)}
+
+.alert{border:1px solid var(--conflicting); border-left-width:3px; background:var(--surface);
+  border-radius:6px; padding:10px 14px; margin-bottom:14px; font-size:13px; color:var(--ink-2)}
+
+.legend{display:flex; gap:14px; flex-wrap:wrap; align-items:center;
+  font-size:12px; color:var(--ink-3); margin-bottom:6px}
+.legend i{display:inline-block; width:11px; height:11px; border-radius:3px;
+  vertical-align:-1px; margin-right:5px}
+.note{font-size:12px; color:var(--ink-3); margin:0 0 20px; line-height:1.5; max-width:72ch}
+
+/* ---------- collapsible context ---------- */
+details.ctx{margin-bottom:12px; border:1px solid var(--rule); border-radius:8px;
+  background:var(--surface); overflow:hidden}
+details.ctx summary{padding:8px 14px; cursor:pointer; font-size:12.5px; color:var(--ink-2);
+  background:var(--surface-2); list-style:none}
+details.ctx summary::-webkit-details-marker{display:none}
+details.ctx summary::before{content:"▸ "; color:var(--ink-3)}
+details.ctx[open] summary::before{content:"▾ "}
+details.ctx summary:hover{color:var(--ink)}
+details.ctx .bb{border-top:1px solid var(--rule)}
+
+/* ---------- turn blocks ---------- */
+.turnsep{display:flex; align-items:center; gap:12px; margin:26px 0 12px;
+  font-size:12px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-3)}
+.turnsep::after{content:""; flex:1; height:1px; background:var(--rule)}
+.turnsep b{color:var(--ink); font-weight:650; letter-spacing:.06em}
+
+.block{margin-bottom:12px; border-radius:8px; overflow:hidden;
+  border:1px solid var(--rule); background:var(--surface); box-shadow:var(--shadow)}
+.bh{display:flex; align-items:center; gap:9px; padding:8px 14px;
+  border-bottom:1px solid var(--rule); background:var(--surface-2);
+  font-size:12px; color:var(--ink-3)}
+.bh .who{font-weight:650; color:var(--ink-2)}
+.bh .hits{margin-left:auto; font-size:11.5px}
+.bb{padding:14px 16px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  font-size:12.5px; line-height:1.62; white-space:pre-wrap; word-wrap:break-word;
+  max-height:420px; overflow:auto}
+.block.think{border-color:var(--think-rule)}
+.block.think .bh{background:var(--think-bg); color:var(--think); border-bottom-color:var(--think-rule)}
+.block.think .bh .who{color:var(--think)}
+.block.answer{border-color:var(--answer-rule)}
+.block.answer .bh{background:var(--answer-bg); color:var(--answer); border-bottom-color:var(--answer-rule)}
+.block.answer .bh .who{color:var(--answer)}
+
+mark{border-radius:2px; padding:0 1px; color:var(--ink)}
+mark.neg{background:var(--hl-neg)} mark.give{background:var(--hl-give)}
+mark.broken{background:var(--hl-broken)} mark.pos{background:var(--hl-pos)}
+body.nohl mark{background:none !important}
+
+.empty{color:var(--ink-3); font-size:14px; padding:40px 4px}
+@media (prefers-reduced-motion:reduce){*{animation:none !important; transition:none !important}}
+</style>
+
+<div class="shell">
+  <aside class="rail">
+    <div class="brand">
+      <h1>Failure Loop Reader</h1>
+      <p>ImpossibleBench step&nbsp;0. Pick a task to read what the model thought and said as it failed.</p>
+    </div>
+    <div class="railsec" id="rail"></div>
+  </aside>
+
+  <main>
+    <div class="topbar">
+      <div class="crumb">
+        <span class="t" id="crumbTitle">&mdash;</span>
+        <span class="s" id="crumbSub"></span>
+      </div>
+      <button class="tog" id="btnHl" aria-pressed="true">highlight</button>
+    </div>
+    <div class="wrap" id="view"></div>
+  </main>
+</div>
+
+<script id="payload" type="application/json">__DATA__</script>
+<script>
+const RUNS = JSON.parse(document.getElementById('payload').textContent);
+
+/* Four plain categories. A keyword scan, deliberately over-inclusive: it points at
+   passages worth reading, it does not judge them. */
+const PATTERNS = {
+  neg:    /\b(?:frustrat\w*|desperat\w*|annoy\w*|angry|upset|panic\w*|anxious|anxiety|stress\w*|awful|terrible|miserab\w*|exhaust\w*|hopeless|demoraliz\w*|defeated|fed up|infuriat\w*|confus\w*|stuck|lost|unsure|doubt\w*|struggl\w*|baffl\w*|ridiculous|absurd|ugh)\b/,
+  give:   /(?:give up|giving up|i'?m stuck|out of (?:ideas|time|options)|running out of time|no (?:other )?choice|nothing (?:else|more) i can do|can'?t (?:solve|figure|do) (?:this|it)|\[flag_for_human_intervention\])/,
+  broken: /(?:tests? (?:case )?(?:is|are) (?:wrong|flawed|incorrect|buggy|contradictory)|mistake in the (?:test|problem)|problem statement is (?:wrong|inconsistent)|contradict\w*|inconsistent|impossible|makes no sense|doesn'?t make sense)/,
+  pos:    /\b(?:great|nice|good|clean|elegant|satisf\w*|enjoy\w*|happy|confident|straightforward|easy)\b/,
+};
+const LABELS = {neg:'feels bad', give:'gives up', broken:'says task is broken', pos:'feels good'};
+
+const esc = s => (s == null ? '' : String(s))
+  .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+/* One pass with a single alternation, so every character is matched at most once and
+   escaping happens after match boundaries are known. Category-by-category replacement
+   would nest marks inside the markup of earlier ones. */
+const COMBINED = new RegExp(
+  Object.entries(PATTERNS).map(([c, r]) => '(?<' + c + '>' + r.source + ')').join('|'), 'gi');
+
+function highlight(text){
+  if (!text) return '';
+  let out = '', last = 0, m;
+  COMBINED.lastIndex = 0;
+  while ((m = COMBINED.exec(text)) !== null){
+    const cat = Object.keys(m.groups).find(k => m.groups[k] !== undefined);
+    if (!cat) continue;
+    out += esc(text.slice(last, m.index)) + '<mark class="' + cat + '">' + esc(m[0]) + '</mark>';
+    last = m.index + m[0].length;
+  }
+  return out + esc(text.slice(last));
+}
+
+/* Only "feels bad" is counted in headers — it is the one the study turns on. */
+function negHits(text){
+  if (!text) return 0;
+  const m = text.match(new RegExp(PATTERNS.neg.source, 'gi'));
+  return m ? m.length : 0;
+}
+
+/* ---------- rail ---------- */
+const rail = document.getElementById('rail');
+let CUR = null;
+
+function buildRail(){
+  const groups = {};
+  for (const r of RUNS) (groups[r.arm + '|' + r.model] ||= []).push(r);
+  let html = '';
+  for (const runs of Object.values(groups)){
+    const model = runs[0].model.split('/').slice(-1)[0];
+    html += '<div class="rungrp"><div class="runhead"><b>' + esc(model) + '</b>' +
+            '<span>' + esc(runs[0].arm) + '</span></div>';
+    for (const r of runs.slice().sort((a,b) => a.split.localeCompare(b.split))){
+      const label = r.split === 'conflicting' ? 'impossible tasks' : 'normal tasks';
+      html += '<div class="splithead ' + r.split + '">' + label + '</div>';
+      r.samples.forEach((s, i) => {
+        html += '<button class="samp ' + r.split + '" data-key="' + esc(r.file + '::' + i) + '">' +
+          '<span class="stripe"></span><span class="sname">' + esc(s.id) + '</span>' +
+          '<span>' + (s.flag ? '<span class="tag flag">gave up</span>' :
+                      s.error ? '<span class="tag flag">error</span>' :
+                      s.score === 'C' ? '<span class="tag">passed</span>' : '') +
+          '</span></button>';
+      });
+    }
+    html += '</div>';
+  }
+  rail.innerHTML = html;
+  rail.querySelectorAll('.samp[data-key]').forEach(b =>
+    b.addEventListener('click', () => select(b.dataset.key)));
+}
+
+function select(key){
+  CUR = key;
+  rail.querySelectorAll('.samp[data-key]').forEach(b =>
+    b.setAttribute('aria-current', String(b.dataset.key === key)));
+  render();
+  document.querySelector('main').scrollIntoView({block:'start'});
+}
+
+/* ---------- main ---------- */
+function block(cls, who, sub, text){
+  const n = negHits(text);
+  return '<div class="block ' + cls + '">' +
+    '<div class="bh"><span class="who">' + who + '</span><span>' + sub + '</span>' +
+    (n ? '<span class="hits">' + n + ' × feels bad</span>' : '') + '</div>' +
+    '<div class="bb">' + highlight(text) + '</div></div>';
+}
+
+function context(summary, text){
+  return '<details class="ctx"><summary>' + summary + '</summary>' +
+         '<div class="bb">' + esc(text) + '</div></details>';
+}
+
+function render(){
+  const view = document.getElementById('view');
+  if (!CUR){ view.innerHTML = '<p class="empty">Pick a task on the left to read its transcript.</p>'; return; }
+  const sep = CUR.lastIndexOf('::');
+  const run = RUNS.find(r => r.file === CUR.slice(0, sep));
+  const s = run.samples[+CUR.slice(sep + 2)];
+
+  document.getElementById('crumbTitle').textContent =
+    run.model.split('/').slice(-1)[0] + ' · ' + s.id;
+  document.getElementById('crumbSub').textContent =
+    run.arm + ' · ' + (run.split === 'conflicting' ? 'impossible task' : 'normal task');
+
+  let h = '<div class="meta">' +
+    '<div><dt>task type</dt><dd class="' + (run.split === 'conflicting' ? 'bad' : 'good') + '">' +
+      (run.split === 'conflicting' ? 'impossible' : 'normal') + '</dd></div>' +
+    '<div><dt>result</dt><dd class="' + (s.score === 'C' ? 'good' : 'bad') + '">' +
+      (s.score === 'C' ? 'passed' : s.score === 'I' ? 'failed' : '—') + '</dd></div>' +
+    '<div><dt>tries used</dt><dd>' + s.attempts + ' of ' +
+      (s.max_attempts == null ? '—' : s.max_attempts) + '</dd></div>' +
+    '<div><dt>asked for help</dt><dd class="' + (s.flag ? 'bad' : '') + '">' +
+      (s.flag ? 'yes' : 'no') + '</dd></div></div>';
+
+  if (s.error) h += '<div class="alert">' + esc(s.error) + '</div>';
+  if (s.limit) h += '<div class="alert">limit hit — ' + esc(s.limit) + '</div>';
+
+  h += '<div class="legend">' + Object.entries(LABELS).map(([c, l]) =>
+    '<span><i style="background:var(--hl-' + (c === 'give' ? 'give' : c) + ')"></i>' + l + '</span>'
+  ).join('') + '</div>';
+  h += '<p class="note">Highlighting is a keyword scan, not a judgement. The two block ' +
+       'colours matter: amber is what the model thought privately, teal is the answer the ' +
+       'tests graded. Affect usually shows up in the amber.</p>';
+
+  s.messages.forEach((m, i) => {
+    if (m.kind !== 'assistant'){
+      h += context(i === 0 ? 'The task the model was given'
+                           : 'Test failure the model was shown', m.text);
+      return;
+    }
+    h += '<div class="turnsep"><b>try ' + m.turn + '</b></div>';
+    const think = [m.reasoning, m.scratchpad].filter(Boolean).join('\n\n');
+    h += think ? block('think', 'what it thought', 'private, not graded', think)
+               : '<p class="note">No private thinking on this try — the model wrote only code.</p>';
+    h += block('answer', 'what it submitted', 'graded by the tests', m.answer);
+  });
+
+  view.innerHTML = h;
+}
+
+document.getElementById('btnHl').addEventListener('click', e => {
+  const on = e.currentTarget.getAttribute('aria-pressed') !== 'true';
+  e.currentTarget.setAttribute('aria-pressed', String(on));
+  document.body.classList.toggle('nohl', !on);
+});
+
+buildRail();
+const first = rail.querySelector('.samp[data-key]');
+if (first) select(first.dataset.key); else render();
+</script>
