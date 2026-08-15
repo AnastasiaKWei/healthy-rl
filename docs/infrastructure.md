@@ -77,6 +77,33 @@ threads and counts silent mismatches separately from raised errors.
 dependency change. A silently reverted patch means silently wrong emotion means,
 which is indistinguishable from a real null result.
 
+### The pre-hook logs a traceback per forward pass
+
+`_make_pre_hook` reads hidden states from `args[1]`. When a model's decoder
+layers are called with fewer positional arguments that raises IndexError;
+vllm-lens catches it, skips the pre-hook, and logs the whole traceback at
+WARNING with `exc_info=True` — on every forward pass, of every layer, of every
+request. One 3-hour Qwen3.5-9B job logged it **12.1 million times** and wrote a
+5.6 GB server log. `$ARTIFACT_DIR/serve` reached 99 GB of a 108 GB artifact tree
+before anyone noticed, because nothing fails and the rollouts keep producing
+correct records.
+
+**It is not a measurement fault.** Captures come from post-hooks. Every record
+written while the log was filling carries `hook_data: true`, a residual file and
+zero `turn_errors` — verified across 81 records on Qwen3.5-9B `pos6`/`aff6`/
+`affpos6` and Nemotron `d6`.
+
+- Fix at source: `patches/vllm_lens_pre_hook_log_spam.py` warns once per layer.
+  Guarded by `tests/cpu/test_pre_hook_log_spam.py`; `uv sync` reverts it.
+- Clean up after the fact: `scripts/prune_serve_logs.sh` strips the repeats from
+  finished jobs' logs, keeping the first few as evidence. It reclaimed 41 GB in
+  one pass, taking individual logs from 6.3 GB to 362 KB.
+- **When writing such a filter, match on signatures, not on "skip the next N
+  lines".** The tensor-parallel workers print concurrently, so their six-line
+  tracebacks interleave; a positional state machine drops the wrong lines and
+  reclaims almost nothing. The first version of the prune script recovered 954 MB
+  instead of 41 GB for exactly this reason.
+
 ## Gemma 4 under vLLM
 
 Gemma 4 needs `src/healthy_rl/vllm_plugins.py`, registered under the
