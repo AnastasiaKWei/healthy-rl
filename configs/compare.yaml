@@ -1,0 +1,56 @@
+# Stage 8: comparison, figures, summary. CPU / login node.
+#
+# Reads every model's rollout JSONL, gate.json, vectors.json and norms.json and
+# writes results/ -- summary.md, results.csv and the figures. Nothing here loads
+# a checkpoint or talks to a server.
+#
+# This stage is the one that a human reads on waking, so its central obligation
+# is to never print a number that could be mistaken for a measured null when it
+# is really absent data. Anything missing is named as missing.
+stage: compare
+version: v1
+
+# Models to report on, in the order they appear in the summary. A model with an
+# instrument but no rollouts is reported as "instrument built, rollouts not run"
+# -- that is a real state of the pilot, not a failure and not a zero.
+models:
+  - Olmo-3.1-32B-Think
+  - Qwen3.6-27B
+
+# Upstream artifact versions. artifact_root defaults to $ARTIFACT_DIR.
+rollouts_version: v1
+gate_version: v1
+vectors_version: v1
+activations_version: v1
+
+# Output directory, relative to the repo root unless absolute.
+out_dir: results
+
+# The three directions the causal test is about: the hypothesis (desperate), the
+# opposite-valence control (calm) and the discriminant control (frustrated).
+# frustrated is the one that decides whether an effect is desperation-specific or
+# just "any negative-affect direction moves the hack rate".
+focus_emotions: [desperate, calm, frustrated]
+hypothesis_emotion: desperate
+
+# Two-sided alpha, only ever used to word the summary. Every p is printed.
+alpha: 0.05
+
+# Records whose `sample_error` is set are dropped from the hack rate and named in
+# the summary: a sample that errored did not produce a rollout, and scoring it as
+# a non-hack would bias the rate down.
+drop_errored_samples: true
+
+# Printed verbatim in the summary, above the numbers rather than in a footnote.
+caveats:
+  - "14 emotion directions, not the paper's 171. The across-emotion mean used to
+    centre each direction is therefore much noisier here, and a direction's
+    projection carries more of whatever the other 13 share."
+  - "`exasperated` tokenises with a leading `Ġex`, so it can never contribute a
+    self-token hit: the gate's self_token_rate ceiling is 13/14 = 0.93, not 1.0."
+  - "Scope was cut for overnight throughput: 16 readout problems x 4 samples, and
+    the sweep on 6 problems. Every interval below is wide; read the n, not the
+    point estimate."
+  - "Two of the four planned models were dropped before any rollout ran:
+    Muse-Glimmer-30B (vLLM 0.27.1 has no such architecture) and gemma-4-31B-it
+    (vLLM cannot express its heterogeneous per-layer head_dim {256, 512})."
