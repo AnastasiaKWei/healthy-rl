@@ -15,3 +15,12 @@ steer_scale: 0.5
 norm_match: true
 temperature: 0.0
 request_timeout_s: 600
+client_max_attempts: 5
+client_backoff_s: 1.0
+
+# The steering check measures the residual stream, not the generated text.
+# norm_match adds scale*||h|| per token, so the relative change at probe_layer must
+# come out at steer_scale; below the probe layer nothing may move.
+steer_probe_rel_tol: 0.25    # |measured - scale| <= this fraction of scale
+steer_unchanged_tol: 0.02    # allowed relative change at probe_layer - 1
+steer_min_downstream: 0.05   # required relative change at probe_layer + 1

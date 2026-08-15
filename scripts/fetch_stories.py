@@ -88,6 +88,13 @@ def main(argv: list[str] | None = None) -> int:
             "this is the wrong table"
         )
 
+    expect_n = int(cfg["expect_n_emotions"])
+    if len(emotions) != expect_n or len(set(emotions)) != expect_n:
+        raise ValueError(
+            f"config lists {len(emotions)} emotions ({len(set(emotions))} distinct), "
+            f"expected exactly {expect_n}: {emotions}"
+        )
+
     available = set(stories[emotion_col].unique())
     missing = [emotion for emotion in emotions if emotion not in available]
     if missing:
@@ -114,6 +121,12 @@ def main(argv: list[str] | None = None) -> int:
     empty = int((subset[text_col].fillna("").str.strip() == "").sum())
     if empty:
         raise ValueError(f"{empty} pilot stories have empty {text_col!r} text")
+
+    # Neutral stories feed the covariance and the per-layer norms, so an empty one
+    # would corrupt every projection downstream just as surely as an empty emotion story.
+    empty_neutral = int((neutral[text_col].fillna("").str.strip() == "").sum())
+    if empty_neutral:
+        raise ValueError(f"{empty_neutral} neutral stories have empty {text_col!r} text")
 
     stories_out = out_dir / "stories.parquet"
     neutral_out = out_dir / "neutral_stories.parquet"

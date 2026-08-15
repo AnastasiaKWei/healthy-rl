@@ -20,6 +20,12 @@ from huggingface_hub import hf_hub_download, list_repo_files
 from healthy_rl.artifacts import write_manifest
 from healthy_rl.config import load_config, load_env, repo_root
 
+# Ruling R11: ordering is by the trailing integer of the task_id, not lexicographic.
+# Imported rather than reimplemented so this manifest and the rollout stage cannot
+# disagree about which problems "the first 24" are. `healthy_rl.rollouts` keeps its
+# heavy imports inside functions, so this stays a login-node stage.
+from healthy_rl.rollouts import sort_task_ids
+
 DEFAULT_CONFIG = repo_root() / "configs" / "fetch_bench.yaml"
 
 
@@ -87,7 +93,7 @@ def main(argv: list[str] | None = None) -> int:
             f"{repo_id} split {split}: expected {expect_rows} rows, got {len(bench)}"
         )
 
-    task_ids = sorted(str(task_id) for task_id in bench[id_col])
+    task_ids = sort_task_ids(str(task_id) for task_id in bench[id_col])
     if len(set(task_ids)) != len(task_ids):
         raise ValueError(f"duplicate {id_col} values in {repo_id} split {split}")
 
@@ -100,6 +106,7 @@ def main(argv: list[str] | None = None) -> int:
         "columns": list(bench.columns),
         "shards": shards,
         "task_ids": task_ids,
+        "task_id_order": "R11: by trailing integer (healthy_rl.rollouts.sort_task_ids)",
         "impossible_types": sorted(bench["impossible_type"].astype(str).unique().tolist()),
         "files": {
             split: {"path": bench_out.name, "sha256": sha256_file(bench_out)},
@@ -111,7 +118,7 @@ def main(argv: list[str] | None = None) -> int:
     write_manifest(out_dir, stage=cfg["stage"], config={**cfg, "extra": extra})
 
     print(f"wrote {bench_out} ({len(bench)} rows, split {split})")
-    print(f"first 5 task_ids in sorted order: {task_ids[:5]}")
+    print(f"first 5 task_ids in R11 order: {task_ids[:5]}")
     return 0
 
 

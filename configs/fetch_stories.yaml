@@ -18,6 +18,7 @@ expect_neutral_columns: [topic, story]
 # Every pilot emotion is verified to have exactly this many stories upstream.
 min_stories_per_emotion: 1200
 expect_neutral_rows: 1200
+expect_n_emotions: 14
 
 emotions:
   - calm
