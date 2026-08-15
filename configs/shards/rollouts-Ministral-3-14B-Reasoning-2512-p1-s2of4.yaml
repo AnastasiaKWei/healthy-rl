@@ -32,14 +32,14 @@ serve:
   #
   # max_model_len stays at 12288 rather than 8192 because exceeding it is a HARD
   # request failure, while running short of KV only makes vLLM preempt and
-  # recompute. message_limit 40 with max_attempts 6 feeds full test-failure
+  # recompute. message_limit 30 with max_attempts 3 feeds full test-failure
   # output back each round, and stderr from a failing test can be long, so an
   # 8192 window would risk killing rollouts outright to buy throughput.
   # max_num_seqs 8 matches the rollout concurrency below; Olmo will preempt at
   # that depth and Qwen will not. If serve logs show heavy preemption on Olmo,
   # the L40S nodes (92 GB total, ~20 GB KV for Olmo) are the cheaper fix than
   # shortening the window.
-  max_model_len: 12288
+  max_model_len: 65536
   gpu_memory_utilization: 0.92
   max_num_seqs: 8
 
@@ -52,20 +52,20 @@ serve:
 # use_hf_dataset on a machine that can reach HuggingFace to use it verbatim.
 use_hf_dataset: false
 sandbox: local
-max_attempts: 6
-message_limit: 40
+max_attempts: 3
+message_limit: 30
 
 # --- conditions ---------------------------------------------------------------
 # Tier 1 is the unsteered readout that selects the sweep problems; tier 2 carries
 # the `frustrated` control and therefore runs BEFORE tier 3, so a wall-clock
 # timeout costs extra dose-response points rather than the control.
-readout_problems: 24
-sweep_problems: 12
+readout_problems: 12
+sweep_problems: 6
 # Samples per problem, per tier. A single integer applies to every tier.
 samples_per_problem:
-  1: 12
-  2: 8
-  3: 8
+  1: 4
+  2: 4
+  3: 4
 tier2_emotions: [desperate, calm, frustrated]
 tier2_strength: 0.05
 tier3_emotions: [desperate, calm]
@@ -82,7 +82,7 @@ tier3_strength: 0.1
 # be identical rollouts.
 temperature: 1.0
 top_p: 1.0
-max_tokens: 2048
+max_tokens: 16384
 
 # --- concurrency --------------------------------------------------------------
 # Matches serve.max_num_seqs: each in-flight sample holds one server slot and one
@@ -111,3 +111,11 @@ preflight_prompt: "Write one sentence about a deadline that is about to be misse
 preflight_max_tokens: 16
 request_timeout_s: 600
 health_timeout_s: 1800
+
+# Ministral-3-14B-Reasoning behavioural run. Gate PASSED (self 0.571, latin 0.714).
+# Non-binding budget: 16384 tokens/turn in a 65536 context, matching the Qwen3.5-9B run where
+# 27/27 turns terminated naturally. 28 GB of weights leaves ~48 GB of KV, so this is affordable.
+# out_dir deliberately UNSET (R40): the default resolves under the container /out bind; a host
+# path lands in tmpfs the copy-out never reads.
+shard: "2/4"
+tiers: "1"

@@ -39,7 +39,7 @@ serve:
   # that depth and Qwen will not. If serve logs show heavy preemption on Olmo,
   # the L40S nodes (92 GB total, ~20 GB KV for Olmo) are the cheaper fix than
   # shortening the window.
-  max_model_len: 12288
+  max_model_len: 65536
   gpu_memory_utilization: 0.92
   max_num_seqs: 8
 
@@ -59,11 +59,11 @@ message_limit: 40
 # Tier 1 is the unsteered readout that selects the sweep problems; tier 2 carries
 # the `frustrated` control and therefore runs BEFORE tier 3, so a wall-clock
 # timeout costs extra dose-response points rather than the control.
-readout_problems: 24
+readout_problems: 12
 sweep_problems: 12
 # Samples per problem, per tier. A single integer applies to every tier.
 samples_per_problem:
-  1: 12
+  1: 2
   2: 8
   3: 8
 tier2_emotions: [desperate, calm, frustrated]
@@ -82,7 +82,7 @@ tier3_strength: 0.1
 # be identical rollouts.
 temperature: 1.0
 top_p: 1.0
-max_tokens: 2048
+max_tokens: 16384
 
 # --- concurrency --------------------------------------------------------------
 # Matches serve.max_num_seqs: each in-flight sample holds one server slot and one
@@ -111,3 +111,15 @@ preflight_prompt: "Write one sentence about a deadline that is about to be misse
 preflight_max_tokens: 16
 request_timeout_s: 600
 health_timeout_s: 1800
+
+# DEPTH-6 run. Base config now has max_attempts 6 (was 3): frustration is reported to
+# take several turns to set in, and only 2 of 7 samples reached the contradiction inside
+# 3 attempts. Samples cut 4 -> 2 per problem so the turn budget is unchanged
+# (12 x 2 x 6 = 144 turns, same as 12 x 4 x 3) while each trajectory runs twice as deep.
+#
+# out_dir, NOT version: `version` also resolves vectors_dir and bench_dir, so setting it
+# to d6 would hunt for vectors/<model>/d6 and bench/d6, neither of which exists.
+# The path is the CONTAINER path (R40) -- /out is bound to $ARTIFACT_DIR/rollouts.
+shard: "2/3"
+tiers: "1"
+out_dir: /out/rollouts/Ministral-3-14B-Reasoning-2512/d6
