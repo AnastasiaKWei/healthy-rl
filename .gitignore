@@ -27,3 +27,6 @@ results/
 
 # OS
 .DS_Store
+
+# Container images (multi-GB build artifacts, rebuilt from apptainer/*.def)
+*.sif

@@ -1,0 +1,14 @@
+# Server flags for the stage-0 smoke run (serve.slurm --config).
+# Separate from configs/smoke.yaml, which is the *stage's* config: serve.slurm
+# takes server flags from --config and stage flags from --stage script:config.
+#
+# max_model_len is tiny on purpose. Smoke generates at most 32 tokens, and a
+# small window leaves the KV cache almost entirely free, which is what lets a
+# 66-69 GB checkpoint fit on a 2x40 GB node at all.
+stage: serve_smoke
+version: v1
+max_model_len: 2048
+# vllm-lens forces enforce_eager=True, so no CUDA graph memory is reserved and
+# a higher utilisation is safe here than would be usual.
+gpu_memory_utilization: 0.95
+max_num_seqs: 16
