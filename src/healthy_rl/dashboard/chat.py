@@ -26,15 +26,24 @@ class ChatSession:
         events: queue.Queue = queue.Queue()
         box: dict[str, Any] = {}
         def work():
-            box["gen"] = generate_with_heartbeat(self.engine, self.messages, max_tokens=self.max_tokens,
-                                                 temperature=self.temperature, events=events, attempt=self.turn + 1)
-            events.put(None)
+            try:
+                box["gen"] = generate_with_heartbeat(self.engine, self.messages, max_tokens=self.max_tokens,
+                                                     temperature=self.temperature, events=events, attempt=self.turn + 1)
+            except BaseException as exc:  # reported below; never leave send() blocked
+                box["exc"] = exc
+            finally:
+                events.put(None)
         threading.Thread(target=work, daemon=True).start()
         while True:
             ev = events.get()
             if ev is None:
                 break
             yield ev
+        if "gen" not in box:
+            exc = box.get("exc")
+            detail = f"{type(exc).__name__}: {exc}" if exc is not None else "engine produced no generation"
+            yield {"event": "error", "data": {"message": detail}}
+            return
         gen = box["gen"]
         nei = self._non_empty if gen.n_generated > 0 else None
         if gen.n_generated > 0:

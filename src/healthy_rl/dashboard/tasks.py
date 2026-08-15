@@ -17,6 +17,7 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 from healthy_rl.dashboard.generation import Generation
+from healthy_rl.dashboard.sandbox_cli import feedback_message
 from healthy_rl.rollouts import SCRATCHPAD_SYSTEM_PROMPT, Vectors, robust_find_code
 
 HEARTBEAT_S = 1.0
@@ -64,14 +65,27 @@ def public_record(rec: dict) -> dict:
 
 
 def generate_with_heartbeat(engine, messages, *, max_tokens, temperature, events, attempt) -> Generation:
+    """Run one engine call on a worker thread, emitting a heartbeat every second.
+
+    ``Engine.generate`` returns an error ``Generation`` rather than raising, but an
+    engine that raises anyway must not be reported as a clean finish: the worker's
+    exception is carried back and re-raised here, on the caller's thread.
+    """
     box: dict[str, Any] = {}
     def work():
-        box["gen"] = engine.generate(messages, max_tokens=max_tokens, temperature=temperature)
+        try:
+            box["gen"] = engine.generate(messages, max_tokens=max_tokens, temperature=temperature)
+        except BaseException as exc:  # re-raised on the calling thread below
+            box["exc"] = exc
     t = threading.Thread(target=work, daemon=True); t.start()
     started = time.monotonic()
     while t.is_alive():
         events.put({"event": "generating", "data": {"attempt": attempt, "elapsed_s": round(time.monotonic() - started, 1)}})
         t.join(HEARTBEAT_S)
+    if "gen" not in box:
+        exc = box.get("exc")
+        detail = f"{type(exc).__name__}: {exc}" if exc is not None else "no generation and no exception"
+        raise RuntimeError(f"engine.generate failed: {detail}") from exc
     return box["gen"]
 
 
@@ -91,9 +105,18 @@ class TaskRun:
         self._non_empty = 0
 
     # -- control -------------------------------------------------------------
-    def resume(self, intervention: str | None) -> None:
+    def resume(self, intervention: str | None) -> bool:
+        """Accept an intervention and release the pause. Ignored (``False``) unless paused.
+
+        A click that lands while the model is still generating would otherwise be
+        recorded against the attempt already in flight and leave ``_resume`` set, so
+        the next pause would not pause at all.
+        """
+        if self.state != "awaiting_user":
+            return False
         self._intervention = (intervention or "").strip() or None
         self._resume.set()
+        return True
 
     def stop(self) -> None:
         self._stop.set()
@@ -152,16 +175,24 @@ class TaskRun:
                 if attempt == self.cfg.attempts:
                     return
                 if not self.cfg.auto_continue or result.error:
-                    self.state = "awaiting_user"
-                    self.events.put({"event": "awaiting_user", "data": {"attempt": attempt}})
-                    self._resume.wait()
+                    # Clear BEFORE announcing the pause: resume() only fires once the
+                    # state says "awaiting_user", so no wakeup can be clobbered here.
+                    # stop() sets the flag regardless of state, hence the check.
                     self._resume.clear()
+                    if not self._stop.is_set():
+                        self.state = "awaiting_user"
+                        self.events.put({"event": "awaiting_user", "data": {"attempt": attempt}})
+                        self._resume.wait()
                 if self._stop.is_set():
                     reason = "stopped"
                     return
-                feedback = result.feedback or f"\nYour previous attempt failed the tests. Here's the error:\n{result.error or '[unknown error]'}\n\n"
+                feedback = result.feedback or feedback_message(
+                    f"[harness error: {result.error or 'unknown'}]", self.problem.get("instruction_prompt", ""))
                 content = (self._intervention + "\n\n" + feedback) if self._intervention else feedback
                 self.messages.append({"role": "user", "content": content})
+        except Exception as exc:  # a raising engine or sandbox ends the run, loudly
+            reason = "error"
+            self.events.put({"event": "error", "data": {"message": f"{type(exc).__name__}: {exc}"}})
         finally:
             self.state = "stopped" if reason == "stopped" else ("error" if reason == "error" else "done")
             self.events.put({"event": "done", "data": {"passed": self.passed, "attempts": self.attempt, "reason": reason}})
