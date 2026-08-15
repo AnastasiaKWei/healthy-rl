@@ -1,6 +1,8 @@
 """Readout conventions from docs/measurement.md, as executable checks."""
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pytest
 
@@ -118,3 +120,41 @@ def test_paired_delta_reports_wilcoxon_when_n_at_least_six():
     seqs = [[np.array([0.0]), np.array([1.0 + 0.1 * i])] for i in range(8)]
     out = stats.paired_delta(seqs)
     assert out["n"] == 8 and 0.0 <= float(out["p"][0]) < 0.05
+
+
+def test_turn_readout_rejects_token_kind_of_the_wrong_length():
+    proj, norm, pp, pn, kind = _turn()
+    with pytest.raises(ValueError, match="token_kind"):
+        stats.turn_readout(proj=proj, norm=norm, proj_prefill=pp, norm_prefill=pn,
+                           token_kind=kind[:3], layer_index=0, readout="end")
+
+
+def test_turn_mean_rejects_token_kind_of_the_wrong_length():
+    proj, norm, _, _, kind = _turn()
+    with pytest.raises(ValueError, match="token_kind"):
+        stats.turn_mean(proj=proj, norm=norm, token_kind=kind[:3], layer_index=0, segment="all")
+
+
+def test_moving_mean_is_quiet_and_nan_on_all_nan_windows():
+    x = np.array([1.0, np.nan, np.nan, np.nan, 2.0])
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # any RuntimeWarning fails the test
+        out = stats.moving_mean(x, 3)
+    assert np.isnan(out[2])  # window is entirely NaN
+    np.testing.assert_allclose(out[[0, 4]], [1.0, 2.0])  # NaN neighbours ignored
+
+
+def test_by_turn_index_keeps_its_columns_when_every_turn_is_skipped():
+    """measurement.md: gemma-3-12b-it aff6 is non-finite on 144/144 turns at start."""
+    out = stats.by_turn_index([[None, None], [None]], n_emotions=E)
+    assert out["mean"].shape == (2, E) and out["sem"].shape == (2, E)
+    assert np.isnan(out["mean"]).all()
+    assert out["n"].tolist() == [0, 0]
+    assert out["skipped"].tolist() == [2, 1]
+
+
+def test_paired_delta_keeps_its_columns_when_no_conversation_is_usable():
+    out = stats.paired_delta([[None, None], [np.array([1.0, 2.0, 3.0])]], n_emotions=E)
+    assert out["n"] == 0
+    for key in ("mean", "sem", "p"):
+        assert out[key].shape == (E,) and np.isnan(out[key]).all()
