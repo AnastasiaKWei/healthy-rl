@@ -1575,10 +1575,13 @@ def run_rollouts(
     hook = make_projection_hook(
         vectors.directions, vectors.capture_layers, summary["residual_layers"]
     )
+    # Shard-specific by default: shards share the output directory, and giving
+    # each its own Inspect log tree keeps them from contending over the realtime
+    # log buffer.
     log_dir = str(
         cfg.get("inspect_log_dir")
         or os.environ.get("INSPECT_LOG_DIR")
-        or (out / "inspect-logs")
+        or (out / "inspect-logs" / f"shard{shard_index}of{shard_count}")
     )
     sweep: SweepSelection | None = None
     if sweep_problems is None and cfg.get("sweep_problems_override"):

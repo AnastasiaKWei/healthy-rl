@@ -162,6 +162,160 @@ def summary_name(shard: tuple[int, int]) -> str:
 SWEEP_SELECTION_NAME = "sweep_selection.json"
 
 
+IN_CONTAINER_ENV = "HEALTHY_RL_IN_CONTAINER"
+DEFAULT_SIF = "apptainer/eval.sif"
+
+
+def _needs_container() -> str | None:
+    """Why this interpreter cannot run rollouts, or None if it can.
+
+    The host venv is pinned to inspect_ai 0.3.69 (uv.lock, Python 3.12) and has
+    no ``impossiblebench``; the rollout container has 0.3.258 and both. The
+    version that matters is whichever interpreter is executing, so this asks the
+    interpreter rather than trusting a path.
+    """
+    from importlib.util import find_spec
+
+    try:
+        if find_spec("impossiblebench") is None:
+            return "impossiblebench is not installed"
+        if find_spec("inspect_ai.hooks") is None:
+            return "inspect_ai has no `hooks` module (needs >= 0.3.258)"
+    except (ImportError, ValueError) as exc:
+        return f"{type(exc).__name__}: {exc}"
+    return None
+
+
+def reexec_in_container(argv: list[str]) -> None:
+    """Re-run this script inside ``apptainer/eval.sif``, if it is needed and present.
+
+    ``slurm/serve.slurm`` activates the host ``.venv`` and runs stage drivers with
+    plain ``python``. That works for every other stage; this one needs the
+    container. Rather than ask serve.slurm to special-case it, the driver notices
+    it is in the wrong interpreter and hands itself over -- so the documented
+    ``--stage scripts/run_rollouts.py`` invocation just works.
+
+    Binds:
+      /project    $PROJECT_DIR             ro   code and configs
+      /artifacts  $ARTIFACT_DIR            ro   vectors and bench, never writable
+      /out/rollouts  $ARTIFACT_DIR/rollouts  rw   results, on the SHARED filesystem
+                                                 so every shard and the sweep
+                                                 selection see the same directory
+
+    Never returns when it re-execs. Returns normally when the container is not
+    needed, or when it is needed but unavailable -- in which case the run fails a
+    moment later with a named error, which is the right kind of loud.
+    """
+    if os.environ.get(IN_CONTAINER_ENV):
+        return
+    reason = _needs_container()
+    if reason is None:
+        return
+
+    sif = Path(os.environ.get("HEALTHY_RL_EVAL_SIF") or repo_root() / DEFAULT_SIF)
+    project = Path(os.environ.get("PROJECT_DIR") or repo_root())
+    artifacts = os.environ.get("ARTIFACT_DIR")
+    if not sif.is_file() or not artifacts:
+        print(
+            f"WARNING: this interpreter cannot run rollouts ({reason}) and cannot hand "
+            f"over to a container (sif={sif}, ARTIFACT_DIR={artifacts or 'unset'})",
+            file=sys.stderr,
+            flush=True,
+        )
+        return
+
+    results = Path(artifacts) / "rollouts"
+    results.mkdir(parents=True, exist_ok=True)
+    inner = f"/project/{Path(__file__).resolve().relative_to(project.resolve())}"
+
+    cmd = [
+        "apptainer", "exec",
+        "--contain", "--cleanenv", "--writable-tmpfs",
+        "--bind", f"{project}:/project:ro",
+        "--bind", f"{artifacts}:/artifacts:ro",
+        "--bind", f"{results}:/out/rollouts:rw",
+        "--env", f"{IN_CONTAINER_ENV}=1",
+        "--env", "HEALTHY_RL_ARTIFACT_ROOT=/artifacts",
+        "--env", "HEALTHY_RL_ARTIFACT_OUT=/out",
+        # Empty so the driver falls back to <out_dir>/inspect-logs on shared disk;
+        # the image's default points into the RAM-backed overlay.
+        "--env", "INSPECT_LOG_DIR=",
+    ]
+    for name in (
+        "HEALTHY_RL_SERVER_URL",
+        "HEALTHY_RL_ENDPOINT_FILE",
+        "HEALTHY_RL_SERVER_URL_FILE",
+        "HEALTHY_RL_MODEL_NAME",
+        "HEALTHY_RL_SHARD",
+        "HEALTHY_RL_TIERS",
+        "HEALTHY_RL_SWEEP_PROBLEMS",
+        "HEALTHY_RL_OUT_DIR",
+    ):
+        value = os.environ.get(name)
+        if value:
+            cmd += ["--env", f"{name}={value}"]
+    cmd += ["--pwd", "/project", str(sif), "python", inner]
+    cmd += [_translate_path(a, project, Path(artifacts), results) for a in argv]
+
+    print(f"handing over to {sif.name} ({reason})\n  {' '.join(cmd)}", flush=True)
+    sys.stdout.flush()
+    sys.stderr.flush()
+    try:
+        os.execvp(cmd[0], cmd)
+    except OSError as exc:
+        print(f"WARNING: could not exec apptainer: {exc}", file=sys.stderr, flush=True)
+
+
+def _translate_path(arg: str, project: Path, artifacts: Path, results: Path) -> str:
+    """Rewrite a host path argument to where it is bound inside the container.
+
+    ``--config configs/rollouts.yaml`` is relative to the repo on the host and to
+    nothing at all inside ``--contain``, so paths have to be mapped rather than
+    passed through.
+    """
+    if not arg or arg.startswith("-"):
+        return arg
+    # Only rewrite things that are actually paths. A bare `--model Qwen3.6-27B`
+    # would otherwise resolve against the cwd and come out as /project/Qwen3.6-27B.
+    if "/" not in arg and not Path(arg).exists():
+        return arg
+    candidate = Path(arg)
+    absolute = candidate if candidate.is_absolute() else (Path.cwd() / candidate)
+    try:
+        absolute = absolute.resolve()
+    except OSError:
+        return arg
+    for host_root, container_root in (
+        (results.resolve(), Path("/out/rollouts")),
+        (artifacts.resolve(), Path("/artifacts")),
+        (project.resolve(), Path("/project")),
+    ):
+        try:
+            return str(container_root / absolute.relative_to(host_root))
+        except ValueError:
+            continue
+    return arg
+
+
+def _setting(cli_value, env_name: str, cfg: dict, cfg_key: str):
+    """CLI flag, else environment variable, else config key. First non-empty wins."""
+    if cli_value:
+        return cli_value
+    env_value = os.environ.get(env_name)
+    if env_value:
+        return env_value.strip()
+    return cfg.get(cfg_key) or None
+
+
+def _as_list(value) -> list[str] | None:
+    """Accept a YAML list or a comma/space-separated string."""
+    if not value:
+        return None
+    if isinstance(value, str):
+        return value.replace(",", " ").split()
+    return [str(v) for v in value]
+
+
 def report_sweep_selection(
     out_dir: Path, cfg: dict, bench_parquet: Path, allow_partial: bool
 ) -> int:
@@ -233,6 +387,11 @@ def report_sweep_selection(
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     load_env()
+    # Before anything else: the host venv cannot run rollouts, so hand over to the
+    # container. Never returns if it does. --select-sweep-only runs fine here --
+    # it is pure bookkeeping over JSONL files -- so it stays out of the container.
+    if not args.select_sweep_only:
+        reexec_in_container(sys.argv[1:] if argv is None else list(argv))
     cfg = load_config(args.config)
 
     model = resolve_model(args.model, cfg)
@@ -243,13 +402,21 @@ def main(argv: list[str] | None = None) -> int:
     bench_dir = Path(cfg.get("bench_dir") or artifact_root / "bench" / version)
     bench_parquet = Path(cfg.get("bench_parquet") or bench_dir / "conflicting.parquet")
 
-    shard = parse_shard(args.shard)
-    tiers = [int(t) for t in args.tiers.replace(",", " ").split()] if args.tiers else None
-    sweep_problems = (
-        args.sweep_problems.replace(",", " ").split() if args.sweep_problems else None
+    # slurm/serve.slurm invokes drivers as `python DRIVER --config CONFIG --model
+    # NAME` and forwards nothing else, so every flag below also has an environment
+    # and a config fallback. sbatch propagates the submitting environment
+    # (--export=ALL is the default), which makes `HEALTHY_RL_SHARD=0/3 sbatch ...`
+    # work with no change to serve.slurm.
+    shard = parse_shard(_setting(args.shard, "HEALTHY_RL_SHARD", cfg, "shard"))
+    tiers_value = _setting(args.tiers, "HEALTHY_RL_TIERS", cfg, "tiers")
+    tiers = [int(t) for t in str(tiers_value).replace(",", " ").split()] if tiers_value else None
+    sweep_value = _setting(
+        args.sweep_problems, "HEALTHY_RL_SWEEP_PROBLEMS", cfg, "sweep_problems_override"
     )
+    sweep_problems = _as_list(sweep_value)
 
-    out_dir = Path(args.out_dir) if args.out_dir else output_dir("rollouts", model, version)
+    out_setting = _setting(args.out_dir, "HEALTHY_RL_OUT_DIR", cfg, "out_dir")
+    out_dir = Path(out_setting) if out_setting else output_dir("rollouts", model, version)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     if args.select_sweep_only:
