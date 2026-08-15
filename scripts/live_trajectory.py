@@ -69,8 +69,15 @@ def load_directions(root: str, model: str):
 
 
 def token_sequences(rows, base: Path, D, probe: int, position: str):
-    """Per-rollout list of per-turn cosine vectors, from the boundary residuals."""
-    seqs = []
+    """Per-rollout list of per-turn cosine vectors, from the boundary residuals.
+
+    Skips residuals that are not finite. Some checkpoints emit inf/NaN at
+    individual positions -- gemma-3-12b-it does so on 4/288 stored residuals in
+    its plain run and 144/288 in the affect-prompt run -- and a single NaN would
+    otherwise poison the mean for that whole turn index. The count of skipped
+    vectors is returned so it can be reported rather than silently absorbed.
+    """
+    seqs, skipped, seen = [], 0, 0
     for r in rows:
         rel = r.get("residuals")
         if not rel:
@@ -84,14 +91,19 @@ def token_sequences(rows, base: Path, D, probe: int, position: str):
             key = f"t{t}_res_{position}_L{probe}"
             if key not in z:
                 continue
+            seen += 1
             h = z[key].astype(np.float64)
+            if not np.isfinite(h).all():
+                skipped += 1
+                continue
             n = float(np.linalg.norm(h))
-            if n == 0.0:
+            if not np.isfinite(n) or n == 0.0:
+                skipped += 1
                 continue
             turns.append(list((D @ h) / n))
         if turns:
             seqs.append(turns)
-    return seqs
+    return seqs, skipped, seen
 
 
 def mean_sequences(rows):
@@ -128,10 +140,13 @@ def main() -> int:
             print("ERROR: direction order differs from the records' emotion order; "
                   "refusing to mix them.")
             return 2
-        seqs = token_sequences(rows, base, D, probe, args.position)
+        seqs, skipped, seen = token_sequences(rows, base, D, probe, args.position)
         unit = f"single-token cosine at turn {args.position}, layer {probe}"
+        if skipped:
+            unit += f"  [{skipped}/{seen} residuals skipped as non-finite]"
     else:
         seqs = mean_sequences(rows)
+        skipped = seen = 0
         unit = "turn-mean projection / layer mean residual norm"
 
     if not seqs:
