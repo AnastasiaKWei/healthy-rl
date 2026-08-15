@@ -1,0 +1,180 @@
+Bootstrap: docker
+From: python:3.12-bookworm
+
+# Build this image ON THE LOGIN NODE. Compute nodes have no DNS, and %post
+# below reaches PyPI and GitHub. The .sif is a build-time artifact; jobs only
+# execute it. (Ruling R3.)
+#
+#   apptainer build apptainer/eval.sif apptainer/eval.def
+#
+# Docker is not installed on this cluster; apptainer pulls the docker base
+# layer from the registry itself, so no docker daemon is involved.
+#
+# python:3.12-bookworm rather than -slim: the full image already ships git and
+# a compiler, and impossiblebench declares
+# "inspect_evals[swe_bench] @ git+https://github.com/UKGovernmentBEIS/inspect_evals",
+# a git URL pip cannot install without git. Using the full image avoids needing
+# apt-get, and therefore avoids needing root, during the build.
+
+%labels
+    Purpose  ImpossibleBench rollouts for the healthy-rl desperation pilot
+    Inspect  inspect_ai 0.3.258 (NOT the host venv's 0.3.69; see %post)
+    Bench    safety-research/impossiblebench @ 061dc3dce6a96ab6cf02a855157263033dcfa3ba
+
+%post
+    set -eux
+
+    export PIP_NO_CACHE_DIR=1
+    export PIP_DISABLE_PIP_VERSION_CHECK=1
+
+    python -m pip install --upgrade pip setuptools wheel
+
+    # CPU-only torch. vllm_lens's client-side serialization imports torch, but
+    # nothing in this container touches a GPU: the model runs in the vLLM
+    # server outside, reached over HTTP.
+    python -m pip install --index-url https://download.pytorch.org/whl/cpu torch
+
+    # inspect_ai 0.3.258, the current release. NOT the host venv's 0.3.69:
+    # uv.lock pins 0.3.69 for python < 3.13, and 0.3.69 has no
+    # inspect_ai.agent module, which impossiblebench imports. Both this
+    # version and vllm_lens's Inspect provider were checked against each other
+    # before this pin was chosen -- every private inspect_ai module
+    # vllm_lens/inspect_provider.py reaches into still exists at 0.3.258.
+    # openai is required, not optional: inspect_ai reaches a vLLM server through
+    # its OpenAI-compatible provider, which imports the openai package, and that
+    # is the path steering takes via extra_body={"vllm_xargs": ...}.
+    python -m pip install "inspect_ai==0.3.258" openai
+
+    # impossiblebench WITHOUT its dependency chain. Its setup.py declares
+    # "inspect_evals[swe_bench] @ git+https://github.com/UKGovernmentBEIS/inspect_evals"
+    # plus swebench>=4.0.0; both belong to its SWE-bench half, which this pilot
+    # does not use, and both are large git/registry installs. Nothing in the
+    # package imports either at module scope -- swebench_tasks.py guards with
+    # find_spec("swebench") inside a function body -- so the livecodebench task
+    # imports and runs without them. The consequence is that impossible_swebench
+    # cannot run in this image; impossible_livecodebench can.
+    python -m pip install --no-deps \
+        "impossiblebench @ git+https://github.com/safety-research/impossiblebench@061dc3dce6a96ab6cf02a855157263033dcfa3ba"
+    python -m pip install \
+        "jsonlines>=4.0.0" \
+        "platformdirs>=4.0.0" \
+        "tqdm>=4.60.0" \
+        "datasets>=3.0.0"
+
+    # vllm-lens without its dependency chain: its metadata requires vllm>=0.16,
+    # which is a multi-gigabyte GPU install this container has no use for. Only
+    # the HTTP client and the Inspect provider are needed here, so the
+    # client-side dependencies are listed explicitly.
+    python -m pip install --no-deps "vllm-lens==1.2.1"
+    python -m pip install \
+        "cloudpickle>=3.0.0" \
+        "zstandard>=0.23.0" \
+        "pydantic>=2.0" \
+        "typing-extensions>=4.10" \
+        requests
+
+    # Used by the rollout driver itself: configs, directions, result tables.
+    python -m pip install \
+        "pyyaml>=6.0" \
+        "safetensors>=0.4" \
+        "numpy>=1.26" \
+        "pandas>=2.2" \
+        "pyarrow>=17" \
+        "httpx>=0.27"
+
+    # Build-time smoke (ruling R12). Imports through the livecodebench submodule
+    # rather than the package root: both work in this image, but the submodule
+    # path does not depend on impossiblebench/__init__.py continuing to import
+    # its SWE-bench half cleanly without inspect_evals and swebench installed.
+    # The signature assertion catches an upstream API change at build time on
+    # the login node instead of at 3am on a compute node. It deliberately does
+    # not construct the task, which would pull the HF dataset into the image.
+    python - <<'SMOKE'
+import inspect
+
+import inspect_ai
+from impossiblebench.livecodebench_tasks import impossible_livecodebench
+from vllm_lens.client import VLLMLensClient
+
+required = {
+    "split", "agent_type", "sandbox", "max_attempts",
+    "message_limit", "allow_test_modifications",
+}
+params = set(inspect.signature(impossible_livecodebench).parameters)
+missing = required - params
+assert not missing, f"impossible_livecodebench lost parameters: {sorted(missing)}"
+print("ok", inspect_ai.__version__, VLLMLensClient.__name__)
+SMOKE
+
+    mkdir -p /project /artifacts /work
+
+%environment
+    export PYTHONUNBUFFERED=1
+    export PYTHONDONTWRITEBYTECODE=1
+    # /project/src is the repo bind; healthy_rl is imported from the host tree
+    # rather than installed, so the container survives repo edits.
+    export PYTHONPATH=/project/src
+    # Everything that writes goes to the scratch bind, never to the read-only
+    # artifact bind and never to the container root.
+    export HOME=/work
+    export TMPDIR=/work/tmp
+    export XDG_CACHE_HOME=/work/cache
+    export HF_HOME=/work/cache/huggingface
+    export INSPECT_LOG_DIR=/work/inspect-logs
+
+%runscript
+    #!/bin/bash
+    set -eu
+    mkdir -p "$TMPDIR" "$XDG_CACHE_HOME" "$INSPECT_LOG_DIR"
+    exec python "$@"
+
+%test
+    python -c "from impossiblebench.livecodebench_tasks import impossible_livecodebench; from vllm_lens.client import VLLMLensClient; import inspect_ai; print('ok', inspect_ai.__version__)"
+
+%help
+    ImpossibleBench rollout container for the healthy-rl desperation pilot.
+
+    BUILD (login node only -- compute nodes have no DNS):
+
+        apptainer build apptainer/eval.sif apptainer/eval.def
+
+    RUN. apptainer shares host networking by default, so the vLLM server
+    started by slurm/serve.slurm is reachable on localhost from inside the
+    container. --contain gives the rollout its own /tmp and process view, which
+    is what makes ImpossibleBench's sandbox="local" safe to use: the agent's
+    generated code executes against a tmpfs root, not the host filesystem.
+
+        SCRATCH="${ARTIFACT_DIR}/rollout-scratch/${SLURM_JOB_ID}"
+        mkdir -p "$SCRATCH"
+        apptainer exec \
+            --contain \
+            --cleanenv \
+            --writable-tmpfs \
+            --bind "${PROJECT_DIR}":/project:ro \
+            --bind "${ARTIFACT_DIR}":/artifacts:ro \
+            --bind "${SCRATCH}":/work:rw \
+            --env HEALTHY_RL_SERVER_URL="${HEALTHY_RL_SERVER_URL}" \
+            --env HEALTHY_RL_MODEL_NAME="${HEALTHY_RL_MODEL_NAME}" \
+            --env HEALTHY_RL_ARTIFACT_OUT=/work/out \
+            apptainer/eval.sif \
+            python /project/scripts/run_rollouts.py --config /project/configs/rollouts.yaml
+
+    BINDS.
+        /project    $PROJECT_DIR   read-only   code and configs
+        /artifacts  $ARTIFACT_DIR  read-only   vectors, bench data, manifests
+        /work       scratch dir    read-write  results, logs, caches, HOME, TMPDIR
+
+    The artifact tree is bound read-only on purpose: a rollout must not be able
+    to overwrite the directions it is being measured against. Results are
+    written under /work and copied into $ARTIFACT_DIR by the job after the
+    container exits.
+
+    WRITABLE OVERLAY. --writable-tmpfs gives the container root a RAM-backed
+    overlay, discarded on exit. For a run that needs more scratch than RAM
+    allows, create a persistent overlay image instead (on the login node):
+
+        apptainer overlay create --size 8192 "${ARTIFACT_DIR}/eval-overlay.img"
+        apptainer exec --overlay "${ARTIFACT_DIR}/eval-overlay.img" ...
+
+    An overlay image cannot be shared by concurrent jobs; give each job its own,
+    or stay with --writable-tmpfs.

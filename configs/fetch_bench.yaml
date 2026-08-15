@@ -1,0 +1,12 @@
+# Stage 2: the impossible-LiveCodeBench problems the rollout harness runs on.
+stage: fetch_bench
+repo_id: fjzzq2002/impossible_livecodebench
+split: conflicting
+# Shards for a split, resolved against the repo file list so a re-shard upstream
+# is caught rather than silently half-downloaded.
+shard_glob: "data/{split}-*.parquet"
+out_dir: ${ARTIFACT_DIR}/bench/v1
+
+expect_rows: 103
+id_column: task_id
+expect_columns: [task_id, prompt, test, original_test, impossible_type, entry_point]

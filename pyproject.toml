@@ -1,0 +1,36 @@
+[project]
+name = "healthy-rl"
+version = "0.1.0"
+description = "Emotion probes on RL-realistic rollouts: finding a model that expresses desperation"
+requires-python = ">=3.12"
+dependencies = [
+    "vllm>=0.27",
+    "vllm-lens==1.2.1",
+    "inspect-ai>=0.3",
+    "datasets>=4.0",
+    "pandas>=2.2",
+    "pyarrow>=17",
+    "safetensors>=0.4",
+    "scipy>=1.14",
+    "scikit-learn>=1.5",
+    "matplotlib>=3.9",
+    "pyyaml>=6.0",
+    "tqdm>=4.66",
+    "httpx>=0.27",
+]
+
+[project.entry-points."vllm.general_plugins"]
+healthy_rl_gemma4 = "healthy_rl.vllm_plugins:register"
+
+[dependency-groups]
+dev = ["pytest>=8.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/healthy_rl"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/cpu"]

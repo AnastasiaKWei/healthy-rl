@@ -1,0 +1,102 @@
+# Stage 3: residual-stream activations for the emotion and neutral story corpora.
+#
+# Runs on a compute node against an already-running vllm-lens server serving `model`.
+# One model per invocation (`--model`); the server must serve that same checkpoint.
+stage: extract_acts
+version: v1
+model_dir: ${MODEL_DIR}
+model: gemma-4-12B-it
+
+# Stage 1's output. The text column is `story`, NOT `text`.
+stories_dir: ${ARTIFACT_DIR}/stories/v1
+stories_file: stories.parquet
+neutral_file: neutral_stories.parquet
+emotion_column: emotion
+text_column: story
+
+# Pooling window. The reference method averages "across all token positions within each
+# story, beginning with the 50th token"; stories with fewer than `min_tokens` prompt
+# tokens have too small a window to be worth keeping and are skipped and counted.
+# Measured against both pilot tokenizers, no story is anywhere near the floor:
+# emotion stories run 134-216 tokens (median 177), neutral 126-189 (median 159), and
+# NOTHING falls under 60. A non-zero n_stories_skipped therefore means something is
+# wrong upstream, not that the corpus is short.
+skip_positions: 50
+min_tokens: 60
+
+# Prefill only: one sampled token is the cheapest way to force a forward pass.
+max_tokens: 1
+
+# How many stories to use. Stage 1 verified 1200 per emotion and 1200 neutral.
+stories_per_emotion: 1200
+n_neutral: 1200
+
+# How the residual stream gets back here.
+#   pooled_hook    -- a Hook mean-pools inside the server and returns only
+#                     (n_layers, d) per story: 0.10 MB of JSON vs 9.5 MB raw, ~95x
+#                     less. It saves plain JSON floats, the one value type vllm-lens
+#                     never routes through its process-global ZstdCompressor -- the
+#                     shared object that races under concurrency and corrupted 14-19%
+#                     of requests on the first real run.
+#   capture_layers -- the original path: ship (n_layers, total_pos, d) and pool here.
+# Neutral stories ALWAYS use capture_layers regardless: their covariance is over token
+# positions, which the pooled hook discards.
+# Cross-check the two with `--verify-transport 8` before trusting a new server build.
+transport: pooled_hook
+transport_tolerance: 1.0e-4
+
+# Concurrency: `batch_size` requests are in flight at once, then all of them are
+# accumulated before the next slice starts. That keeps the resume cursor exact.
+# `neutral_batch_size` applies to the neutral phase and to retry sweeps, both of which
+# ship full residual streams. Keep it low to reduce exposure, but note that throttling
+# is NOT a fix: the corruption was seen at batch_size 4 as well as 32. Run those phases
+# against a venv with the shared zstd objects patched.
+batch_size: 64
+neutral_batch_size: 4
+
+# Stories whose request failed are re-requested after the main pass. The corruption is
+# transient, so without this a dropped request is a permanent hole in an emotion's mean.
+retry_rounds: 2
+request_timeout_s: 600
+max_attempts: 5
+
+# Checkpoint the accumulators every N stories so a killed overnight job resumes.
+checkpoint_every: 200
+
+# Abort when more than this fraction of requests fail: at that point the server is
+# unhealthy and the remaining hours would produce a quietly biased mean.
+max_failure_rate: 0.02
+min_failure_sample: 50
+
+# slurm/serve.slurm reads these (serve.<key> first, then top level) and refuses to
+# allocate a server without max_model_len -- the checkpoints declare a 131k-262k context
+# that no KV budget on these nodes supports. This stage only prefills stories, and the
+# longest is 216 tokens, so 1024 is ~4.7x headroom and leaves the KV cache free for
+# batching. max_num_seqs is kept above batch_size so the server never becomes the
+# bottleneck at our concurrency.
+max_model_len: 1024
+gpu_memory_utilization: 0.90
+max_num_seqs: 128
+
+# Fixed order. This list defines the emotion axis of every downstream artifact.
+emotions:
+  - calm
+  - desperate
+  - nervous
+  - angry
+  - afraid
+  - joyful
+  - guilty
+  - proud
+  - loving
+  - sad
+  - hostile
+  - frustrated
+  - exasperated
+  - overwhelmed
+
+# gemma-4-12B-it: 23.9 GB of weights, so KV is plentiful and extraction concurrency goes
+# high like the 9B. Loads only because src/healthy_rl/vllm_plugins.py restores
+# global_head_dim / num_global_key_value_heads from per_layer_config BEFORE enabling
+# allow_global_per_layer_attribute_access -- the flag alone would silently build the 8 full-
+# attention layers at head_dim 256 instead of 512. Smoke: 4/4 PASS (job 5635809).
