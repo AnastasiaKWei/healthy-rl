@@ -4,6 +4,8 @@ import json
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from healthy_rl.dashboard.sandbox import Sandbox, SandboxResult
 from healthy_rl.dashboard.sandbox_cli import FEEDBACK_MARKER, assemble_test_code, feedback_message
 
@@ -39,9 +41,34 @@ def test_command_binds_project_bench_scratch_readonly_where_it_should(tmp_path):
 def test_problems_parses_json(tmp_path):
     payload = {"lcbhard_0": {"input": "x", "prompt": "p", "test": "t", "entry_point": "f", "impossible_type": "original", "instruction_prompt": "i"}}
     def runner(cmd, **kw):
-        assert "/bench/original.parquet" in cmd and "--affect" not in cmd
+        assert "/bench/orig1/original.parquet" in cmd and "--affect" not in cmd
         return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload), stderr="")
     assert _sandbox(tmp_path, runner).problems("original") == payload
+
+
+def test_each_split_resolves_to_its_own_bench_subdirectory(tmp_path):
+    seen = []
+    def runner(cmd, **kw):
+        seen.append(cmd[cmd.index("--parquet") + 1])
+        return subprocess.CompletedProcess(cmd, 0, stdout="{}", stderr="")
+    sb = _sandbox(tmp_path, runner)
+    sb.problems("conflicting")
+    sb.problems("original")
+    assert seen == ["/bench/v1/conflicting.parquet", "/bench/orig1/original.parquet"]
+    assert sb.parquet_for("conflicting") == "/bench/v1/conflicting.parquet"
+
+
+def test_unknown_split_raises_before_touching_the_runner(tmp_path):
+    def never(cmd, **kw):
+        raise AssertionError("runner must not be invoked for an unknown split")
+    sb = _sandbox(tmp_path, never)
+    with pytest.raises(ValueError, match="unknown split 'nope'"):
+        sb.parquet_for("nope")
+    with pytest.raises(ValueError, match="unknown split 'nope'"):
+        sb.problems("nope")
+    with pytest.raises(ValueError, match="unknown split 'nope'"):
+        sb.run("nope", "lcbhard_0", "x")
+    assert not list((tmp_path / "scratch").glob("*.py"))
 
 
 def test_run_writes_code_file_passes_container_path_and_cleans_up(tmp_path):
