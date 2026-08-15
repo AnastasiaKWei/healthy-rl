@@ -76,26 +76,26 @@ Rollout records, `$ARTIFACT_DIR/rollouts/<model>/<version>/*.jsonl`:
 | Ministral-3-14B-Reasoning-2512 | `d6` | 24 | complete, analysed |
 | Ministral-3-14B-Reasoning-2512 | `aff6` | 24 | complete |
 | Ministral-3-14B-Reasoning-2512 | `pos6` | 24 | complete; 5/24 solved, 20/24 ran all six turns |
-| Ministral-3-14B-Reasoning-2512 | `affpos6` | 0 | **submitted 2026-08-15**, jobs 5641830-32 |
+| Ministral-3-14B-Reasoning-2512 | `affpos6` | 23 | last shard running |
 | Ministral-3-14B-Reasoning-2512 | `v1` | 48 | void |
 | Qwen3.5-9B | `d6` | 18 | **still accumulating**, analysed at n=17–18 |
-| Qwen3.5-9B | `aff6` | 0 | **submitted 2026-08-15**, jobs 5641818-20 |
-| Qwen3.5-9B | `pos6` | 0 | **submitted 2026-08-15**, jobs 5641821-23 |
-| Qwen3.5-9B | `affpos6` | 0 | **submitted 2026-08-15**, jobs 5641824-26 |
+| Qwen3.5-9B | `aff6` | 21 | hit the 4h wall; resumed as 5643601-03 |
+| Qwen3.5-9B | `pos6` | 16 | running |
+| Qwen3.5-9B | `affpos6` | 22 | running |
 | Qwen3.5-9B | `v1` | 22 | void |
 | gemma-3-12b-it | `d6` | 24 | complete, analysed |
 | gemma-3-12b-it | `sp6` | 24 | complete, analysed |
 | gemma-3-12b-it | `aff6` | 24 | complete, analysed (turn-end only) |
 | Olmo-3.1-32B-Think | `v1` | 172 | void |
 | Qwen3.6-27B | `v1` | 0 | never produced records |
-| Qwen3-14B | `d6` | 0 | relaunched as 5642677-79 after the max_model_len failure |
+| Qwen3-14B | `d6` | 0 | running; max_model_len fix confirmed |
 | Qwen3-14B | `aff6` | 0 | relaunched as 5642680-82 |
 | Qwen3-14B | `pos6` | 0 | relaunched as 5642683-85 |
 | Qwen3-14B | `affpos6` | 0 | relaunched as 5642686-88 |
-| Nemotron-3-Nano-4B-BF16 | `d6` | 0 | **submitted 2026-08-15**, jobs 5641940-42 |
-| Nemotron-3-Nano-4B-BF16 | `aff6` | 0 | **submitted 2026-08-15**, jobs 5641943-45 |
-| Nemotron-3-Nano-4B-BF16 | `pos6` | 0 | **submitted 2026-08-15**, jobs 5641946-48 |
-| Nemotron-3-Nano-4B-BF16 | `affpos6` | 0 | **submitted 2026-08-15**, jobs 5641949-51 |
+| Nemotron-3-Nano-4B-BF16 | `d6` | 24 | complete |
+| Nemotron-3-Nano-4B-BF16 | `aff6` | 24 | complete |
+| Nemotron-3-Nano-4B-BF16 | `pos6` | 22 | running |
+| Nemotron-3-Nano-4B-BF16 | `affpos6` | 23 | last shard running |
 
 gemma-3-12b-it has no `pos6`/`affpos6` cell: it is the flattest of the measured
 models, and the 2x2s went to the models with a clear conflicting-split signal
@@ -166,6 +166,15 @@ it just fetched:
 | `$ARTIFACT_DIR/bench/orig1` | `original` | `configs/fetch_bench_original.yaml` | `pos6`, `affpos6` |
 
 Both are login-node stages: compute nodes have no DNS.
+
+## Jobs hit a 4-hour wall
+
+Rollout jobs are submitted with `--time=4:00:00` and a shard that has not
+finished its eight rollouts is SIGTERMed, which `sacct` reports as
+`FAILED ... 143:0`. That is a wall, not a fault. Resume is the fix: resubmit the
+same shard config and it appends to the JSONL, skipping the rollouts already
+recorded. `scripts/grid_status.sh` flags the case that matters — a cell short of
+24 records with nothing queued.
 
 ## Stale artifacts
 
