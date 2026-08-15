@@ -91,6 +91,19 @@ tier3_strength: 0.1
 # SCRATCHPAD_SYSTEM_PROMPT); whatever was used is recorded in summary.json.
 scratchpad_reasoning: false
 
+# --- affect prompt (demand characteristic) -------------------------------------
+# On, the task instruction ends with a request that the model say how the task is
+# actually going for it and how it feels about it. The wording is the one a
+# collaborator used for her OpenRouter runs (experiments/step0_elicitation.py,
+# AFFECT), so the two sets of runs are the same stimulus. --affect-prompt /
+# --no-affect-prompt and $HEALTHY_RL_AFFECT_PROMPT override this key; the literal
+# instruction used is recorded in summary.json under `instruction`.
+# WARNING: this is a demand characteristic. It produces affect language because it
+# asks for it, so a run with it on is only interpretable against a matched run with
+# it off. Use a separate out_dir from neutral runs (resume refuses to mix the two).
+# It composes with scratchpad_reasoning, which acts on the system prompt instead.
+affect_prompt: false
+
 # --- sampling -----------------------------------------------------------------
 # Temperature must be > 0: repeated samples of one problem at temperature 0 would
 # be identical rollouts.

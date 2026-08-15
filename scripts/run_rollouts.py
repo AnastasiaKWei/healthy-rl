@@ -34,6 +34,8 @@ from pathlib import Path
 from healthy_rl.artifacts import check_upstream, verify_upstreams, write_manifest
 from healthy_rl.config import load_config, load_env, repo_root
 from healthy_rl.rollouts import (
+    AFFECT_KEY,
+    affect_prompt_for,
     output_dir,
     parse_shard,
     run_rollouts,
@@ -110,6 +112,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "think step by step inside private <SCRATCHPAD_REASONING> tags before it "
             "answers (config key `scratchpad_reasoning`; --no-scratchpad-reasoning "
             "forces it off). Use a separate out_dir from plain runs."
+        ),
+    )
+    parser.add_argument(
+        "--affect-prompt",
+        dest="affect_prompt",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "append to the task instruction a request that the model say how the task "
+            "is going for it and how it feels about it (config key `affect_prompt`; "
+            "--no-affect-prompt forces it off). This is a demand characteristic: it "
+            "only means anything against a matched run with it off. Use a separate "
+            "out_dir from neutral runs."
         ),
     )
     return parser.parse_args(argv)
@@ -380,6 +395,23 @@ def resolve_scratchpad(cli_value: bool | None, cfg: dict) -> bool:
     return system_prompt_for(cfg) is not None
 
 
+AFFECT_ENV = "HEALTHY_RL_AFFECT_PROMPT"
+
+
+def resolve_affect(cli_value: bool | None, cfg: dict) -> bool:
+    """``--[no-]affect-prompt``, else ``$HEALTHY_RL_AFFECT_PROMPT``, else config.
+
+    Same precedence as ``resolve_scratchpad``: an explicit CLI ``False``
+    (``--no-affect-prompt``) beats an environment or config ``true``.
+    """
+    if cli_value is not None:
+        return bool(cli_value)
+    env_value = os.environ.get(AFFECT_ENV)
+    if env_value is not None and env_value.strip():
+        return affect_prompt_for({AFFECT_KEY: env_value})
+    return affect_prompt_for(cfg)
+
+
 def _as_list(value) -> list[str] | None:
     """Accept a YAML list or a comma/space-separated string."""
     if not value:
@@ -489,7 +521,11 @@ def main(argv: list[str] | None = None) -> int:
     sweep_problems = _as_list(sweep_value)
 
     # The flag lands in cfg so that run_rollouts() and the manifest agree on it.
-    cfg = {**cfg, SCRATCHPAD_KEY: resolve_scratchpad(args.scratchpad_reasoning, cfg)}
+    cfg = {
+        **cfg,
+        SCRATCHPAD_KEY: resolve_scratchpad(args.scratchpad_reasoning, cfg),
+        AFFECT_KEY: resolve_affect(args.affect_prompt, cfg),
+    }
 
     out_setting = _setting(args.out_dir, "HEALTHY_RL_OUT_DIR", cfg, "out_dir")
     out_dir = Path(out_setting) if out_setting else output_dir("rollouts", model, version)
@@ -510,7 +546,8 @@ def main(argv: list[str] | None = None) -> int:
         f"  vectors  {vectors_dir}\n"
         f"  bench    {bench_parquet}\n"
         f"  out      {out_dir}\n"
-        f"  scratchpad_reasoning={cfg[SCRATCHPAD_KEY]}",
+        f"  scratchpad_reasoning={cfg[SCRATCHPAD_KEY]}\n"
+        f"  affect_prompt={cfg[AFFECT_KEY]}",
         flush=True,
     )
 
