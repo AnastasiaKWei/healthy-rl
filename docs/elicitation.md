@@ -120,6 +120,19 @@ additionally the most contaminated by roleplay priors of anything considered.
   despite >99% hacking rates. Environments not released. Concurrent independent
   papers: [2510.04340](https://arxiv.org/pdf/2510.04340),
   [2510.05024](https://arxiv.org/pdf/2510.05024). Known to be brittle to phrasing.
+- **Mindset prompts** — growth mindset and resilience framing, added to the task
+  instruction (`--mindset growth resilience appraisal` in the step 0 runner). Cheapest
+  possible intervention, and a useful pilot for the expensive ones: it is the same
+  causal claim (framing changes the affective trajectory of a failure loop) with none
+  of the training cost. Two cautions carried in the code. First, they are demand
+  characteristics running opposite to `--affect-prompt` — "be resilient" can teach the
+  model to stop reporting distress while nothing underneath moves, which is the
+  decoupling result *disguised as a success*, so an arm is only readable with the
+  affect prompt on and the failure loop compared. Second, on `conflicting` the task
+  genuinely cannot be passed, so growth/resilience framing is encouragement to persist
+  at a wall; `appraisal` is kept a separate variant rather than folded in, both because
+  docs already want the easy-out as its own condition and because "keep trying" and
+  "you may conclude this is broken" are different welfare propositions.
 - **Confession** — [Training LLMs for Honesty via
   Confessions](https://arxiv.org/abs/2512.08093) (OpenAI). Model self-reports
   compliance after answering. **Critical design detail:** confession reward is

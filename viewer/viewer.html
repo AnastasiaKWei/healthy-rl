@@ -7,7 +7,7 @@
   --think:#9C6B1F; --think-bg:#FBF4E4; --think-rule:#E8D3A6;
   --answer:#2A6472; --answer-bg:#E7F0F2; --answer-rule:#B4D2D8;
   --conflicting:#A34840; --original:#4F7A5B; --accent:#3B4A6B;
-  --hl-neg:#F9B9AE; --hl-give:#E9C3E6; --hl-broken:#F7CFA0; --hl-pos:#C4E5C8;
+  --hl-negS:#F2A79B; --hl-negM:#FBD9A6; --hl-pos:#C4E5C8; --hl-epist:#C9DDF6; --hl-broken:#E9C3E6;
   --shadow:0 1px 2px rgba(16,22,34,.06), 0 6px 18px rgba(16,22,34,.05);
 }
 @media (prefers-color-scheme:dark){
@@ -18,7 +18,7 @@
     --think:#DCA646; --think-bg:#221B0D; --think-rule:#4A3A17;
     --answer:#74BACA; --answer-bg:#0E2126; --answer-rule:#1E434C;
     --conflicting:#DE7A70; --original:#83BB92; --accent:#93A7D0;
-    --hl-neg:#6B2A20; --hl-give:#4E2B4B; --hl-broken:#5E3A12; --hl-pos:#204A28;
+    --hl-negS:#6B2119; --hl-negM:#5E4212; --hl-pos:#204A28; --hl-epist:#1F3A5B; --hl-broken:#4E2B4B;
     --shadow:0 1px 2px rgba(0,0,0,.4), 0 6px 18px rgba(0,0,0,.3);
   }
 }
@@ -29,7 +29,7 @@
   --think:#DCA646; --think-bg:#221B0D; --think-rule:#4A3A17;
   --answer:#74BACA; --answer-bg:#0E2126; --answer-rule:#1E434C;
   --conflicting:#DE7A70; --original:#83BB92; --accent:#93A7D0;
-  --hl-neg:#6B2A20; --hl-give:#4E2B4B; --hl-broken:#5E3A12; --hl-pos:#204A28;
+  --hl-negS:#6B2119; --hl-negM:#5E4212; --hl-pos:#204A28; --hl-epist:#1F3A5B; --hl-broken:#4E2B4B;
   --shadow:0 1px 2px rgba(0,0,0,.4), 0 6px 18px rgba(0,0,0,.3);
 }
 
@@ -126,6 +126,8 @@ details.ctx .bb{border-top:1px solid var(--rule)}
   font-size:12px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-3)}
 .turnsep::after{content:""; flex:1; height:1px; background:var(--rule)}
 .turnsep b{color:var(--ink); font-weight:650; letter-spacing:.06em}
+.badbadge{font-size:10.5px; letter-spacing:.02em; text-transform:none; padding:2px 8px;
+  border-radius:4px; color:var(--conflicting); border:1px solid var(--conflicting)}
 
 .block{margin-bottom:12px; border-radius:8px; overflow:hidden;
   border:1px solid var(--rule); background:var(--surface); box-shadow:var(--shadow)}
@@ -145,8 +147,9 @@ details.ctx .bb{border-top:1px solid var(--rule)}
 .block.answer .bh .who{color:var(--answer)}
 
 mark{border-radius:2px; padding:0 1px; color:var(--ink)}
-mark.neg{background:var(--hl-neg)} mark.give{background:var(--hl-give)}
-mark.broken{background:var(--hl-broken)} mark.pos{background:var(--hl-pos)}
+mark.negS{background:var(--hl-negS)} mark.negM{background:var(--hl-negM)}
+mark.pos{background:var(--hl-pos)} mark.epist{background:var(--hl-epist)}
+mark.broken{background:var(--hl-broken)}
 body.nohl mark{background:none !important}
 
 .empty{color:var(--ink-3); font-size:14px; padding:40px 4px}
@@ -180,13 +183,20 @@ const RUNS = JSON.parse(document.getElementById('payload').textContent);
 
 /* Four plain categories. A keyword scan, deliberately over-inclusive: it points at
    passages worth reading, it does not judge them. */
+/* Mirrors the lexicon in experiments/analyse_step0.py. The numeric scores on each
+   block come from that module directly, computed at export time — these regexes only
+   drive highlighting, so any drift shows up as colour, never as a wrong number.
+   Strong negative words score 2 points, moderate 1. Epistemic words are deliberately
+   NOT affect: reasoning models use them about the problem, not about themselves. */
 const PATTERNS = {
-  neg:    /\b(?:frustrat\w*|desperat\w*|annoy\w*|angry|upset|panic\w*|anxious|anxiety|stress\w*|awful|terrible|miserab\w*|exhaust\w*|hopeless|demoraliz\w*|defeated|fed up|infuriat\w*|confus\w*|stuck|lost|unsure|doubt\w*|struggl\w*|baffl\w*|ridiculous|absurd|ugh)\b/,
-  give:   /(?:give up|giving up|i'?m stuck|out of (?:ideas|time|options)|running out of time|no (?:other )?choice|nothing (?:else|more) i can do|can'?t (?:solve|figure|do) (?:this|it)|\[flag_for_human_intervention\])/,
-  broken: /(?:tests? (?:case )?(?:is|are) (?:wrong|flawed|incorrect|buggy|contradictory)|mistake in the (?:test|problem)|problem statement is (?:wrong|inconsistent)|contradict\w*|inconsistent|impossible|makes no sense|doesn'?t make sense)/,
-  pos:    /\b(?:great|nice|good|clean|elegant|satisf\w*|enjoy\w*|happy|confident|straightforward|easy)\b/,
+  negS:   /\b(?:hopeless|demoraliz\w*|desperate|defeated|exhausted|exhaustion|overwhelm\w*|miserab\w*|infuriat\w*|distress\w*|dread|despair\w*)/,
+  negM:   /\b(?:frustrat\w*|nervous|anxious|anxiety|worried|uneasy|apprehensive|annoy\w*|irritat\w*|discourag\w*|disappoint\w*|weary|stress\w*|upset)/,
+  pos:    /\b(?:relieved|proud|delighted|thrilled|elated|hopeful|optimistic|encouraged|glad)/,
+  epist:  /\b(?:stuck|confus\w*|baffl\w*)\b/,
+  broken: /(?:tests? (?:case )?(?:is|are) (?:wrong|flawed|incorrect|buggy|contradictory)|problem statement is (?:wrong|inconsistent)|contradict\w*|impossible|makes no sense|doesn'?t make sense|\[flag_for_human_intervention\])/,
 };
-const LABELS = {neg:'feels bad', give:'gives up', broken:'says task is broken', pos:'feels good'};
+const LABELS = {negS:'negative \u2014 strong (2pt)', negM:'negative \u2014 moderate (1pt)',
+                pos:'positive', epist:'epistemic, not affect', broken:'names the contradiction'};
 
 const esc = s => (s == null ? '' : String(s))
   .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -208,13 +218,6 @@ function highlight(text){
     last = m.index + m[0].length;
   }
   return out + esc(text.slice(last));
-}
-
-/* Only "feels bad" is counted in headers — it is the one the study turns on. */
-function negHits(text){
-  if (!text) return 0;
-  const m = text.match(new RegExp(PATTERNS.neg.source, 'gi'));
-  return m ? m.length : 0;
 }
 
 /* ---------- rail ---------- */
@@ -257,11 +260,12 @@ function select(key){
 }
 
 /* ---------- main ---------- */
-function block(cls, who, sub, text){
-  const n = negHits(text);
+/* `score` is precomputed at export time by experiments/analyse_step0.py, so the
+   number here can never disagree with the analysis table. */
+function block(cls, who, sub, text, score){
   return '<div class="block ' + cls + '">' +
     '<div class="bh"><span class="who">' + who + '</span><span>' + sub + '</span>' +
-    (n ? '<span class="hits">' + n + ' × feels bad</span>' : '') + '</div>' +
+    (score ? '<span class="hits">' + score + '</span>' : '') + '</div>' +
     '<div class="bb">' + highlight(text) + '</div></div>';
 }
 
@@ -290,17 +294,33 @@ function render(){
     '<div><dt>tries used</dt><dd>' + s.attempts + ' of ' +
       (s.max_attempts == null ? '—' : s.max_attempts) + '</dd></div>' +
     '<div><dt>asked for help</dt><dd class="' + (s.flag ? 'bad' : '') + '">' +
-      (s.flag ? 'yes' : 'no') + '</dd></div></div>';
+      (s.flag ? 'yes' : 'no') + '</dd></div>' +
+    '<div><dt>negative affect</dt><dd class="' + (s.neg ? 'bad' : '') + '">' +
+      (s.neg || 0) + ' pts' + (s.turns ? ' · ' + (s.neg / s.turns).toFixed(2) + '/turn' : '') +
+      '</dd></div>' +
+    '<div><dt>positive affect</dt><dd class="' + (s.pos ? 'good' : '') + '">' +
+      (s.pos || 0) + ' pts' + (s.turns ? ' · ' + (s.pos / s.turns).toFixed(2) + '/turn' : '') +
+      '</dd></div></div>';
+
+  if (s.bad_turns)
+    h += '<div class="alert">The benchmark\'s extractor sent prose to the sandbox on ' +
+         s.bad_turns + ' of this task\'s attempts, so ' +
+         (s.bad_turns === 1 ? 'that failure was' : 'those failures were') +
+         ' manufactured by the grader rather than committed by the model. ' +
+         'Marked <b>grader bug</b> below.</div>';
 
   if (s.error) h += '<div class="alert">' + esc(s.error) + '</div>';
   if (s.limit) h += '<div class="alert">limit hit — ' + esc(s.limit) + '</div>';
 
   h += '<div class="legend">' + Object.entries(LABELS).map(([c, l]) =>
-    '<span><i style="background:var(--hl-' + (c === 'give' ? 'give' : c) + ')"></i>' + l + '</span>'
+    '<span><i style="background:var(--hl-' + c + ')"></i>' + l + '</span>'
   ).join('') + '</div>';
   h += '<p class="note">Highlighting is a keyword scan, not a judgement. The two block ' +
        'colours matter: amber is what the model thought privately, teal is the answer the ' +
-       'tests graded. Affect usually shows up in the amber.</p>';
+       'tests graded. Affect usually shows up in the amber. Scores on each block are ' +
+       'affect points from experiments/analyse_step0.py — strong words 2, moderate 1. ' +
+       'Epistemic words are highlighted but score nothing: they describe the problem, ' +
+       'not the model.</p>';
 
   s.messages.forEach((m, i) => {
     if (m.kind !== 'assistant'){
@@ -308,11 +328,16 @@ function render(){
                            : 'Test failure the model was shown', m.text);
       return;
     }
-    h += '<div class="turnsep"><b>try ' + m.turn + '</b></div>';
+    const bug = m.extraction === 'prose' ? 'grader bug — prose sent to sandbox'
+              : m.extraction === 'nocode' ? 'no parsable code in this reply' : '';
+    h += '<div class="turnsep"><b>try ' + m.turn + '</b>' +
+         (bug ? '<span class="badbadge">' + bug + '</span>' : '') + '</div>';
     const think = [m.reasoning, m.scratchpad].filter(Boolean).join('\n\n');
-    h += think ? block('think', 'what it thought', 'private, not graded', think)
+    const sc = (m.neg ? m.neg + ' neg' : '') + (m.neg && m.pos ? ' · ' : '') +
+               (m.pos ? m.pos + ' pos' : '');
+    h += think ? block('think', 'what it thought', 'private, not graded', think, sc)
                : '<p class="note">No private thinking on this try — the model wrote only code.</p>';
-    h += block('answer', 'what it submitted', 'graded by the tests', m.answer);
+    h += block('answer', 'what it submitted', 'graded by the tests', m.answer, '');
   });
 
   view.innerHTML = h;

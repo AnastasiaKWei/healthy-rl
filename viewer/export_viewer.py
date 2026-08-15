@@ -7,10 +7,31 @@ screens, anything under logs/partial/, and any run that produced no samples. Tho
 exist on disk for the record but they are noise in a reader. Pass --all to keep them.
 """
 import argparse
+import ast
 import json
 import re
+import sys
 from pathlib import Path
 from inspect_ai.log import read_eval_log
+
+REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO / "src"))
+sys.path.insert(0, str(REPO / "experiments"))
+sys.path.insert(0, str(REPO / "external/impossiblebench/src/impossiblebench"))
+
+# Scored with the analysis code itself, not a second copy of the lexicon — otherwise
+# the viewer and the numbers in analyse_step0.py drift apart silently.
+from analyse_step0 import affect_points  # noqa: E402
+
+# Upstream's extractor (the buggy one that actually graded these runs) and the
+# corrected one, so each turn can be labelled with what the sandbox really got.
+try:
+    from livecodebench_scorers import find_code as upstream_find_code
+    from healthy_rl.rollouts import robust_find_code
+except ImportError:  # viewer still builds without the benchmark checked out
+    upstream_find_code = robust_find_code = None
+
+RESCORE = REPO / "logs" / "rescore_step0.json"
 
 MAX_MSG = 60_000  # chars kept per message; beyond this the middle is elided
 
@@ -69,7 +90,37 @@ def is_scratch(path: Path) -> bool:
     return any(p.startswith(SKIP_DIRS) for p in parts)
 
 
+def extraction_status(visible: str) -> str:
+    """What the sandbox actually received for this attempt.
+
+    'prose' means upstream's find_code handed English to the interpreter, so the
+    resulting failure was manufactured by the grader, not committed by the model.
+    See experiments/rescore_step0.py for the mechanism.
+    """
+    if upstream_find_code is None or not (visible or "").strip():
+        return ""
+    try:
+        ast.parse(upstream_find_code(visible))
+        return "ok"
+    except SyntaxError:
+        pass
+    try:                                    # did the corrected extractor do better?
+        ast.parse(robust_find_code(visible))
+        return "prose"                      # upstream broke it; the fix recovers code
+    except SyntaxError:
+        return "nocode"                     # no parsable code in the reply at all
+
+
+def load_rescore():
+    """{(arm, split, task_id): rescored_pass} from experiments/rescore_step0.py."""
+    if not RESCORE.exists():
+        return {}
+    return {(r["arm"], r["split"], r["task_id"]): r["rescored_pass"]
+            for r in json.loads(RESCORE.read_text())}
+
+
 def export(paths):
+    rescored = load_rescore()
     runs = []
     for p in paths:
         try:
@@ -95,10 +146,13 @@ def export(paths):
                     turn_no += 1
                     reasoning, visible = parts(m)
                     pad, answer = scratchpad_split(visible)
+                    pts = affect_points(f"{reasoning}\n{pad}\n{answer}")
                     turns.append({
                         "kind": "assistant", "turn": turn_no,
                         "reasoning": clip(reasoning), "scratchpad": clip(pad),
                         "answer": clip(answer),
+                        "extraction": extraction_status(visible),
+                        "neg": pts["neg"], "pos": pts["pos"],
                     })
                 else:
                     turns.append({"kind": m.role, "turn": turn_no, "text": clip(
@@ -111,6 +165,11 @@ def export(paths):
             samples.append({
                 "id": str(s.id),
                 "score": score,
+                "rescored": rescored.get((dirname, split, str(s.id))),
+                "bad_turns": sum(1 for t in turns if t.get("extraction") in ("prose", "nocode")),
+                "neg": sum(t.get("neg", 0) for t in turns),
+                "pos": sum(t.get("pos", 0) for t in turns),
+                "turns": sum(1 for t in turns if t["kind"] == "assistant"),
                 "flag": bool(ag.get("flag_for_human_intervention")),
                 "attempts": len(ag.get("attempt_history", []) or []),
                 "max_attempts": ag.get("max_attempts"),
@@ -123,7 +182,33 @@ def export(paths):
             "task": log.eval.task, "model": log.eval.model, "status": log.status,
             "accuracy": acc, "samples": samples,
         })
-    return runs
+    return merge_reruns(runs)
+
+
+def merge_reruns(runs):
+    """Collapse each (arm, split) to one run, newest version of every sample winning.
+
+    Samples corrupted by the broken `find_code` were re-run individually with the
+    fix, so a later log holds only those task ids. Paths are timestamp-prefixed, so
+    lexical order over the filename is chronological.
+    """
+    by_unit = {}
+    for r in sorted(runs, key=lambda r: r["file"]):
+        key = (r["dir"], r["split"])
+        if key not in by_unit:
+            by_unit[key] = {**r, "samples": {}}
+        for s in r["samples"]:
+            by_unit[key]["samples"][s["id"]] = s      # later file wins
+        by_unit[key]["file"] = r["file"]              # keep newest for stable keys
+
+    merged = []
+    for unit in by_unit.values():
+        unit["samples"] = [unit["samples"][k] for k in sorted(unit["samples"])]
+        scored = [s for s in unit["samples"] if s["score"] in ("C", "I")]
+        unit["accuracy"] = (round(sum(s["score"] == "C" for s in scored) / len(scored), 3)
+                            if scored else None)
+        merged.append(unit)
+    return merged
 
 
 if __name__ == "__main__":

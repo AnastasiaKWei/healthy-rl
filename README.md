@@ -54,6 +54,22 @@ are in `docs/elicitation.md`.
 and always needs a run without it as the baseline. `--scratchpad` gives non-reasoning
 models somewhere to think; reasoning models already have a trace.
 
+`--mindset` adds prompt-level interventions — `growth` (failure is information, not a
+verdict), `resilience` (recovery between attempts), `appraisal` (permission to
+conclude the task is impossible) — combinable, and the first thing here that is a
+candidate intervention rather than an instrument.
+
+```bash
+./.venv/bin/python experiments/step0_elicitation.py \
+    --model openrouter/google/gemma-3-12b-it --scratchpad --affect-prompt \
+    --mindset growth resilience
+```
+
+Only interpretable against the matched `--affect-prompt` arm without it, and even then
+carefully: a mindset prompt that merely teaches the model not to *say* it is
+struggling is indistinguishable from one that works, unless the failure loop moves
+too. That confusion is the project's whole research question showing up early.
+
 Needs Docker (Colima on macOS) for the code sandbox, and `OPENROUTER_API_KEY` set.
 
 ### Reading the transcripts
