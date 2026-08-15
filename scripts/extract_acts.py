@@ -2,8 +2,8 @@
 """Stage 3: extract per-emotion mean activations and a neutral covariance.
 
 Runs on a compute node against an already-running vllm-lens server. For every story
-we prefill only (``max_tokens=1``), capture the residual stream at ``capture_layers``,
-and mean-pool token positions from ``skip_positions`` onward -- the recipe from the
+we prefill only (``max_tokens=1``), read the residual stream at ``capture_layers``, and
+mean-pool token positions from ``skip_positions`` onward -- the recipe from the
 reference method: "averaging across all token positions within each story, beginning
 with the 50th token". Stories shorter than ``min_tokens`` are skipped and counted.
 
@@ -18,10 +18,44 @@ Outputs, in ``$ARTIFACT_DIR/activations/<model>/<version>/``:
   norms.json                 mean residual norm per layer + story counts
   manifest.json
 
+Two transports, selected by ``transport``:
+
+``pooled_hook`` (default)
+    A ``Hook`` mean-pools inside the server and returns only ``(n_layers, d)`` per
+    story: 0.10 MB of JSON against 9.5 MB for the raw stream, measured -- ~95x less.
+
+    It also sidesteps a real vllm-lens bug. vllm-lens keeps PROCESS-GLOBAL
+    ``ZstdCompressor``/``ZstdDecompressor`` objects in THREE modules and calls them
+    from concurrent handlers; a shared instance reuses one ``ZSTD_CCtx``/``ZSTD_DCtx``,
+    so concurrent calls interleave and corrupt frames. Locally reproducible on the
+    client-side pair in ``_helpers/_serialize.py`` at 9.5 MB payloads: clean at 1
+    thread, and at 8+ threads both ``ZstdError: Data corruption detected`` AND -- worse
+    -- payloads that decompress without raising and return the WRONG BYTES.
+
+    ``_serialize_value`` routes ONLY ``torch.Tensor`` through that code; JSON-safe
+    values pass through untouched. This hook therefore saves plain Python floats and
+    calls ``serialize_tensor`` exactly zero times, which makes it immune to both the
+    raising and the silent variant rather than merely less exposed.
+
+``capture_layers``
+    The original path: the server ships ``(n_layers, total_pos, d)`` and we pool here.
+    Kept for fallback and for cross-checking the hook against it.
+
+**Neutral stories always use ``capture_layers``**, whichever transport is set. Their
+covariance is over token positions, not story means, so the pooled hook would throw
+away exactly the data the covariance needs, and a per-story ``(d, d)`` outer product is
+far too large to ship. Neutral is only 1200 of 18,000 requests, but it is the one phase
+still moving tensors through the zstd path, and **throttling does not fix that** -- the
+corruption was observed at ``batch_size: 4`` as well as 32. ``neutral_batch_size``
+reduces exposure; only patching the shared zstd objects removes it. Run the neutral
+phase against a patched venv.
+
 This job runs unattended for hours, so accumulator state is checkpointed every
 ``checkpoint_every`` stories and a killed job resumes from the last checkpoint.
 Work is processed in fixed order in slices of ``batch_size`` concurrent requests, so
-the resume cursor is an exact high-water mark rather than a guess.
+the resume cursor is an exact high-water mark rather than a guess. Stories whose
+request failed are remembered by index and retried in a sweep after the main pass, so
+a transient server fault costs a retry rather than a hole in the mean.
 """
 
 from __future__ import annotations
@@ -71,6 +105,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--restart",
         action="store_true",
         help="discard any checkpoint and start from the first story",
+    )
+    parser.add_argument(
+        "--verify-transport",
+        type=int,
+        default=0,
+        metavar="N",
+        help=(
+            "run N stories through BOTH transports and report the disagreement, "
+            "then exit without writing an activations artifact"
+        ),
     )
     return parser.parse_args(argv)
 
@@ -182,8 +226,14 @@ class Accumulators:
         self.cursor = 0
         self.n_used = 0
         self.n_skipped = 0
-        self.n_failed = 0
+        # Work-list indices whose request failed. A set, not a counter, so the retry
+        # sweep knows WHICH stories to re-request and the count can go back down.
+        self.failed_indices: set[int] = set()
         self.cov_dirty = False
+
+    @property
+    def n_failed(self) -> int:
+        return len(self.failed_indices)
 
     # -- accumulate ---------------------------------------------------------
 
@@ -214,7 +264,8 @@ class Accumulators:
             emotion_count=self.emotion_count,
             norm_sum=self.norm_sum,
             norm_count=self.norm_count,
-            counters=np.array([self.cursor, self.n_used, self.n_skipped, self.n_failed]),
+            counters=np.array([self.cursor, self.n_used, self.n_skipped]),
+            failed_indices=np.array(sorted(self.failed_indices), dtype=np.int64),
         )
         if self.cov_dirty:
             _atomic_npz(
@@ -243,9 +294,8 @@ class Accumulators:
         self.emotion_count = state["emotion_count"]
         self.norm_sum = state["norm_sum"]
         self.norm_count = state["norm_count"]
-        self.cursor, self.n_used, self.n_skipped, self.n_failed = (
-            int(x) for x in state["counters"]
-        )
+        self.cursor, self.n_used, self.n_skipped = (int(x) for x in state["counters"])
+        self.failed_indices = {int(x) for x in state["failed_indices"]}
 
         cov_path = out_dir / COV_STATE_NAME
         if cov_path.is_file():
@@ -283,8 +333,134 @@ def _atomic_npz(path: Path, **arrays: np.ndarray) -> None:
 # ---------------------------------------------------------------------------
 
 
+
 class StoryTooShort(RuntimeError):
     """Fewer than ``min_tokens`` prompt tokens: no usable pooled window."""
+
+
+# ---------------------------------------------------------------------------
+# Transport A: server-side pooling hook
+# ---------------------------------------------------------------------------
+
+
+def make_pool_hook(skip_positions: int):
+    """Build the hook function that mean-pools inside the server.
+
+    Returned as a CLOSURE on purpose. ``Hook`` cloudpickles ``fn`` to a process that
+    has no ``healthy_rl`` on its path; cloudpickle serialises nested functions by value
+    but may serialise a module-level function by reference, which would fail to import
+    on the server. A closure also bakes ``skip_positions`` in without a global.
+
+    What it saves, per layer, into ``ctx.saved["L<idx>"]``::
+
+        {"sum": [float, ...] | None, "n_pooled": int, "n_seen": int}
+
+    Three properties matter and each is load-bearing:
+
+    * **JSON-safe values only.** ``_serialize_value`` sends ``torch.Tensor`` through the
+      process-global ``ZstdCompressor`` that corrupts under concurrency, but passes
+      plain floats/ints/dicts through untouched. Saving a list of floats keeps this
+      payload off the racing code path entirely.
+    * **A dict, not a list.** ``_merge_hook_results`` concatenates list values across
+      ranks but overwrites everything else. The residual stream is replicated across TP
+      ranks, so every rank computes an identical dict and the overwrite is idempotent --
+      whereas a list would be duplicated once per TP rank.
+    * **``n_seen`` carries the absolute position offset**, so chunked prefill (the hook
+      firing several times per layer for one request) pools the right window rather
+      than restarting the count at each chunk.
+
+    Sums are accumulated in float64 and divided client-side, which makes the result
+    match the ``capture_layers`` path's float64 pooling to round-off.
+    """
+
+    def pool_hook(ctx, hidden_states):
+        key = f"L{ctx.layer_idx}"
+        record = ctx.saved.get(key)
+        if record is None:
+            record = {"sum": None, "n_pooled": 0, "n_seen": 0}
+            ctx.saved[key] = record
+
+        seen = record["n_seen"]
+        n_rows = int(hidden_states.shape[0])
+        # Absolute index of the first row this call is allowed to pool.
+        start = skip_positions - seen
+        if start < 0:
+            start = 0
+        if start < n_rows:
+            total = hidden_states[start:].double().sum(dim=0).cpu().tolist()
+            if record["sum"] is None:
+                record["sum"] = total
+            else:
+                record["sum"] = [a + b for a, b in zip(record["sum"], total)]
+            record["n_pooled"] += n_rows - start
+        record["n_seen"] = seen + n_rows
+        return None  # hidden states are read, never modified
+
+    return pool_hook
+
+
+def pooled_from_hook(
+    hook_results: dict[str, Any],
+    raw: dict[str, Any],
+    capture_layers: list[int],
+    d_model: int,
+    min_tokens: int,
+) -> tuple[np.ndarray, int]:
+    """``(pooled, n_seen)`` from one story's hook results: ``(n_layers, d)`` float64.
+
+    Verifies the window the server actually pooled rather than trusting it: every layer
+    must report the same ``n_seen``, and that count must match the prompt length the
+    server reports, so a silently truncated or re-chunked prefill is caught here.
+    """
+    if not hook_results:
+        raise RuntimeError("server returned no hook_results; was the hook registered?")
+    # {hook_index: ctx.saved}; we register exactly one hook.
+    saved: dict[str, Any] = {}
+    for per_hook in hook_results.values():
+        saved.update(per_hook)
+
+    missing = [layer for layer in capture_layers if f"L{layer}" not in saved]
+    if missing:
+        raise RuntimeError(f"hook never fired on layers {missing} (saw {sorted(saved)})")
+
+    seen_counts = {int(saved[f"L{layer}"]["n_seen"]) for layer in capture_layers}
+    if len(seen_counts) != 1:
+        raise RuntimeError(
+            f"layers disagree on how many positions they saw: {sorted(seen_counts)}"
+        )
+    n_seen = seen_counts.pop()
+    if n_seen < min_tokens:
+        raise StoryTooShort(f"{n_seen} prompt tokens < min_tokens={min_tokens}")
+
+    usage = raw.get("usage") if isinstance(raw, dict) else None
+    if isinstance(usage, dict) and isinstance(usage.get("prompt_tokens"), int):
+        n_prompt = int(usage["prompt_tokens"])
+        if n_seen != n_prompt:
+            raise RuntimeError(
+                f"hook pooled over {n_seen} positions but the server reports "
+                f"{n_prompt} prompt tokens; the pooling window is not what we asked for"
+            )
+
+    pooled = np.zeros((len(capture_layers), d_model), dtype=np.float64)
+    for i, layer in enumerate(capture_layers):
+        record = saved[f"L{layer}"]
+        n_pooled = int(record["n_pooled"])
+        if not n_pooled or record["sum"] is None:
+            raise StoryTooShort(
+                f"layer {layer} pooled no positions out of {n_seen} seen"
+            )
+        total = np.asarray(record["sum"], dtype=np.float64)
+        if total.shape != (d_model,):
+            raise RuntimeError(
+                f"layer {layer} returned {total.shape}, expected ({d_model},)"
+            )
+        pooled[i] = total / n_pooled
+    return pooled, n_seen
+
+
+# ---------------------------------------------------------------------------
+# Transport B: client-side pooling of the full residual stream
+# ---------------------------------------------------------------------------
 
 
 def pooled_from_output(
@@ -352,6 +528,15 @@ def main(argv: list[str] | None = None) -> int:
     skip_positions = int(cfg["skip_positions"])
     min_tokens = int(cfg["min_tokens"])
     batch_size = max(1, int(cfg["batch_size"]))
+    transport = str(cfg.get("transport", "pooled_hook"))
+    if transport not in ("pooled_hook", "capture_layers"):
+        raise ValueError(
+            f"transport must be 'pooled_hook' or 'capture_layers', got {transport!r}"
+        )
+    use_hook_for_emotions = transport == "pooled_hook"
+    # Neutral stories always ship full residual streams, so they get their own, lower
+    # concurrency; that is the knob that controls the vllm-lens zstd corruption.
+    neutral_batch_size = max(1, int(cfg.get("neutral_batch_size", 4)))
     checkpoint_every = max(1, int(cfg["checkpoint_every"]))
     max_failure_rate = float(cfg.get("max_failure_rate", 0.02))
     min_failure_sample = int(cfg.get("min_failure_sample", 50))
@@ -415,8 +600,9 @@ def main(argv: list[str] | None = None) -> int:
     print(
         f"stage 3 extract_acts: model={model_name} arch={spec.architecture} "
         f"d_model={d_model} capture_layers={capture_layers} probe_layer={spec.probe_layer}\n"
-        f"  server={base_url} stories={len(work)} batch_size={batch_size} "
-        f"skip_positions={skip_positions} min_tokens={min_tokens}\n"
+        f"  server={base_url} stories={len(work)} transport={transport} "
+        f"batch_size={batch_size} neutral_batch_size={neutral_batch_size}\n"
+        f"  skip_positions={skip_positions} min_tokens={min_tokens}\n"
         f"  out={out_dir}",
         flush=True,
     )
@@ -438,76 +624,190 @@ def main(argv: list[str] | None = None) -> int:
             local.client = existing
         return existing
 
-    def fetch(item: tuple[str, int, str]) -> tuple[tuple[str, int, str], Any, Any]:
+    def request(text: str, use_hook: bool) -> tuple[Any, Any, Any]:
+        """One prefill. Returns ``(activations, hook_results, raw)``."""
+        kwargs: dict[str, Any] = {
+            "max_tokens": int(cfg.get("max_tokens", 1)),
+            "temperature": 0.0,
+        }
+        if use_hook:
+            from vllm_lens import Hook
+
+            kwargs["hooks"] = [
+                Hook(fn=make_pool_hook(skip_positions), layer_indices=capture_layers)
+            ]
+        else:
+            kwargs["capture_layers"] = capture_layers
+        out = client().generate(text, **kwargs)
+        return out.activations, out.hook_results, out.raw
+
+    def fetch(job: tuple[int, tuple[str, int, str], bool]):
         """Never raises: a failed request is one lost story, not a lost overnight job."""
-        _, _, text = item
+        index, item, use_hook = job
         try:
-            out = client().generate(
-                text,
-                max_tokens=int(cfg.get("max_tokens", 1)),
-                temperature=0.0,
-                capture_layers=capture_layers,
-            )
+            activations, hook_results, raw = request(item[2], use_hook)
         except Exception as exc:  # noqa: BLE001 - reported and counted by the caller
-            return item, exc, None
-        return item, out.activations, out.raw
+            return index, item, use_hook, exc, None, None
+        return index, item, use_hook, activations, hook_results, raw
+
+    def accumulate(jobs: list[tuple[int, tuple[str, int, str], bool]], pool) -> tuple[int, int]:
+        """Run one slice of work and fold it in. Returns ``(n_ok, n_failed)`` this slice."""
+        n_ok = n_bad = 0
+        for index, item, use_hook, activations, hook_results, raw in pool.map(fetch, jobs):
+            group = item[0]
+            if isinstance(activations, BaseException):
+                acc.failed_indices.add(index)
+                n_bad += 1
+                print(
+                    f"  story {group}[{index}] request failed: "
+                    f"{type(activations).__name__}: {activations}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                continue
+            try:
+                if use_hook:
+                    positions = None
+                    pooled, _ = pooled_from_hook(
+                        hook_results, raw, capture_layers, d_model, min_tokens
+                    )
+                else:
+                    positions, pooled = pooled_from_output(
+                        activations, raw, n_layers, d_model, skip_positions, min_tokens
+                    )
+            except StoryTooShort:
+                acc.failed_indices.discard(index)
+                acc.n_skipped += 1
+                continue
+            except Exception as exc:  # noqa: BLE001 - one bad story must not end the run
+                acc.failed_indices.add(index)
+                n_bad += 1
+                print(
+                    f"  story {group}[{index}] unusable: {type(exc).__name__}: {exc}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                continue
+
+            if group == NEUTRAL_GROUP:
+                # The covariance is over token positions, so neutral never uses the hook.
+                acc.add_neutral(positions)
+            else:
+                acc.add_emotion(emotion_index[group], pooled)
+            # A retry that succeeded stops being a failure.
+            acc.failed_indices.discard(index)
+            acc.n_used += 1
+            n_ok += 1
+        return n_ok, n_bad
+
+    def plan(index: int, item: tuple[str, int, str]) -> tuple[int, tuple[str, int, str], bool]:
+        """Neutral stories always take the capture path; emotion stories take `transport`."""
+        return index, item, use_hook_for_emotions and item[0] != NEUTRAL_GROUP
+
+    def run_transport_check(n_stories: int) -> int:
+        """Send the same stories both ways and report the disagreement.
+
+        This is what lets the pooled hook be trusted without re-deriving the science:
+        if it agrees with the path stage 0 validated, it is the same measurement.
+        """
+        tolerance = float(cfg.get("transport_tolerance", 1e-4))
+        sample = [item for item in work if item[0] != NEUTRAL_GROUP][:n_stories]
+        rows = []
+        worst = 0.0
+        for order, item in enumerate(sample):
+            _, hook_results, hook_raw = request(item[2], True)
+            activations, _, cap_raw = request(item[2], False)
+            hook_pooled, n_seen = pooled_from_hook(
+                hook_results, hook_raw, capture_layers, d_model, min_tokens
+            )
+            _, cap_pooled = pooled_from_output(
+                activations, cap_raw, n_layers, d_model, skip_positions, min_tokens
+            )
+            scale = np.abs(cap_pooled).mean()
+            abs_diff = float(np.abs(hook_pooled - cap_pooled).max())
+            rel_diff = abs_diff / float(scale) if scale > 0 else float("inf")
+            worst = max(worst, rel_diff)
+            rows.append(
+                {
+                    "emotion": item[0],
+                    "n_seen": int(n_seen),
+                    "max_abs_diff": abs_diff,
+                    "max_rel_diff": rel_diff,
+                    "mean_abs_value": float(scale),
+                }
+            )
+            print(
+                f"  [{order + 1}/{len(sample)}] {item[0]:<14} n_seen={n_seen:>4} "
+                f"max|diff|={abs_diff:.3e} rel={rel_diff:.3e}",
+                flush=True,
+            )
+
+        passed = bool(rows) and worst <= tolerance
+        report = {
+            "stage": "transport_check",
+            "model": model_name,
+            "capture_layers": capture_layers,
+            "skip_positions": skip_positions,
+            "n_stories": len(rows),
+            "tolerance": tolerance,
+            "worst_rel_diff": worst,
+            "passed": passed,
+            "note": (
+                "pooled_hook sums in float64 on the server; capture_layers ships bf16 "
+                "and is pooled in float64 here. Both average the identical bf16 values, "
+                "so only accumulation order differs and agreement should be ~1e-6."
+            ),
+            "per_story": rows,
+        }
+        out_dir.mkdir(parents=True, exist_ok=True)
+        target = out_dir / "transport_check.json"
+        target.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+        print(
+            f"transport check {'PASSED' if passed else 'FAILED'}: worst relative "
+            f"disagreement {worst:.3e} over {len(rows)} stories "
+            f"(tolerance {tolerance:.1e}); wrote {target}",
+            flush=True,
+        )
+        return 0 if passed else 1
+
+    if args.verify_transport:
+        return run_transport_check(args.verify_transport)
 
     started = time.monotonic()
     start_cursor = acc.cursor
     since_checkpoint = 0
-    with ThreadPoolExecutor(max_workers=batch_size) as pool:
+    pass_ok = pass_bad = 0
+    with ThreadPoolExecutor(max_workers=max(batch_size, neutral_batch_size)) as pool:
         while acc.cursor < len(work):
-            chunk = work[acc.cursor : acc.cursor + batch_size]
-            for item, activations, raw in pool.map(fetch, chunk):
-                group, _, _ = item
-                if isinstance(activations, BaseException):
-                    acc.n_failed += 1
-                    print(
-                        f"  story {group} request failed: "
-                        f"{type(activations).__name__}: {activations}",
-                        file=sys.stderr,
-                        flush=True,
-                    )
-                    continue
-                try:
-                    positions, pooled = pooled_from_output(
-                        activations, raw, n_layers, d_model, skip_positions, min_tokens
-                    )
-                except StoryTooShort:
-                    acc.n_skipped += 1
-                    continue
-                except Exception as exc:  # noqa: BLE001 - one bad story must not end the run
-                    acc.n_failed += 1
-                    print(
-                        f"  story {group} unusable: {type(exc).__name__}: {exc}",
-                        file=sys.stderr,
-                        flush=True,
-                    )
-                    continue
-                if group == NEUTRAL_GROUP:
-                    acc.add_neutral(positions)
-                else:
-                    acc.add_emotion(emotion_index[group], pooled)
-                acc.n_used += 1
-
+            # Neutral runs at its own (lower) concurrency: it is the only phase still
+            # shipping full residual streams, and concurrency is what corrupts them.
+            width = neutral_batch_size if work[acc.cursor][0] == NEUTRAL_GROUP else batch_size
+            chunk = [
+                plan(acc.cursor + offset, item)
+                for offset, item in enumerate(work[acc.cursor : acc.cursor + width])
+            ]
+            n_ok, n_bad = accumulate(chunk, pool)
+            pass_ok += n_ok
+            pass_bad += n_bad
             acc.cursor += len(chunk)
             since_checkpoint += len(chunk)
 
-            # Only judge the failure rate once there is a sample worth judging: two
-            # rejected requests out of the first four is noise, not an unhealthy server.
-            seen = acc.n_used + acc.n_skipped + acc.n_failed
-            if seen >= min_failure_sample and acc.n_failed / seen > max_failure_rate:
+            # Judged on THIS pass, not on history: a resumed run must not inherit an
+            # abort from failures it is about to retry. Needs a sample worth judging --
+            # two rejected requests out of the first four is noise, not a sick server.
+            seen = pass_ok + pass_bad + acc.n_skipped
+            if seen >= min_failure_sample and pass_bad / seen > max_failure_rate:
                 acc.save(out_dir)
                 raise RuntimeError(
-                    f"{acc.n_failed}/{seen} requests failed, above max_failure_rate="
-                    f"{max_failure_rate}; the server is unhealthy. Checkpoint saved at "
-                    f"story {acc.cursor}, re-run to resume."
+                    f"{pass_bad}/{seen} requests failed in this pass, above "
+                    f"max_failure_rate={max_failure_rate}; the server is unhealthy. "
+                    f"Checkpoint saved at story {acc.cursor}, re-run to resume "
+                    f"(failed stories are retried automatically)."
                 )
 
             if since_checkpoint >= checkpoint_every or acc.cursor >= len(work):
                 acc.save(out_dir)
                 since_checkpoint = 0
-                # Rate over work done in THIS process: a resumed job's cursor starts high.
                 rate = (acc.cursor - start_cursor) / max(time.monotonic() - started, 1e-9)
                 remaining = (len(work) - acc.cursor) / rate if rate > 0 else float("nan")
                 print(
@@ -516,6 +816,23 @@ def main(argv: list[str] | None = None) -> int:
                     f"{rate:.2f}/s eta {remaining / 60:.1f} min",
                     flush=True,
                 )
+
+        # Retry sweep. The corruption that motivated the pooled hook is transient, so a
+        # failed story is usually recoverable; without this it would be a permanent hole
+        # in that emotion's mean.
+        for round_index in range(int(cfg.get("retry_rounds", 2))):
+            if not acc.failed_indices:
+                break
+            pending = sorted(acc.failed_indices)
+            print(
+                f"  retry round {round_index + 1}: {len(pending)} failed stories",
+                flush=True,
+            )
+            for offset in range(0, len(pending), neutral_batch_size):
+                slice_ = pending[offset : offset + neutral_batch_size]
+                accumulate([plan(index, work[index]) for index in slice_], pool)
+            acc.save(out_dir)
+            print(f"  retry round {round_index + 1}: {acc.n_failed} still failing", flush=True)
 
     write_outputs(out_dir, acc, cfg, spec, emotions, capture_layers, stories_dir, model_name, version)
     acc.clear_checkpoint(out_dir)

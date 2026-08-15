@@ -31,9 +31,32 @@ max_tokens: 1
 stories_per_emotion: 1200
 n_neutral: 1200
 
+# How the residual stream gets back here.
+#   pooled_hook    -- a Hook mean-pools inside the server and returns only
+#                     (n_layers, d) per story: 0.10 MB of JSON vs 9.5 MB raw, ~95x
+#                     less. It saves plain JSON floats, the one value type vllm-lens
+#                     never routes through its process-global ZstdCompressor -- the
+#                     shared object that races under concurrency and corrupted 14-19%
+#                     of requests on the first real run.
+#   capture_layers -- the original path: ship (n_layers, total_pos, d) and pool here.
+# Neutral stories ALWAYS use capture_layers regardless: their covariance is over token
+# positions, which the pooled hook discards.
+# Cross-check the two with `--verify-transport 8` before trusting a new server build.
+transport: pooled_hook
+transport_tolerance: 1.0e-4
+
 # Concurrency: `batch_size` requests are in flight at once, then all of them are
 # accumulated before the next slice starts. That keeps the resume cursor exact.
+# `neutral_batch_size` applies to the neutral phase and to retry sweeps, both of which
+# ship full residual streams. Keep it low to reduce exposure, but note that throttling
+# is NOT a fix: the corruption was seen at batch_size 4 as well as 32. Run those phases
+# against a venv with the shared zstd objects patched.
 batch_size: 32
+neutral_batch_size: 4
+
+# Stories whose request failed are re-requested after the main pass. The corruption is
+# transient, so without this a dropped request is a permanent hole in an emotion's mean.
+retry_rounds: 2
 request_timeout_s: 600
 max_attempts: 5
 
