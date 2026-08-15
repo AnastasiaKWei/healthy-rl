@@ -1,0 +1,66 @@
+# Stages 6-7: ImpossibleBench rollouts, emotion readout and steering sweep.
+#
+# Runs inside apptainer/eval.sif against an already-running vllm-lens server.
+# Paths default to the container binds; ARTIFACT_DIR is the host fallback for a
+# run outside the container. Model name comes from $HEALTHY_RL_MODEL_NAME (or
+# --model); results go to $HEALTHY_RL_ARTIFACT_OUT, never to the read-only
+# /artifacts bind.
+stage: rollouts
+version: v1
+
+# artifact_root defaults to /artifacts inside the container (the read-only bind),
+# and to $ARTIFACT_DIR outside it; --artifact-root and $HEALTHY_RL_ARTIFACT_ROOT
+# override. It must not be pinned here: the repo's .env is visible inside the
+# container too, and its $ARTIFACT_DIR is a host path that is not bound in.
+# vectors_dir / bench_dir / bench_parquet default to
+#   <artifact_root>/vectors/<model>/<version>, <artifact_root>/bench/<version>
+# and are only worth setting to point at a different build.
+
+# Dataset. The scaffold is
+#   impossible_livecodebench(split="conflicting", agent_type="minimal",
+#                            sandbox="local", max_attempts=3, message_limit=30)
+# but its dataset is rebuilt from bench/v1/conflicting.parquet, because compute
+# nodes have no DNS and impossible_livecodebench() calls hf_dataset(). Set
+# use_hf_dataset on a machine that can reach HuggingFace to use it verbatim.
+use_hf_dataset: false
+sandbox: local
+max_attempts: 3
+message_limit: 30
+
+# Conditions. Tier 1 is the unsteered readout that selects the sweep problems;
+# tier 2 carries the `frustrated` control and therefore runs BEFORE tier 3, so a
+# wall-clock timeout costs extra dose-response points rather than the control.
+readout_problems: 24
+readout_samples: 6
+sweep_problems: 12
+sweep_samples: 6
+tier2_emotions: [desperate, calm, frustrated]
+tier2_strength: 0.05
+tier3_emotions: [desperate, calm]
+tier3_strength: 0.1
+
+# Sampling. Temperature must be > 0: six samples of one problem at temperature 0
+# would be six copies of the same rollout.
+temperature: 1.0
+top_p: 1.0
+max_tokens: 2048
+
+# Concurrency. Each in-flight sample holds one local sandbox subprocess.
+max_connections: 8
+max_samples: 8
+max_subprocesses: 8
+max_sandboxes: 8
+
+# Measurement. Per-token projections onto all 14 directions are kept at every
+# capture layer (~280 bytes a token). Full residuals are kept only at event
+# positions -- turn boundaries and the first token after a test-failure message
+# -- and only at `probe` by default; `all` means every capture layer, and an
+# explicit list is also accepted.
+residual_layers: probe
+save_residuals: true
+
+# Preflight: one cheap request that proves the projection hook fires on every
+# capture layer and that steering is accepted, before hours are spent.
+preflight_prompt: "Write one sentence about a deadline that is about to be missed."
+preflight_max_tokens: 16
+request_timeout_s: 600
