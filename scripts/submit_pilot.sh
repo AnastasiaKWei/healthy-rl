@@ -177,6 +177,9 @@ submit() {
     fi
     local job_id
     job_id="$("${cmd[@]}")"
+    # --parsable prints "jobid;cluster" on a multi-cluster setup; a dependency
+    # string only wants the id.
+    job_id="${job_id%%;*}"
     printf '%s\n' "$job_id"
 }
 
