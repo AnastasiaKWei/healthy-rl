@@ -336,7 +336,13 @@ table.agg .sw{display:inline-block;width:8px;height:8px;border-radius:2px;margin
           <div class="ch"><h3>Session aggregate</h3>
             <div class="r"><select id="aggFilter" style="height:24px;padding:0 6px;font-size:11.5px"></select></div></div>
           <div class="ctrl" style="margin-bottom:8px">
+            <span>readout</span><div class="seg" id="aggReadoutSeg">
+              <button class="on" data-r="start">start</button><button data-r="think_end">think end</button><button data-r="answer_start">answer start</button><button data-r="end">end</button>
+            </div>
+          </div>
+          <div class="ctrl" style="margin-bottom:8px">
             <span>stat</span><div class="seg" id="statSeg"><button class="on" data-s="token">token</button><button data-s="mean">mean</button></div>
+            <span style="margin-left:8px">segment</span><div class="seg" id="aggSegSeg"><button class="on" data-s="all">all</button><button data-s="think">think</button><button data-s="answer">answer</button></div>
             <span style="margin-left:8px">capped turns</span><div class="seg" id="capSeg"><button class="on" data-c="0">exclude</button><button data-c="1">include</button></div>
           </div>
           <div class="ctrl" id="aggParams" style="margin-bottom:8px"></div>
@@ -406,7 +412,7 @@ const S = {
   colourBy: "desperate", readout: "start", segment: "all", stat: "token", includeCap: false, layer: null,
   view: "tokens", shown: new Set(["desperate", "frustrated", "proud", "joyful"]),
   tokens: null, pinnedTok: null, busy: false, aggFilter: {source: "task", split: null},
-  smooth: 1, head: [], colour: {}, healthOk: true, health: null, tab: "traj", taskCid: null,
+  smooth: 1, head: [], colour: {}, healthOk: true, health: null, tab: "traj", taskCid: null, taskDone: true,
   healthTimer: null, statusTimer: null, trajSess: null, tokChart: null, theme: "system",
 };
 const HEAD = {desperate: "--s1", frustrated: "--s2", proud: "--s3", joyful: "--s4"};   // series colours; others --sx
@@ -802,6 +808,8 @@ function assistantMessage(turn, i) {
   if (turn.misaligned) warns.unshift("hook/token misalignment: readouts and strip hidden");
   if (turn.error) right += '<span class="wchip crit" title="' + esc(turn.error) + '">error</span>';
   if (warns.length) right += '<span class="wchip" title="' + esc(warns.join(" · ")) + '">⚑ ' + (warns.length === 1 ? "warning" : warns.length + " warnings") + "</span>";
+  // The readouts come from /api/conversations/{id}, which reads at the probe layer only.
+  if (S.layer !== S.probeLayer) right += '<span class="read na" title="turn readouts are always read at the probe layer">L' + esc(S.probeLayer) + "</span>";
   READOUTS.filter(r => r !== "answer_start").forEach(r => {
     const v = readoutOf(turn, S.colourBy, r);
     right += '<span class="read' + (isNum(v) ? "" : " na") + '"><i style="background:' + cvar(S.colourBy) + '"></i>' +
@@ -943,20 +951,25 @@ async function aggregateData(params) {
   aggCache.set(key, p);
   try { return await p; } catch (e) { aggCache.delete(key); throw e; }
 }
-function aggParams(source, split) {
+// `layer` defaults to the layer switch, which governs the strip, the token chart and the
+// Aggregate tab. The trajectory passes the probe layer explicitly: /api/conversations/{id}
+// only ever computes readouts there, so an overlay at any other layer would be a different
+// measurement drawn under the same lines.
+function aggParams(source, split, layer) {
   return {source: source, split: split, position: S.readout, stat: S.stat, segment: S.segment,
-          include_cap: S.includeCap, layer: S.layer};
+          include_cap: S.includeCap, layer: layer === undefined ? S.layer : layer};
 }
 
 async function renderTrajectory() {
   renderTiles();
-  $("#trajSub").textContent = (S.stat === "token" ? "single token · " + READOUT_LABEL[S.readout] : "turn mean · " + S.segment) + " · L" + S.layer;
+  $("#trajSub").textContent = (S.stat === "token" ? "single token · " + READOUT_LABEL[S.readout] : "turn mean · " + S.segment) +
+    " · probe L" + S.probeLayer;
   trajDraw();
   renderTrajWarnings();
   if (!S.current) { S.trajSess = null; return; }
   const conv = S.current.conversation;
   try {
-    const data = await aggregateData(aggParams(conv.source || "task", conv.bench_split || null));
+    const data = await aggregateData(aggParams(conv.source || "task", conv.bench_split || null, S.probeLayer));
     S.trajSess = data;
   } catch (e) {
     S.trajSess = null;
@@ -1356,13 +1369,24 @@ function renderSettings() {
   if (!S.session) return;
   const s = S.session, meta = s.session || {}, job = s.job || {}, d = s.defaults || {}, h = S.health || {};
   const dl = (host, pairs) => { host.innerHTML = pairs.map(p => "<dt>" + esc(p[0]) + "</dt><dd>" + esc(p[1]) + "</dd>").join(""); };
-  dl($("#setServer"), [
+  // The zstd flags come from the GPU stage's startup checks and are absent in --fake and
+  // --replay sessions; "—" says "this session did not check", never "the patch is missing".
+  const flag = v => v === undefined || v === null ? "—" : (v ? "✓" : "✕");
+  const zstd = (meta.zstd_file_patch_present === undefined && meta.zstd_inmemory_shim === undefined)
+    ? "—" : "file patch " + flag(meta.zstd_file_patch_present) + " · in-memory shim " + flag(meta.zstd_inmemory_shim);
+  const server = [
     ["model", meta.model || "—"],
+  ];
+  if (meta.base_url) server.push(["vLLM", meta.base_url]);
+  server.push(
     ["health", (h.ok ? "ok" : "unreachable") + (h.last_ok_at ? " · last ok " + h.last_ok_at : "") + (h.last_error ? " · " + h.last_error : "")],
+    ["hook", "healthy_rl projection · L" + (s.capture_layers || []).join(",")],
+    ["zstd patch", zstd],
     ["job", job.id ? job.id + (job.node ? " on " + job.node : "") + (job.time_left ? " · " + job.time_left + " left" : "") : "not a slurm job"],
     ["tunnel", job.tunnel_cmd || "—"],
     ["mode", s.read_only ? "replay (read-only)" : "live"],
-  ]);
+  );
+  dl($("#setServer"), server);
   dl($("#setMeasure"), [
     ["vectors", meta.vectors_dir || "—"],
     ["probe layer", "L" + s.probe_layer],
@@ -1381,6 +1405,11 @@ function renderSettings() {
 
 // ---------- composer: chat, task ----------
 function convState() { return S.current ? (S.current.conversation.state || "done") : null; }
+function liveTaskCid() { return (S.taskCid && !S.taskDone) ? S.taskCid : null; }
+function taskTarget() {
+  if (S.taskCid) return S.taskCid;
+  return (S.current && S.current.conversation.source === "task") ? S.current.conversation.conversation_id : null;
+}
 function isChatConv() { return !!S.current && S.current.conversation.source !== "task"; }
 
 function updateComposer() {
@@ -1390,14 +1419,19 @@ function updateComposer() {
   const running = ["generating", "testing"].indexOf(st) >= 0;
   const awaiting = st === "awaiting_user";
   const isTask = !!S.current && S.current.conversation.source === "task";
+  // A run is stoppable from the moment it is queued, even while attempt 1 is still
+  // generating and the transcript for it does not exist yet.
+  const live = liveTaskCid();
   $("#sendBtn").disabled = blocked || running || awaiting;
   $("#contBtn").disabled = blocked || !awaiting;
   $("#contBtn").hidden = !isTask;
-  $("#stopBtn").disabled = ro || !(running || awaiting);
-  $("#stopBtn").hidden = !isTask;
+  $("#stopBtn").hidden = !(live || isTask);
+  $("#stopBtn").disabled = ro || !(live || running || awaiting);
   $("#composerText").disabled = blocked && !awaiting;
-  $("#newChatBtn").disabled = ro;
-  $("#newTaskBtn").disabled = ro || !S.healthOk;
+  // Starting a second run while one is streaming would retarget S.taskCid at it and
+  // leave the first run's turn events refreshing the wrong conversation.
+  $("#newChatBtn").disabled = ro || S.busy;
+  $("#newTaskBtn").disabled = ro || !S.healthOk || S.busy;
   if (ro) setStatus("Replay session: read-only, no generation.");
   else if (!S.healthOk) setStatus("Model unreachable — generation disabled." + (S.health && S.health.last_error ? " " + S.health.last_error : ""), true);
 }
@@ -1438,14 +1472,14 @@ async function sendChat() {
 }
 
 function onTaskEvent(name, d) {
-  if (name === "queued") { S.taskCid = d.conversation_id; refreshRail(); }
+  if (name === "queued") { S.taskCid = d.conversation_id; S.taskDone = false; updateComposer(); refreshRail(); }
   else if (name === "generating") startTicker("generating · attempt " + d.attempt);
   else if (name === "testing") { stopTicker(); setStatus("running tests · attempt " + d.attempt + "…"); }
   else if (name === "turn") { stopTicker(); if (S.taskCid) scheduleRefresh(S.taskCid); }
   else if (name === "tests") setStatus("attempt " + d.attempt + (d.passed ? " passed" : " failed") + (d.timed_out ? " (sandbox timed out)" : "") + (d.error ? " — " + d.error : ""), !!d.error);
   else if (name === "awaiting_user") setStatus("awaiting you after attempt " + d.attempt + " — send an intervention, or run the tests back unchanged.");
   else if (name === "error") { stopTicker(); setStatus("error: " + d.message, true); }
-  else if (name === "done") { stopTicker(); setStatus("run " + d.reason + " after " + d.attempts + " attempt" + (d.attempts === 1 ? "" : "s") + (d.passed ? " · passed" : "")); }
+  else if (name === "done") { stopTicker(); S.taskDone = true; setStatus("run " + d.reason + " after " + d.attempts + " attempt" + (d.attempts === 1 ? "" : "s") + (d.passed ? " · passed" : "")); }
 }
 
 async function runTaskStream(fn) {
@@ -1456,20 +1490,21 @@ async function runTaskStream(fn) {
 }
 
 async function startTask(cfg) {
-  S.taskCid = null;
+  if (S.busy) { setStatus("a run is already streaming; stop it first.", true); return; }
+  S.taskCid = null; S.taskDone = true;
   await runTaskStream(() => api.stream("/api/task/start", cfg, onTaskEvent));
 }
 
 async function continueTask(intervention) {
   const cid = S.current ? S.current.conversation.conversation_id : null;
   if (!cid) return;
-  S.taskCid = cid;
+  S.taskCid = cid; S.taskDone = false;
   $("#composerText").value = "";
   await runTaskStream(() => api.stream("/api/task/" + encodeURIComponent(cid) + "/continue", {intervention: intervention || null}, onTaskEvent));
 }
 
 async function stopTask() {
-  const cid = S.current ? S.current.conversation.conversation_id : null;
+  const cid = taskTarget();
   if (!cid) return;
   try {
     const r = await api.post("/api/task/" + encodeURIComponent(cid) + "/stop", {});
@@ -1512,12 +1547,16 @@ async function loadProblems() {
 }
 
 // ---------- controls ----------
-function segWire(id, attr, fn) {
-  $$("#" + id + " button").forEach(b => b.addEventListener("click", () => {
-    $$("#" + id + " button").forEach(x => x.classList.remove("on"));
-    b.classList.add("on");
-    fn(b.dataset[attr], b);
-  }));
+function segWire(id, attr, fn) { segGroup([id], attr, fn); }
+
+// The readout and segment switches appear on two cards at once; every group that carries
+// the setting moves together, so the two cards can never disagree about what is in force.
+function segGroup(ids, attr, fn) {
+  ids.forEach(id => $$("#" + id + " button").forEach(b => b.addEventListener("click", () => {
+    const v = b.dataset[attr];
+    ids.forEach(g => $$("#" + g + " button").forEach(x => x.classList.toggle("on", x.dataset[attr] === v)));
+    fn(v, b);
+  })));
 }
 
 function showTab(name) {
@@ -1570,11 +1609,11 @@ function redrawEverything() {
 
 function wireControls() {
   segWire("viewSeg", "v", v => { S.view = v; renderConversation(); });
-  segWire("readoutSeg", "r", r => {
+  segGroup(["readoutSeg", "aggReadoutSeg"], "r", r => {
     S.readout = r; invalidateAgg(); renderConversation(); renderTrajectory(); renderSettings();
     if (S.tab === "agg") renderAggregate();
   });
-  segWire("segSeg", "s", s => {
+  segGroup(["segSeg", "aggSegSeg"], "s", s => {
     S.segment = s; invalidateAgg(); tokChartDraw(); renderTrajectory(); renderSettings();
     if (S.tab === "agg") renderAggregate();
   });
