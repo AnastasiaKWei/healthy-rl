@@ -49,21 +49,21 @@ def resolve_base_url(cli_value: str | None) -> str:
     url = os.environ.get("HEALTHY_RL_SERVER_URL")
     if url and url.strip():
         return url.strip()
-    url_file = os.environ.get("HEALTHY_RL_SERVER_URL_FILE")
+    url_file = os.environ.get("HEALTHY_RL_ENDPOINT_FILE")
     if url_file:
         path = Path(url_file)
         if not path.is_file():
             raise RuntimeError(
-                f"HEALTHY_RL_SERVER_URL_FILE={url_file} does not exist; "
+                f"HEALTHY_RL_ENDPOINT_FILE={url_file} does not exist; "
                 "has the server job written its URL yet?"
             )
         text = path.read_text().strip()
         if not text:
-            raise RuntimeError(f"HEALTHY_RL_SERVER_URL_FILE={url_file} is empty")
+            raise RuntimeError(f"HEALTHY_RL_ENDPOINT_FILE={url_file} is empty")
         return text
     raise RuntimeError(
         "no server URL: pass --base-url, or set HEALTHY_RL_SERVER_URL, "
-        "or set HEALTHY_RL_SERVER_URL_FILE to a file containing it"
+        "or set HEALTHY_RL_ENDPOINT_FILE to a file containing it"
     )
 
 
