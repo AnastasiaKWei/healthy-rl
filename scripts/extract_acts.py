@@ -76,23 +76,28 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def resolve_base_url(cli_value: str | None) -> str:
-    """``--base-url``, else ``$HEALTHY_RL_SERVER_URL``, else the file it names."""
+    """``--base-url``, else ``$HEALTHY_RL_SERVER_URL``, else the file it names.
+
+    ``slurm/serve.slurm`` exports the endpoint path under both spellings; either works.
+    """
     if cli_value and cli_value.strip():
         return cli_value.strip()
     url = os.environ.get("HEALTHY_RL_SERVER_URL")
     if url and url.strip():
         return url.strip()
-    url_file = os.environ.get("HEALTHY_RL_ENDPOINT_FILE")
+    url_file = os.environ.get("HEALTHY_RL_ENDPOINT_FILE") or os.environ.get(
+        "HEALTHY_RL_SERVER_URL_FILE"
+    )
     if url_file:
         path = Path(url_file)
         if not path.is_file():
             raise RuntimeError(
-                f"HEALTHY_RL_ENDPOINT_FILE={url_file} does not exist; "
+                f"endpoint file {url_file} does not exist; "
                 "has the server job written its URL yet?"
             )
         text = path.read_text().strip()
         if not text:
-            raise RuntimeError(f"HEALTHY_RL_ENDPOINT_FILE={url_file} is empty")
+            raise RuntimeError(f"endpoint file {url_file} is empty")
         return text
     raise RuntimeError(
         "no server URL: pass --base-url, or set HEALTHY_RL_SERVER_URL, "

@@ -5,7 +5,7 @@
 stage: extract_acts
 version: v1
 model_dir: ${MODEL_DIR}
-model: gemma-4-31B-it
+model: Olmo-3.1-32B-Think
 
 # Stage 1's output. The text column is `story`, NOT `text`.
 stories_dir: ${ARTIFACT_DIR}/stories/v1
@@ -17,6 +17,10 @@ text_column: story
 # Pooling window. The reference method averages "across all token positions within each
 # story, beginning with the 50th token"; stories with fewer than `min_tokens` prompt
 # tokens have too small a window to be worth keeping and are skipped and counted.
+# Measured against both pilot tokenizers, no story is anywhere near the floor:
+# emotion stories run 134-216 tokens (median 177), neutral 126-189 (median 159), and
+# NOTHING falls under 60. A non-zero n_stories_skipped therefore means something is
+# wrong upstream, not that the corpus is short.
 skip_positions: 50
 min_tokens: 60
 
@@ -41,9 +45,15 @@ checkpoint_every: 200
 max_failure_rate: 0.02
 min_failure_sample: 50
 
-# Must match the vLLM server's --max-model-len (slurm/serve.slurm reads this key).
-max_model_len: 8192
+# slurm/serve.slurm reads these (serve.<key> first, then top level) and refuses to
+# allocate a server without max_model_len -- the checkpoints declare a 131k-262k context
+# that no KV budget on these nodes supports. This stage only prefills stories, and the
+# longest is 216 tokens, so 1024 is ~4.7x headroom and leaves the KV cache free for
+# batching. max_num_seqs is kept above batch_size so the server never becomes the
+# bottleneck at our concurrency.
+max_model_len: 1024
 gpu_memory_utilization: 0.90
+max_num_seqs: 64
 
 # Fixed order. This list defines the emotion axis of every downstream artifact.
 emotions:
