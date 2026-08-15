@@ -35,7 +35,7 @@ import json
 import os
 import re
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -51,6 +51,13 @@ __all__ = [
     "hack_rates",
     "select_sweep_problems",
     "build_conditions",
+    "samples_for_tier",
+    "WorkItem",
+    "expand_work",
+    "parse_shard",
+    "shard_items",
+    "group_by_epochs",
+    "completed_items",
     "JsonlWriter",
     "output_dir",
     "load_vectors",
@@ -225,6 +232,24 @@ def _condition_name(emotion: str, strength: float) -> str:
     return f"{emotion}{strength:+g}"
 
 
+def samples_for_tier(cfg: Mapping[str, Any], tier: int, default: int = 6) -> int:
+    """How many samples per problem this tier gets.
+
+    ``samples_per_problem`` may be a single int for every tier or a mapping keyed
+    by tier (``{1: 12, 2: 8, 3: 8}``; string keys work too). ``readout_samples``
+    and ``sweep_samples`` remain as per-tier fallbacks.
+    """
+    per_tier = cfg.get("samples_per_problem")
+    if isinstance(per_tier, Mapping):
+        for key in (tier, str(tier), f"tier{tier}"):
+            if key in per_tier:
+                return int(per_tier[key])
+    elif per_tier is not None:
+        return int(per_tier)
+    legacy = cfg.get("readout_samples") if tier == 1 else cfg.get("sweep_samples")
+    return int(legacy) if legacy is not None else default
+
+
 def build_conditions(
     readout_samples: int = 6,
     sweep_samples: int = 6,
@@ -354,29 +379,115 @@ def read_jsonl(path: str | os.PathLike[str]) -> list[dict[str, Any]]:
     return records
 
 
-def completed_groups(records: Iterable[Mapping[str, Any]], n_samples: int) -> set[tuple[str, str]]:
-    """``(condition_name, task_id)`` pairs that already have all their samples."""
-    counts: dict[tuple[str, str], int] = {}
-    for record in records:
-        key = (str(record.get("condition_name")), str(record.get("task_id")))
-        counts[key] = counts.get(key, 0) + 1
-    return {key for key, count in counts.items() if count >= n_samples}
+def completed_items(records: Iterable[Mapping[str, Any]]) -> set[tuple[str, str, int]]:
+    """``(condition_name, task_id, sample)`` triples that are already recorded.
 
-
-def compact_records(
-    records: Sequence[Mapping[str, Any]], done: set[tuple[str, str]]
-) -> list[Mapping[str, Any]]:
-    """Keep only records belonging to fully-complete groups.
-
-    On resume, a partially-completed ``(condition, problem)`` group is re-run
-    from scratch. Dropping its earlier records here keeps the JSONL free of
-    duplicate epochs, so the analysis stage never has to de-duplicate.
+    Resume works at the level of a single rollout rather than a whole problem,
+    which is what makes it safe to re-run a shard: a rollout that is already on
+    disk is simply not scheduled again, so no epoch is ever duplicated.
     """
-    return [
-        record
-        for record in records
-        if (str(record.get("condition_name")), str(record.get("task_id"))) in done
-    ]
+    done: set[tuple[str, str, int]] = set()
+    for record in records:
+        sample = record.get("sample")
+        if sample is None:
+            continue
+        done.add((str(record.get("condition_name")), str(record.get("task_id")), int(sample)))
+    return done
+
+
+# ---------------------------------------------------------------------------
+# Work items and sharding -- pure logic, unit-tested
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class WorkItem:
+    """One rollout: a condition, a problem, and which sample of it."""
+
+    index: int
+    """Position in the fully-expanded work list. Shards are taken modulo this."""
+
+    condition: str
+    tier: int
+    task_id: str
+    sample: int
+
+
+def expand_work(
+    conditions: Sequence[Condition], problems_by_set: Mapping[str, Sequence[str]]
+) -> list[WorkItem]:
+    """The fully-expanded (tier, condition, problem, sample) list, in run order.
+
+    The index runs over individual rollouts, not over tiers or problems, so a
+    ``index % n_shards`` split gives every shard a mix of tiers and lets each one
+    finish its share of tier 1 first. Tier 1 is enumerated first, so its indices
+    do not depend on the sweep selection -- which is what allows a shard to
+    expand tier 1 before the sweep problems are known and still agree with every
+    other shard about the numbering.
+    """
+    items: list[WorkItem] = []
+    index = 0
+    for condition in conditions:
+        for task_id in problems_by_set.get(condition.problem_set) or ():
+            for sample in range(condition.n_samples):
+                items.append(
+                    WorkItem(
+                        index=index,
+                        condition=condition.name,
+                        tier=condition.tier,
+                        task_id=task_id,
+                        sample=sample,
+                    )
+                )
+                index += 1
+    return items
+
+
+def parse_shard(value: str | None) -> tuple[int, int]:
+    """``"1/3"`` -> ``(1, 3)``. ``None`` means the single shard ``(0, 1)``."""
+    if value in (None, ""):
+        return (0, 1)
+    assert value is not None
+    text = value.strip().replace(":", "/")
+    if "/" not in text:
+        raise ValueError(f"--shard must look like I/N, got {value!r}")
+    left, right = text.split("/", 1)
+    try:
+        index, count = int(left), int(right)
+    except ValueError as exc:
+        raise ValueError(f"--shard must look like I/N with integers, got {value!r}") from exc
+    if count < 1:
+        raise ValueError(f"--shard count must be >= 1, got {value!r}")
+    if not 0 <= index < count:
+        raise ValueError(f"--shard index must be in [0, {count}), got {value!r}")
+    return (index, count)
+
+
+def shard_items(
+    items: Sequence[WorkItem], shard_index: int, shard_count: int
+) -> list[WorkItem]:
+    """The subset of ``items`` this shard owns. Shards partition the list exactly."""
+    if shard_count < 1 or not 0 <= shard_index < shard_count:
+        raise ValueError(f"invalid shard {shard_index}/{shard_count}")
+    return [item for item in items if item.index % shard_count == shard_index]
+
+
+def group_by_epochs(items: Sequence[WorkItem]) -> dict[int, dict[str, list[int]]]:
+    """``{n_epochs: {task_id: [sample, ...]}}`` for the items of one condition.
+
+    Inspect runs the same ``epochs`` count for every sample in a dataset, but a
+    shard may own three samples of one problem and two of another. Grouping by
+    epoch count turns that into at most a couple of ``eval()`` calls, and the
+    returned sample list gives the epoch -> global sample index mapping.
+    """
+    by_task: dict[str, list[int]] = {}
+    for item in items:
+        by_task.setdefault(item.task_id, []).append(item.sample)
+    grouped: dict[int, dict[str, list[int]]] = {}
+    for task_id, samples in by_task.items():
+        samples.sort()
+        grouped.setdefault(len(samples), {})[task_id] = samples
+    return grouped
 
 
 # ---------------------------------------------------------------------------
@@ -744,6 +855,14 @@ class RunState:
     run_id: str = ""
     residual_dir: Path | None = None
     save_residuals: bool = True
+    shard: str = "0/1"
+    sample_map: dict[tuple[str, str], list[int]] = field(default_factory=dict)
+    """``(condition, task_id) -> global sample index per Inspect epoch``.
+
+    A shard may own samples 1 and 4 of a problem; Inspect will run those as
+    epochs 1 and 2, so the record has to translate back or the analysis stage
+    would see two shards both claiming sample 0.
+    """
     samples_seen: int = 0
     samples_without_hook: int = 0
     turn_errors: list[str] = field(default_factory=list)
@@ -899,8 +1018,9 @@ def _record_sample(sample: Any) -> None:
         "tier": condition.tier,
         "condition": condition.as_record(),
         "condition_name": condition.name,
-        "sample": int(sample.epoch) - 1,
+        "sample": _global_sample(state, condition, sample),
         "epoch": int(sample.epoch),
+        "shard": state.shard,
         "passed": passed,
         "score": score,
         "n_turns": len(turns),
@@ -921,6 +1041,15 @@ def _record_sample(sample: Any) -> None:
         "total_time": getattr(sample, "total_time", None),
     }
     state.writer.write(record)
+
+
+def _global_sample(state: RunState, condition: Condition, sample: Any) -> int:
+    """Inspect's 1-based epoch -> the global sample index this shard was given."""
+    epoch = int(sample.epoch)
+    mapping = state.sample_map.get((condition.name, str(sample.id)))
+    if mapping is not None and 1 <= epoch <= len(mapping):
+        return mapping[epoch - 1]
+    return epoch - 1
 
 
 def _model_turns(sample: Any) -> list[tuple[dict[str, Any] | None, bool]]:
@@ -984,7 +1113,11 @@ def _write_residuals(
     if not arrays:
         return None
     assert state.residual_dir is not None
-    target = state.residual_dir / condition.name / f"{sample.id}_e{int(sample.epoch)}.npz"
+    target = (
+        state.residual_dir
+        / condition.name
+        / f"{sample.id}_s{_global_sample(state, condition, sample)}.npz"
+    )
     target.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(target, **arrays)
     return target.relative_to(state.residual_dir.parent)
@@ -1075,10 +1208,14 @@ def preflight(base_url: str, model_name: str, vectors: Vectors, cfg: Mapping[str
     A silent hook is the failure mode this whole stage is most exposed to: the
     rollouts would run to completion and produce records with no emotion data at
     all. One cheap request up front makes that failure immediate and loud.
-    """
-    from vllm_lens.client import VLLMLensClient
 
-    client = VLLMLensClient(
+    Uses ``healthy_rl.server.LensClient``, which retries transient connection
+    errors -- this stage runs for hours and a dropped socket must not end it.
+    """
+    from healthy_rl.server import LensClient, wait_for_health
+
+    wait_for_health(base_url, timeout_s=float(cfg.get("health_timeout_s", 1800.0)))
+    client = LensClient(
         base_url, model=model_name, timeout=float(cfg.get("request_timeout_s", 600.0))
     )
     hook = make_projection_hook(
@@ -1136,6 +1273,29 @@ def _residual_layers(vectors: Vectors, cfg: Mapping[str, Any]) -> list[int]:
     return layers
 
 
+def shard_jsonl_name(shard_index: int, shard_count: int) -> str:
+    """Each shard owns its own file, so there is never a concurrent writer."""
+    if shard_count == 1:
+        return "rollouts.jsonl"
+    return f"rollouts.shard{shard_index}of{shard_count}.jsonl"
+
+
+def read_all_shards(out: Path) -> list[dict[str, Any]]:
+    """Every rollout record visible in ``out``, across all shard files.
+
+    The readout hack rates that select the sweep problems must be computed from
+    *all* tier-1 rollouts, not just this shard's slice, or shards would disagree
+    about which 12 problems the sweep covers. When shards write to separate
+    directories this only sees the local file, which is why the summary records
+    how many readout records the selection was actually based on -- and why
+    ``sweep_problems`` can be pinned explicitly from the config.
+    """
+    records: list[dict[str, Any]] = []
+    for path in sorted(out.glob("rollouts*.jsonl")):
+        records.extend(read_jsonl(path))
+    return records
+
+
 # ---------------------------------------------------------------------------
 # Driver
 # ---------------------------------------------------------------------------
@@ -1149,29 +1309,48 @@ def run_rollouts(
     bench_parquet: str | os.PathLike[str],
     out_dir: str | os.PathLike[str],
     resume: bool = True,
+    shard: tuple[int, int] = (0, 1),
+    tiers: Sequence[int] | None = None,
+    sweep_problems: Sequence[str] | None = None,
 ) -> dict[str, Any]:
-    """Run every condition in tier order, appending each rollout as it completes.
+    """Run this shard's rollouts in tier order, appending each as it completes.
 
-    Returns the summary dict that the script writes to ``summary.json``.
+    ``shard`` is ``(index, count)``: the work list is expanded down to individual
+    rollouts and split ``index % count``, so every shard gets a mix of tiers and
+    clears its share of tier 1 first. Returns the summary dict.
     """
     global _STATE
 
     from inspect_ai import eval as inspect_eval
     from inspect_ai.model import GenerateConfig, get_model
 
+    shard_index, shard_count = shard
+    shard_label = f"{shard_index}/{shard_count}"
     vectors = load_vectors(vectors_dir)
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    jsonl_path = out / "rollouts.jsonl"
+    jsonl_path = out / shard_jsonl_name(shard_index, shard_count)
 
-    conditions = build_conditions(
-        readout_samples=int(cfg.get("readout_samples", 6)),
-        sweep_samples=int(cfg.get("sweep_samples", 6)),
-        tier2_emotions=tuple(cfg.get("tier2_emotions", ("desperate", "calm", "frustrated"))),
-        tier2_strength=float(cfg.get("tier2_strength", 0.05)),
-        tier3_emotions=tuple(cfg.get("tier3_emotions", ("desperate", "calm"))),
-        tier3_strength=float(cfg.get("tier3_strength", 0.1)),
-    )
+    conditions = [
+        c
+        for c in build_conditions(
+            readout_samples=samples_for_tier(cfg, 1),
+            sweep_samples=samples_for_tier(cfg, 2),
+            tier2_emotions=tuple(cfg.get("tier2_emotions", ("desperate", "calm", "frustrated"))),
+            tier2_strength=float(cfg.get("tier2_strength", 0.05)),
+            tier3_emotions=tuple(cfg.get("tier3_emotions", ("desperate", "calm"))),
+            tier3_strength=float(cfg.get("tier3_strength", 0.1)),
+        )
+        if tiers is None or c.tier in tiers
+    ]
+    # Tier 3 may have a different budget from tier 2.
+    conditions = [
+        c if c.tier != 3 else replace(c, n_samples=samples_for_tier(cfg, 3))
+        for c in conditions
+    ]
+    if not conditions:
+        raise ValueError(f"no conditions left after filtering to tiers {list(tiers or [])}")
+
     missing_emotions = sorted(
         {c.emotion for c in conditions if c.emotion} - set(vectors.emotions)
     )
@@ -1186,28 +1365,20 @@ def run_rollouts(
     all_task_ids = [str(v) for v in pd.read_parquet(bench_parquet, columns=["task_id"])["task_id"]]
     readout_problems = select_readout_problems(all_task_ids, int(cfg.get("readout_problems", 24)))
 
-    # Resume: keep only fully-complete (condition, problem) groups so the JSONL
-    # never carries duplicate epochs, and re-run everything else.
-    existing: list[Mapping[str, Any]] = []
-    if resume and jsonl_path.is_file():
-        raw = read_jsonl(jsonl_path)
-        done: set[tuple[str, str]] = set()
-        for condition in conditions:
-            group = [r for r in raw if r.get("condition_name") == condition.name]
-            done |= completed_groups(group, condition.n_samples)
-        existing = compact_records(raw, done)
-        if len(existing) != len(raw):
-            with jsonl_path.open("w", encoding="utf-8") as handle:
-                for record in existing:
-                    handle.write(json.dumps(record, sort_keys=True, default=_json_default) + "\n")
-    elif jsonl_path.is_file():
+    if not resume and jsonl_path.is_file():
         jsonl_path.unlink()
+    existing = read_jsonl(jsonl_path)
+    done = completed_items(existing)
 
     summary: dict[str, Any] = {
         "stage": "rollouts",
         "model": model_name,
         "base_url": base_url,
         "run_id": uuid.uuid4().hex,
+        "shard": shard_label,
+        "jsonl": jsonl_path.name,
+        "tiers": sorted({c.tier for c in conditions}),
+        "samples_per_problem": {str(c.tier): c.n_samples for c in conditions},
         "readout_problems": readout_problems,
         "n_bench_problems": len(all_task_ids),
         "emotions": vectors.emotions,
@@ -1218,6 +1389,7 @@ def run_rollouts(
         "resumed_records": len(existing),
         "disqualified": False,
         "sweep": None,
+        "sweep_source": None,
         "preflight": None,
         "complete": False,
     }
@@ -1227,11 +1399,11 @@ def run_rollouts(
             f"wanted {int(cfg.get('readout_problems', 24))}"
         ]
 
-    summary_path = out / "summary.json"
+    summary_path = out / f"summary.shard{shard_index}of{shard_count}.json" if shard_count > 1 else out / "summary.json"
     records: list[Mapping[str, Any]] = list(existing)
 
     def checkpoint() -> None:
-        """Refresh the counters and rewrite summary.json.
+        """Refresh the counters and rewrite the summary.
 
         Called after every condition so a killed job leaves a summary describing
         what it actually got through, not a stale one from before it started.
@@ -1252,6 +1424,7 @@ def run_rollouts(
         run_id=summary["run_id"],
         residual_dir=out / "residuals",
         save_residuals=bool(cfg.get("save_residuals", True)),
+        shard=shard_label,
     )
     _STATE = state
 
@@ -1264,6 +1437,20 @@ def run_rollouts(
         or (out / "inspect-logs")
     )
     sweep: SweepSelection | None = None
+    if sweep_problems is None and cfg.get("sweep_problems_override"):
+        sweep_problems = list(cfg["sweep_problems_override"])
+    if sweep_problems is not None:
+        sweep = SweepSelection(
+            problems=sort_task_ids(sweep_problems),
+            qualifying=list(sweep_problems),
+            filled=[],
+            disqualified=not sweep_problems,
+            reason="pinned by the caller, not derived from this shard's readout",
+        )
+        summary["sweep"] = asdict(sweep)
+        summary["sweep_source"] = "pinned"
+        summary["disqualified"] = sweep.disqualified
+
     # Record the plan before anything can fail, so even an immediate crash leaves
     # a summary saying which problems this run was going to cover.
     checkpoint()
@@ -1277,16 +1464,25 @@ def run_rollouts(
             state.writer = writer
             for condition in conditions:
                 if condition.problem_set == "readout":
-                    problems = readout_problems
+                    problems: list[str] = list(readout_problems)
                 else:
                     if sweep is None:
-                        # Selected from the readout results only. Sweep samples are
-                        # drawn fresh: readout samples pick the problems and are
-                        # never reused for effect estimates.
+                        # Selected from the readout results across every shard file
+                        # visible here. Sweep samples are drawn fresh: readout
+                        # samples pick the problems and are never reused for
+                        # effect estimates.
+                        pool = [
+                            r for r in read_all_shards(out)
+                            if r.get("condition_name") == READOUT_CONDITION
+                        ]
                         sweep = select_sweep_problems(
-                            hack_rates(records), int(cfg.get("sweep_problems", 12))
+                            hack_rates(pool), int(cfg.get("sweep_problems", 12))
                         )
                         summary["sweep"] = asdict(sweep)
+                        summary["sweep_source"] = {
+                            "readout_records": len(pool),
+                            "expected": len(readout_problems) * samples_for_tier(cfg, 1),
+                        }
                         summary["disqualified"] = sweep.disqualified
                     if sweep.disqualified:
                         summary["conditions"].append(
@@ -1298,24 +1494,40 @@ def run_rollouts(
                         )
                         checkpoint()
                         continue
-                    problems = sweep.problems
+                    problems = list(sweep.problems)
 
-                done = completed_groups(
-                    [r for r in records if r.get("condition_name") == condition.name],
-                    condition.n_samples,
+                # Tier 1 is enumerated first, so its indices do not depend on the
+                # sweep list and every shard numbers them identically even before
+                # the sweep is known.
+                mine = shard_items(
+                    expand_work(
+                        conditions,
+                        {
+                            "readout": readout_problems,
+                            "sweep": list(sweep.problems) if sweep else [],
+                        },
+                    ),
+                    shard_index,
+                    shard_count,
                 )
-                todo = [p for p in problems if (condition.name, p) not in done]
+                todo = [
+                    item
+                    for item in mine
+                    if item.condition == condition.name
+                    and (item.condition, item.task_id, item.sample) not in done
+                ]
                 entry: dict[str, Any] = {
                     "name": condition.name,
                     "tier": condition.tier,
                     "emotion": condition.emotion,
                     "strength": condition.strength,
                     "n_problems": len(problems),
+                    "n_rollouts": len([i for i in mine if i.condition == condition.name]),
                     "n_todo": len(todo),
                     "n_samples": condition.n_samples,
                 }
                 if not todo:
-                    entry["skipped"] = "already complete"
+                    entry["skipped"] = "nothing left for this shard"
                     summary["conditions"].append(entry)
                     checkpoint()
                     continue
@@ -1334,39 +1546,48 @@ def run_rollouts(
                         temperature=float(cfg.get("temperature", 1.0)),
                         top_p=float(cfg.get("top_p", 1.0)),
                         max_tokens=int(cfg.get("max_tokens", 2048)),
-                        max_connections=int(cfg.get("max_connections", 8)),
+                        max_connections=int(cfg.get("max_connections", 12)),
                         extra_body={"extra_args": extra_args},
                     ),
                 )
 
-                state.condition = condition
                 before = writer.n_written
-                try:
-                    logs = inspect_eval(
-                        build_task(
-                            todo,
-                            bench_parquet,
-                            max_attempts=int(cfg.get("max_attempts", 3)),
-                            message_limit=int(cfg.get("message_limit", 30)),
-                            sandbox=str(cfg.get("sandbox", "local")),
-                            use_hf=bool(cfg.get("use_hf_dataset", False)),
-                        ),
-                        model=model,
-                        epochs=condition.n_samples,
-                        log_dir=log_dir,
-                        max_samples=int(cfg.get("max_samples", 8)),
-                        max_subprocesses=int(cfg.get("max_subprocesses", 8)),
-                        max_sandboxes=int(cfg.get("max_sandboxes", 8)),
-                        fail_on_error=False,
-                        display="plain",
-                        score=True,
-                    )
-                finally:
-                    state.condition = None
+                statuses: list[str] = []
+                # Inspect runs one `epochs` count for the whole dataset, but a
+                # shard can own three samples of one problem and two of another,
+                # so problems are batched by how many rollouts are still owed.
+                for n_epochs, by_task in sorted(group_by_epochs(todo).items()):
+                    for task_id, samples in by_task.items():
+                        state.sample_map[(condition.name, task_id)] = samples
+                    state.condition = condition
+                    try:
+                        logs = inspect_eval(
+                            build_task(
+                                sort_task_ids(by_task.keys()),
+                                bench_parquet,
+                                max_attempts=int(cfg.get("max_attempts", 3)),
+                                message_limit=int(cfg.get("message_limit", 30)),
+                                sandbox=str(cfg.get("sandbox", "local")),
+                                use_hf=bool(cfg.get("use_hf_dataset", False)),
+                            ),
+                            model=model,
+                            epochs=n_epochs,
+                            log_dir=log_dir,
+                            max_samples=int(cfg.get("max_samples", 12)),
+                            max_subprocesses=int(cfg.get("max_subprocesses", 12)),
+                            max_sandboxes=int(cfg.get("max_sandboxes", 12)),
+                            fail_on_error=False,
+                            display="plain",
+                            score=True,
+                        )
+                    finally:
+                        state.condition = None
+                    statuses.extend(log.status for log in logs)
 
                 records = read_jsonl(jsonl_path)
+                done = completed_items(records)
                 entry["n_written"] = writer.n_written - before
-                entry["eval_status"] = [log.status for log in logs]
+                entry["eval_status"] = statuses
                 summary["conditions"].append(entry)
                 checkpoint()
 
@@ -1379,9 +1600,9 @@ def run_rollouts(
                     )
                 if entry["n_written"] == 0:
                     raise RuntimeError(
-                        f"condition {condition.name!r} ran {len(todo)} problems x "
-                        f"{condition.n_samples} samples but wrote no records; "
-                        f"Inspect produced no finished samples (status {entry['eval_status']})"
+                        f"condition {condition.name!r} scheduled {len(todo)} rollouts but "
+                        f"wrote no records; Inspect produced no finished samples "
+                        f"(status {statuses})"
                     )
                 if state.samples_seen and state.samples_without_hook == state.samples_seen:
                     raise RuntimeError(

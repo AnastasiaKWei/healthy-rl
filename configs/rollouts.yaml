@@ -1,10 +1,12 @@
 # Stages 6-7: ImpossibleBench rollouts, emotion readout and steering sweep.
 #
-# Runs inside apptainer/eval.sif against an already-running vllm-lens server.
-# Paths default to the container binds; ARTIFACT_DIR is the host fallback for a
-# run outside the container. Model name comes from $HEALTHY_RL_MODEL_NAME (or
-# --model); results go to $HEALTHY_RL_ARTIFACT_OUT, never to the read-only
-# /artifacts bind.
+# Runs inside apptainer/eval.sif against the vllm-lens server slurm/serve.slurm
+# starts. Model name comes from $HEALTHY_RL_MODEL_NAME (or --model); results go
+# to $HEALTHY_RL_ARTIFACT_OUT, never to the read-only /artifacts bind.
+#
+# The pilot runs two models: Qwen3.6-27B and Olmo-3.1-32B-Think. Nothing here is
+# model-specific -- shapes come from the checkpoint via ModelSpec and from the
+# vectors artifact.
 stage: rollouts
 version: v1
 
@@ -16,7 +18,23 @@ version: v1
 #   <artifact_root>/vectors/<model>/<version>, <artifact_root>/bench/<version>
 # and are only worth setting to point at a different build.
 
-# Dataset. The scaffold is
+# --- server, read by slurm/serve.slurm before it allocates the node -----------
+serve:
+  # Rollouts need a genuinely large window: message_limit 30 with max_attempts 3
+  # feeds full test-failure output back each round, so transcripts get long. On a
+  # 2-GPU node holding a ~60-69 GB bf16 model at tp=2, weights take ~17-18 GB per
+  # GPU and 0.90 utilisation leaves roughly 55 GB per GPU for KV. A 32B-class
+  # model with GQA costs on the order of 130 KB per token per GPU at tp=2, so
+  # 12288 tokens x 12 concurrent sequences is about 19 GB -- comfortably inside
+  # the budget, with headroom for the prefix cache. Going wider buys throughput
+  # only if the rollouts are actually generation-bound; vLLM preempts rather than
+  # failing if KV runs short, so this is a throughput knob, not a crash risk.
+  max_model_len: 12288
+  gpu_memory_utilization: 0.90
+  max_num_seqs: 12
+
+# --- dataset ------------------------------------------------------------------
+# The scaffold is
 #   impossible_livecodebench(split="conflicting", agent_type="minimal",
 #                            sandbox="local", max_attempts=3, message_limit=30)
 # but its dataset is rebuilt from bench/v1/conflicting.parquet, because compute
@@ -27,40 +45,57 @@ sandbox: local
 max_attempts: 3
 message_limit: 30
 
-# Conditions. Tier 1 is the unsteered readout that selects the sweep problems;
-# tier 2 carries the `frustrated` control and therefore runs BEFORE tier 3, so a
-# wall-clock timeout costs extra dose-response points rather than the control.
+# --- conditions ---------------------------------------------------------------
+# Tier 1 is the unsteered readout that selects the sweep problems; tier 2 carries
+# the `frustrated` control and therefore runs BEFORE tier 3, so a wall-clock
+# timeout costs extra dose-response points rather than the control.
 readout_problems: 24
-readout_samples: 6
 sweep_problems: 12
-sweep_samples: 6
+# Samples per problem, per tier. A single integer applies to every tier.
+samples_per_problem:
+  1: 12
+  2: 8
+  3: 8
 tier2_emotions: [desperate, calm, frustrated]
 tier2_strength: 0.05
 tier3_emotions: [desperate, calm]
 tier3_strength: 0.1
 
-# Sampling. Temperature must be > 0: six samples of one problem at temperature 0
-# would be six copies of the same rollout.
+# Pin the sweep to specific task_ids instead of deriving them from the readout.
+# Needed when tier 1 ran as separate shard jobs whose JSONLs a tier-2/3 job
+# cannot see: without it each shard would select its own 12 problems from its own
+# slice of the readout. --sweep-problems overrides this.
+# sweep_problems_override: [lcbhard_3, lcbhard_7, ...]
+
+# --- sampling -----------------------------------------------------------------
+# Temperature must be > 0: repeated samples of one problem at temperature 0 would
+# be identical rollouts.
 temperature: 1.0
 top_p: 1.0
 max_tokens: 2048
 
-# Concurrency. Each in-flight sample holds one local sandbox subprocess.
-max_connections: 8
-max_samples: 8
-max_subprocesses: 8
-max_sandboxes: 8
+# --- concurrency --------------------------------------------------------------
+# Matches serve.max_num_seqs: each in-flight sample holds one server slot and one
+# local sandbox subprocess. This is what sets the overnight wall clock, together
+# with --shard I/N, which splits the expanded rollout list across nodes.
+max_connections: 12
+max_samples: 12
+max_subprocesses: 12
+max_sandboxes: 12
 
-# Measurement. Per-token projections onto all 14 directions are kept at every
-# capture layer (~280 bytes a token). Full residuals are kept only at event
-# positions -- turn boundaries and the first token after a test-failure message
-# -- and only at `probe` by default; `all` means every capture layer, and an
-# explicit list is also accepted.
+# --- measurement --------------------------------------------------------------
+# Per-token projections onto all 14 directions are kept at every capture layer
+# (~280 bytes a token). Full residuals are kept only at event positions -- turn
+# boundaries and the first token after a test-failure message -- and only at
+# `probe` by default; `all` means every capture layer, and an explicit list is
+# also accepted.
 residual_layers: probe
 save_residuals: true
 
-# Preflight: one cheap request that proves the projection hook fires on every
-# capture layer and that steering is accepted, before hours are spent.
+# --- preflight ----------------------------------------------------------------
+# One cheap request that proves the projection hook fires on every capture layer
+# and that steering is accepted, before hours are spent.
 preflight_prompt: "Write one sentence about a deadline that is about to be missed."
 preflight_max_tokens: 16
 request_timeout_s: 600
+health_timeout_s: 1800

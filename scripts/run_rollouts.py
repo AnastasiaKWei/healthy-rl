@@ -33,7 +33,7 @@ from pathlib import Path
 
 from healthy_rl.artifacts import check_upstream, verify_upstreams, write_manifest
 from healthy_rl.config import load_config, load_env, repo_root
-from healthy_rl.rollouts import output_dir, run_rollouts
+from healthy_rl.rollouts import output_dir, parse_shard, run_rollouts
 
 DEFAULT_CONFIG = repo_root() / "configs" / "rollouts.yaml"
 SUMMARY_NAME = "summary.json"
@@ -52,6 +52,29 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="root holding vectors/ and bench/ (default: /artifacts in the container)",
     )
     parser.add_argument(
+        "--shard",
+        default=None,
+        metavar="I/N",
+        help=(
+            "run only work items where index %% N == I, over the fully expanded "
+            "(tier, condition, task_id, sample) list. Each shard writes its own JSONL."
+        ),
+    )
+    parser.add_argument(
+        "--tiers",
+        default=None,
+        help="comma-separated tiers to run (default: all). e.g. --tiers 1 or --tiers 2,3",
+    )
+    parser.add_argument(
+        "--sweep-problems",
+        default=None,
+        help=(
+            "comma-separated task_ids to pin the sweep to, instead of deriving them "
+            "from the readout. Use this when tier 1 ran as separate shard jobs whose "
+            "JSONLs this job cannot see, so every shard sweeps the same problems."
+        ),
+    )
+    parser.add_argument(
         "--no-resume",
         action="store_true",
         help="discard any existing rollouts.jsonl instead of continuing it",
@@ -60,28 +83,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def resolve_base_url(cli_value: str | None) -> str:
-    """``--base-url``, else ``$HEALTHY_RL_SERVER_URL``, else the file it names."""
+    """``--base-url``, else the environment ``slurm/serve.slurm`` exports.
+
+    ``healthy_rl.server`` owns that chain -- ``$HEALTHY_RL_SERVER_URL``, then
+    ``$HEALTHY_RL_ENDPOINT_FILE`` or its ``$HEALTHY_RL_SERVER_URL_FILE`` alias --
+    so both spellings work and the endpoint file is parsed the same way here as
+    everywhere else.
+    """
     if cli_value:
         return cli_value.strip()
-    url = os.environ.get("HEALTHY_RL_SERVER_URL")
-    if url and url.strip():
-        return url.strip()
-    url_file = os.environ.get("HEALTHY_RL_ENDPOINT_FILE")
-    if url_file:
-        path = Path(url_file)
-        if not path.is_file():
-            raise RuntimeError(
-                f"HEALTHY_RL_ENDPOINT_FILE={url_file} does not exist; "
-                "has the server job written its URL yet?"
-            )
-        text = path.read_text().strip()
-        if not text:
-            raise RuntimeError(f"HEALTHY_RL_ENDPOINT_FILE={url_file} is empty")
-        return text
-    raise RuntimeError(
-        "no server URL: pass --base-url, or set HEALTHY_RL_SERVER_URL, "
-        "or set HEALTHY_RL_ENDPOINT_FILE to a file containing it"
-    )
+    from healthy_rl.server import base_url_from_env
+
+    return base_url_from_env()
 
 
 CONTAINER_ARTIFACT_ROOT = Path("/artifacts")
@@ -121,6 +134,12 @@ def resolve_model(cli_value: str | None, cfg: dict) -> str:
     return str(model)
 
 
+def summary_name(shard: tuple[int, int]) -> str:
+    """Shard-specific, matching what ``run_rollouts`` writes."""
+    index, count = shard
+    return SUMMARY_NAME if count == 1 else f"summary.shard{index}of{count}.json"
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     load_env()
@@ -144,19 +163,29 @@ def main(argv: list[str] | None = None) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     print(
-        f"rollouts: model={model} url={base_url}\n"
+        f"rollouts: model={model} url={base_url} shard={shard[0]}/{shard[1]}\n"
         f"  vectors  {vectors_dir}\n"
         f"  bench    {bench_parquet}\n"
         f"  out      {out_dir}",
         flush=True,
     )
 
-    # Drop any summary from an earlier run: below, "summary.json exists" is taken
-    # to mean this run wrote it. Resume state lives in rollouts.jsonl, not here.
-    (out_dir / SUMMARY_NAME).unlink(missing_ok=True)
 
     summary: dict = {"stage": "rollouts", "model": model, "complete": False}
+    shard = parse_shard(args.shard)
+    tiers = (
+        [int(t) for t in args.tiers.replace(",", " ").split()] if args.tiers else None
+    )
+    sweep_problems = (
+        [t for t in args.sweep_problems.replace(",", " ").split()]
+        if args.sweep_problems
+        else None
+    )
     failure: BaseException | None = None
+    # Drop any summary from an earlier run: below, "the file exists" is taken to
+    # mean this run wrote it. Resume state lives in the JSONL, not here.
+    (out_dir / summary_name(shard)).unlink(missing_ok=True)
+
     try:
         summary = run_rollouts(
             cfg,
@@ -166,6 +195,9 @@ def main(argv: list[str] | None = None) -> int:
             bench_parquet=bench_parquet,
             out_dir=out_dir,
             resume=not args.no_resume,
+            shard=shard,
+            tiers=tiers,
+            sweep_problems=sweep_problems,
         )
     except BaseException as exc:  # noqa: BLE001 - record what got done, then re-raise loudly
         failure = exc
@@ -175,7 +207,7 @@ def main(argv: list[str] | None = None) -> int:
     # run_rollouts() rewrites summary.json after every condition, so on failure the
     # file on disk already records how far the run got. Keep that detail and add
     # the traceback to it rather than replacing it with this thinner dict.
-    summary_path = out_dir / SUMMARY_NAME
+    summary_path = out_dir / summary_name(shard)
     if failure is not None and summary_path.is_file():
         on_disk = json.loads(summary_path.read_text())
         on_disk.update(

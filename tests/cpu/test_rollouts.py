@@ -14,12 +14,16 @@ from healthy_rl.rollouts import (
     READOUT_CONDITION,
     JsonlWriter,
     build_conditions,
-    compact_records,
-    completed_groups,
+    completed_items,
+    expand_work,
+    group_by_epochs,
     hack_rates,
+    parse_shard,
     read_jsonl,
+    samples_for_tier,
     select_readout_problems,
     select_sweep_problems,
+    shard_items,
     sort_task_ids,
     task_order_key,
 )
@@ -241,12 +245,108 @@ def test_read_jsonl_drops_a_truncated_final_line(tmp_path):
     assert [r["task_id"] for r in read_jsonl(path)] == ["lcbhard_0"]
 
 
-def test_resume_keeps_only_complete_groups():
+def test_resume_is_per_rollout_not_per_problem():
     records = _readout_records({"lcbhard_0": 0.5}, n_samples=6)
     records += _readout_records({"lcbhard_1": 0.5}, n_samples=6)[:2]  # interrupted
 
-    done = completed_groups(records, 6)
-    assert done == {(READOUT_CONDITION, "lcbhard_0")}
+    done = completed_items(records)
+    assert len(done) == 8
+    assert (READOUT_CONDITION, "lcbhard_0", 5) in done
+    # The interrupted problem keeps the two rollouts it did finish; only the
+    # missing four get scheduled again, so no epoch is ever duplicated.
+    assert (READOUT_CONDITION, "lcbhard_1", 1) in done
+    assert (READOUT_CONDITION, "lcbhard_1", 2) not in done
 
-    kept = compact_records(records, done)
-    assert {r["task_id"] for r in kept} == {"lcbhard_0"}
+
+# ---------------------------------------------------------------------------
+# Sharding: split the expanded rollout list across nodes
+# ---------------------------------------------------------------------------
+
+
+def _work(readout=("lcbhard_0", "lcbhard_1"), sweep=("lcbhard_0",), **kwargs):
+    return expand_work(
+        build_conditions(**kwargs), {"readout": list(readout), "sweep": list(sweep)}
+    )
+
+
+def test_work_expands_to_one_item_per_rollout():
+    items = _work(readout=[f"lcbhard_{i}" for i in range(24)],
+                  sweep=[f"lcbhard_{i}" for i in range(12)],
+                  readout_samples=6, sweep_samples=6)
+    # 24 x 6 readout, then 10 steered conditions x 12 problems x 6 samples.
+    assert len(items) == 24 * 6 + 10 * 12 * 6
+    assert [i.index for i in items] == list(range(len(items)))
+    assert [i.tier for i in items] == sorted(i.tier for i in items)
+
+
+def test_tier_one_indices_do_not_depend_on_the_sweep():
+    """A shard has to number tier 1 before the sweep problems are known."""
+    readout = [f"lcbhard_{i}" for i in range(24)]
+    without = [i for i in _work(readout=readout, sweep=[]) if i.tier == 1]
+    with_sweep = [i for i in _work(readout=readout, sweep=readout[:12]) if i.tier == 1]
+    assert without == with_sweep
+
+
+def test_shards_partition_the_work_exactly():
+    items = _work(readout=[f"lcbhard_{i}" for i in range(24)],
+                  sweep=[f"lcbhard_{i}" for i in range(12)])
+    for n in (1, 2, 3, 5):
+        pieces = [shard_items(items, i, n) for i in range(n)]
+        flat = [item for piece in pieces for item in piece]
+        assert sorted(i.index for i in flat) == [i.index for i in items]
+        assert len({i.index for i in flat}) == len(items)
+        # Balanced to within one item, so no node is left holding the bag.
+        assert max(map(len, pieces)) - min(map(len, pieces)) <= 1
+
+
+def test_every_shard_gets_tier_one_work():
+    """Sharding over rollouts, not over tiers, is what makes this true."""
+    items = _work(readout=[f"lcbhard_{i}" for i in range(24)],
+                  sweep=[f"lcbhard_{i}" for i in range(12)])
+    for i in range(4):
+        tiers = {item.tier for item in shard_items(items, i, 4)}
+        assert tiers == {1, 2, 3}
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [(None, (0, 1)), ("", (0, 1)), ("0/1", (0, 1)), ("2/3", (2, 3)), (" 1/4 ", (1, 4))],
+)
+def test_parse_shard(text, expected):
+    assert parse_shard(text) == expected
+
+
+@pytest.mark.parametrize("bad", ["3/3", "-1/2", "2", "a/b", "1/0"])
+def test_parse_shard_rejects_nonsense(bad):
+    with pytest.raises(ValueError):
+        parse_shard(bad)
+
+
+def test_group_by_epochs_batches_uneven_shares():
+    from healthy_rl.rollouts import WorkItem
+
+    items = [
+        WorkItem(0, "readout", 1, "lcbhard_0", 0),
+        WorkItem(1, "readout", 1, "lcbhard_0", 3),
+        WorkItem(2, "readout", 1, "lcbhard_1", 1),
+    ]
+    grouped = group_by_epochs(items)
+    assert grouped == {2: {"lcbhard_0": [0, 3]}, 1: {"lcbhard_1": [1]}}
+
+
+# ---------------------------------------------------------------------------
+# Per-tier sample budgets
+# ---------------------------------------------------------------------------
+
+
+def test_samples_per_problem_accepts_a_mapping_or_a_scalar():
+    assert samples_for_tier({"samples_per_problem": {1: 12, 2: 8, 3: 8}}, 1) == 12
+    assert samples_for_tier({"samples_per_problem": {"1": 12, "2": 8}}, 2) == 8
+    assert samples_for_tier({"samples_per_problem": 5}, 3) == 5
+
+
+def test_samples_per_problem_falls_back_to_the_older_keys():
+    cfg = {"readout_samples": 6, "sweep_samples": 4}
+    assert samples_for_tier(cfg, 1) == 6
+    assert samples_for_tier(cfg, 2) == 4
+    assert samples_for_tier({}, 1) == 6
