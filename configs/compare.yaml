@@ -48,9 +48,12 @@ caveats:
     projection carries more of whatever the other 13 share."
   - "`exasperated` tokenises with a leading `Ġex`, so it can never contribute a
     self-token hit: the gate's self_token_rate ceiling is 13/14 = 0.93, not 1.0."
-  - "Scope was cut for overnight throughput: 16 readout problems x 4 samples, and
-    the sweep on 6 problems. Every interval below is wide; read the n, not the
-    point estimate."
+  # The scope and truncation caveats are NOT listed here. They are computed from
+  # the records and prepended automatically, because the run was launched from
+  # generated per-shard configs (configs/shards/) that cut the scope further at
+  # launch -- any scope quoted from this file would state an n that never ran.
+  - "The n are small throughout and every interval is wide. Read the n and the
+    interval, not the point estimate."
   - "Two of the four planned models were dropped before any rollout ran:
     Muse-Glimmer-30B (vLLM 0.27.1 has no such architecture) and gemma-4-31B-it
     (vLLM cannot express its heterogeneous per-layer head_dim {256, 512})."
