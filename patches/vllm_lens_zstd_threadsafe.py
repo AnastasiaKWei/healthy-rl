@@ -1,11 +1,25 @@
 #!/usr/bin/env python
 """Make vllm-lens 1.2.1's zstd transport thread-safe.
 
-vllm-lens keeps two PROCESS-GLOBAL zstd objects and calls them from concurrent
-request handlers:
+vllm-lens keeps THREE pairs of PROCESS-GLOBAL zstd objects and calls them from
+concurrent request handlers:
 
     vllm_lens/_worker_ext.py:52          _ZSTD_COMPRESSOR   = zstd.ZstdCompressor(level=1)
     vllm_lens/_activations_plugin.py:35  _ZSTD_DECOMPRESSOR = zstd.ZstdDecompressor()
+    vllm_lens/_helpers/_serialize.py:14  _ZSTD_COMPRESSOR    (serialize_tensor, server side)
+    vllm_lens/_helpers/_serialize.py:15  _ZSTD_DECOMPRESSOR  (deserialize_tensor, CLIENT side)
+
+The `_serialize.py` pair is the one that actually broke stage 3: the client
+decompresses every activation response there, and the observed exception was a
+bare ZstdError raised inside the client's own fetch, which only happens at
+`_serialize.py:70`.
+
+THE SILENT VARIANT IS THE DANGEROUS ONE. Measured at the real 9.5 MB payload
+size with 8+ threads, unpatched `_serialize` produced 12 raised errors AND
+**5 silent mismatches** — payloads that decompress without raising and return
+the WRONG BYTES. Those fold into the emotion means undetected; a failure count
+of zero does not mean a run was clean. Any `capture_layers` data taken on an
+unpatched venv must be treated as suspect, not merely incomplete.
 
 A ZstdCompressor/ZstdDecompressor reuses one internal ZSTD_CCtx/ZSTD_DCtx, so
 concurrent compress()/decompress() calls on the same instance interleave and
@@ -58,6 +72,19 @@ TARGETS = [
         "_ZSTD_DECOMPRESSOR = zstd.ZstdDecompressor()",
         "_ZSTD_DECOMPRESSOR = _PerCallZstd(lambda: zstd.ZstdDecompressor())",
     ),
+    # The pair that actually broke stage 3. `deserialize_tensor` runs in the
+    # CLIENT process, which decompresses one multi-MB activation payload per
+    # response across many threads.
+    (
+        "_helpers/_serialize.py",
+        "_ZSTD_COMPRESSOR = zstd.ZstdCompressor(level=1)",
+        "_ZSTD_COMPRESSOR = _PerCallZstd(lambda: zstd.ZstdCompressor(level=1))",
+    ),
+    (
+        "_helpers/_serialize.py",
+        "_ZSTD_DECOMPRESSOR = zstd.ZstdDecompressor()",
+        "_ZSTD_DECOMPRESSOR = _PerCallZstd(lambda: zstd.ZstdDecompressor())",
+    ),
 ]
 
 
@@ -75,9 +102,11 @@ def main() -> int:
         if old not in src:
             print(f"  ERROR: anchor not found in {fname}: {old!r}", file=sys.stderr)
             return 2
-        path.write_text(src.replace(old, SHIM + "\n" + new, 1))
-        changed.append(fname)
-        print(f"  patched: {path}")
+        # _serialize.py carries two anchors; the shim class goes in once per file.
+        prefix = "" if "_PerCallZstd" in src else SHIM + "\n"
+        path.write_text(src.replace(old, prefix + new, 1))
+        changed.append(f"{fname}:{old.split(' =')[0]}")
+        print(f"  patched: {path} ({old.split(' =')[0]})")
     print(f"patched {len(changed)} file(s)")
     return 0
 
