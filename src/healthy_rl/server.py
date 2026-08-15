@@ -261,17 +261,23 @@ def _config_get(config: dict, key: str) -> Any:
 
 
 def _cmd_serve_args(args: argparse.Namespace) -> int:
-    """Print shell assignments for the vLLM flags that must come from config.
+    """Print shell assignments for the vLLM flags that come from config.
 
-    ``--max-model-len`` is mandatory: three of the four pilot checkpoints
-    default to a 131k-262k context that no KV budget on these nodes supports,
-    so a missing value is a hard error rather than a silent fallback.
+    ``max_model_len`` is mandatory somewhere: three of the four pilot
+    checkpoints default to a 131k-262k context that no KV budget on these nodes
+    supports, so it is never allowed to fall back to the checkpoint value.
+
+    With ``--allow-missing`` an absent key emits no assignment and still exits
+    0, leaving the variable empty for the caller. ``slurm/serve.slurm`` uses
+    that so its own ``--max-model-len`` flag can supply the value, and enforces
+    the requirement itself once both sources have been considered. Without the
+    flag, an absent key is an error here.
     """
     from healthy_rl.config import load_config
 
     config = load_config(args.config)
     max_model_len = _config_get(config, "max_model_len")
-    if max_model_len is None:
+    if max_model_len is None and not args.allow_missing:
         print(
             f"ERROR: {args.config} sets neither 'max_model_len' nor "
             "'serve.max_model_len'. The checkpoint default (131k-262k tokens) "
@@ -280,12 +286,14 @@ def _cmd_serve_args(args: argparse.Namespace) -> int:
         )
         return 1
     gpu_util = _config_get(config, "gpu_memory_utilization")
-    if gpu_util is None:
-        gpu_util = 0.90
     max_num_seqs = _config_get(config, "max_num_seqs")
 
-    print(f"MAX_MODEL_LEN={int(max_model_len)}")
-    print(f"GPU_MEMORY_UTILIZATION={float(gpu_util)}")
+    if max_model_len is not None:
+        print(f"MAX_MODEL_LEN={int(max_model_len)}")
+    if gpu_util is not None:
+        print(f"GPU_MEMORY_UTILIZATION={float(gpu_util)}")
+    elif not args.allow_missing:
+        print("GPU_MEMORY_UTILIZATION=0.9")
     if max_num_seqs is not None:
         print(f"MAX_NUM_SEQS={int(max_num_seqs)}")
     return 0
@@ -318,6 +326,12 @@ def main(argv: list[str] | None = None) -> int:
 
     p_args = sub.add_parser("serve-args", help="emit vLLM flags from a stage config")
     p_args.add_argument("config")
+    p_args.add_argument(
+        "--allow-missing",
+        action="store_true",
+        help="emit nothing for absent keys and exit 0, so the caller can "
+        "supply them from its own command line and enforce the requirement",
+    )
     p_args.set_defaults(func=_cmd_serve_args)
 
     p_wait = sub.add_parser("wait", help="poll /health until ready")

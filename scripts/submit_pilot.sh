@@ -14,24 +14,63 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# GPU routing, from the spec. The 69 GB and 66 GB checkpoints need the 92 GB
-# L40S pair; the smaller ones fit the 80 GB A100 pair. Every node has exactly
-# two GPUs, so tensor-parallel 2 on one node is the only option either way.
-gres_for_model() {
-    case "$1" in
-        Olmo-3.1-32B-Think) echo "gpu:L40S-46G:2" ;;
-        gemma-4-31B-it)     echo "gpu:L40S-46G:2" ;;
-        Qwen3.6-27B)        echo "gpu:A100-40G:2" ;;
-        Muse-Glimmer-30B)   echo "gpu:A100-40G:2" ;;
+# ---------------------------------------------------------------------------
+# THE MODEL TABLE. This is the only place models are listed; everything below
+# derives from it. One row per model:
+#
+#     <name>|<gres>|<mem>|<model_impl>
+#
+# `model_impl` is normally empty. A non-empty value is passed through to
+# `vllm serve --model-impl <value>`.
+#
+# Ruling R16 routes ALL models to A100 nodes. The L40S GPUs are idle, but CPU
+# array jobs hold ~980 GB of each 1 TB L40S host, leaving 14-25 GB free, and a
+# 60-69 GB checkpoint cannot be staged into that. The two L40S nodes that do
+# have RAM are IDLE+DRAIN. Flip the gres column back to gpu:L40S-46G:2 for
+# Olmo and Gemma if that host memory is ever released.
+#
+# Muse-Glimmer-30B is dropped by ruling R8: vLLM 0.27.1 does not implement
+# MuseGlimmerForConditionalGeneration, and there is no newer release. Its row
+# is kept, commented out, with the `--model-impl transformers` fallback filled
+# in, because that is the route by which it might return. Uncommenting the row
+# is the whole change.
+MODEL_TABLE=(
+    "Olmo-3.1-32B-Think|gpu:A100-40G:2|96G|"
+    "gemma-4-31B-it|gpu:A100-40G:2|96G|"
+    "Qwen3.6-27B|gpu:A100-40G:2|96G|"
+    # "Muse-Glimmer-30B|gpu:A100-40G:2|96G|transformers"
+)
+
+CPUS_PER_TASK=8
+
+model_row() {
+    local name="$1" row
+    for row in "${MODEL_TABLE[@]}"; do
+        if [[ "${row%%|*}" == "$name" ]]; then
+            printf '%s\n' "$row"
+            return 0
+        fi
+    done
+    return 1
+}
+
+model_field() {
+    local row
+    row="$(model_row "$1")" || return 1
+    IFS='|' read -r _ gres mem impl <<< "$row"
+    case "$2" in
+        gres) printf '%s\n' "$gres" ;;
+        mem) printf '%s\n' "$mem" ;;
+        model_impl) printf '%s\n' "$impl" ;;
         *) return 1 ;;
     esac
 }
 
-# Muse-Glimmer-30B is absent from the default set: ruling R8 dropped it from
-# the pilot because vLLM 0.27.1 does not implement
-# MuseGlimmerForConditionalGeneration. Its routing above is kept so that
-# --models Muse-Glimmer-30B still works if that changes.
-DEFAULT_MODELS=(Olmo-3.1-32B-Think gemma-4-31B-it Qwen3.6-27B)
+DEFAULT_MODELS=()
+for _row in "${MODEL_TABLE[@]}"; do
+    DEFAULT_MODELS+=("${_row%%|*}")
+done
+unset _row
 
 SMOKE_SCRIPT="scripts/smoke.py"
 SMOKE_CONFIG="configs/smoke.yaml"
@@ -58,8 +97,8 @@ usage() {
     cat <<'USAGE'
 usage: scripts/submit_pilot.sh [options]
 
-  --models "M1 M2"      models to submit (default: Olmo-3.1-32B-Think
-                        gemma-4-31B-it Qwen3.6-27B)
+  --models "M1 M2"      models to submit (default: every row of MODEL_TABLE
+                        at the top of this script)
   --dry-run             print the sbatch commands without submitting;
                         preflight failures are downgraded to warnings
   --skip-preflight      submit without checking inputs exist
@@ -147,8 +186,8 @@ preflight() {
 
     local model
     for model in "${MODELS[@]}"; do
-        if ! gres_for_model "$model" >/dev/null; then
-            echo "error: no GPU routing defined for model '$model'" >&2
+        if ! model_row "$model" >/dev/null; then
+            echo "error: '$model' is not in MODEL_TABLE at the top of this script" >&2
             PREFLIGHT_FAILED=1
             continue
         fi
@@ -194,16 +233,23 @@ dep() {
 SUMMARY=()
 
 for MODEL in "${MODELS[@]}"; do
-    GRES="$(gres_for_model "$MODEL")"
-    echo "=== $MODEL  ($GRES) ===" >&2
+    GRES="$(model_field "$MODEL" gres)"
+    MEM="$(model_field "$MODEL" mem)"
+    MODEL_IMPL="$(model_field "$MODEL" model_impl)"
+    IMPL_ARGS=()
+    [[ -n "$MODEL_IMPL" ]] && IMPL_ARGS=(--model-impl "$MODEL_IMPL")
+    echo "=== $MODEL  ($GRES, $MEM${MODEL_IMPL:+, --model-impl $MODEL_IMPL}) ===" >&2
 
     ACTS_ID="$(submit \
         --job-name="${MODEL}-acts" \
         --gres="$GRES" \
+        --mem="$MEM" \
+        --cpus-per-task="$CPUS_PER_TASK" \
         --time="$ACTS_TIME" \
         slurm/serve.slurm \
         --model "$MODEL" \
         --config "$ACTS_CONFIG" \
+        "${IMPL_ARGS[@]}" \
         --stage "${SMOKE_SCRIPT}:${SMOKE_CONFIG}" \
         --stage "${ACTS_SCRIPT}:${ACTS_CONFIG}")"
 
@@ -224,11 +270,14 @@ for MODEL in "${MODELS[@]}"; do
     ROLL_ID="$(submit \
         --job-name="${MODEL}-roll" \
         --gres="$GRES" \
+        --mem="$MEM" \
+        --cpus-per-task="$CPUS_PER_TASK" \
         --time="$ROLLOUT_TIME" \
         "$(dep "$VECS_ID" "${MODEL}-vecs")" \
         slurm/serve.slurm \
         --model "$MODEL" \
         --config "$ROLLOUT_CONFIG" \
+        "${IMPL_ARGS[@]}" \
         --stage "${ROLLOUT_SCRIPT}:${ROLLOUT_CONFIG}")"
 
     SUMMARY+=("$(printf '%-22s acts=%-10s vecs=%-10s gate=%-10s roll=%-10s' \

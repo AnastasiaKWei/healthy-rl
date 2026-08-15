@@ -40,8 +40,9 @@ From: python:3.12-bookworm
     # version and vllm_lens's Inspect provider were checked against each other
     # before this pin was chosen -- every private inspect_ai module
     # vllm_lens/inspect_provider.py reaches into still exists at 0.3.258.
-    # openai is what inspect_ai's OpenAI-compatible provider (VLLMAPI, the
-    # class vllm_lens subclasses) imports; without it that import fails.
+    # openai is required, not optional: inspect_ai reaches a vLLM server through
+    # its OpenAI-compatible provider, which imports the openai package, and that
+    # is the path steering takes via extra_body={"vllm_xargs": ...}.
     python -m pip install "inspect_ai==0.3.258" openai
 
     # impossiblebench WITHOUT its dependency chain. Its setup.py declares
@@ -81,8 +82,29 @@ From: python:3.12-bookworm
         "pyarrow>=17" \
         "httpx>=0.27"
 
-    python -c "import inspect_ai; import vllm_lens.inspect_provider"
-    python -c "from impossiblebench import impossible_livecodebench; print(impossible_livecodebench)"
+    # Build-time smoke (ruling R12). Imports through the livecodebench submodule
+    # rather than the package root: both work in this image, but the submodule
+    # path does not depend on impossiblebench/__init__.py continuing to import
+    # its SWE-bench half cleanly without inspect_evals and swebench installed.
+    # The signature assertion catches an upstream API change at build time on
+    # the login node instead of at 3am on a compute node. It deliberately does
+    # not construct the task, which would pull the HF dataset into the image.
+    python - <<'SMOKE'
+import inspect
+
+import inspect_ai
+from impossiblebench.livecodebench_tasks import impossible_livecodebench
+from vllm_lens.client import VLLMLensClient
+
+required = {
+    "split", "agent_type", "sandbox", "max_attempts",
+    "message_limit", "allow_test_modifications",
+}
+params = set(inspect.signature(impossible_livecodebench).parameters)
+missing = required - params
+assert not missing, f"impossible_livecodebench lost parameters: {sorted(missing)}"
+print("ok", inspect_ai.__version__, VLLMLensClient.__name__)
+SMOKE
 
     mkdir -p /project /artifacts /work
 
@@ -107,7 +129,7 @@ From: python:3.12-bookworm
     exec python "$@"
 
 %test
-    python -c "import inspect_ai, vllm_lens.inspect_provider; from impossiblebench import impossible_livecodebench; print('ok')"
+    python -c "from impossiblebench.livecodebench_tasks import impossible_livecodebench; from vllm_lens.client import VLLMLensClient; import inspect_ai; print('ok', inspect_ai.__version__)"
 
 %help
     ImpossibleBench rollout container for the healthy-rl desperation pilot.
