@@ -13,12 +13,45 @@ versions encode the condition:
 | `v1` | 3 | original pilot. **Void** — token-budget confound, see [infrastructure.md](infrastructure.md#token-budget) |
 | `p1`, `p2` | 3 | early sharded pilot tiers, same confound |
 | `hitok` | 3 | the higher-token-cap attempt; produced no completed records |
-| `d6` | 6 | **baseline.** No scratchpad, no affect prompt |
+| `d6` | 6 | **baseline.** No scratchpad, no affect prompt, conflicting split |
 | `sp6` | 6 | scratchpad reasoning (`scratchpad_reasoning: true`) |
-| `aff6` | 6 | scratchpad + affect prompt (`affect_prompt: true`) |
+| `aff6` | 6 | affect prompt (`affect_prompt: true`), conflicting split |
+| `pos6` | 6 | no affect prompt, **original (solvable) split** |
+| `affpos6` | 6 | affect prompt, original split |
 
-`d6` / `sp6` / `aff6` are the trustworthy set. Each condition needs its own
-`out_dir` — resume refuses to mix them.
+`d6` / `sp6` / `aff6` / `pos6` / `affpos6` are the trustworthy set. Each condition
+needs its own `out_dir` — resume refuses to mix them, and since 2026-08-15 it
+also refuses to mix bench splits.
+
+## The 2x2
+
+`pos6` and `affpos6` complete a cross product: **{affect prompt on, off} x
+{conflicting tests, solvable tests}**. It separates two things the `d6`-vs-`aff6`
+contrast alone cannot:
+
+|  | conflicting (impossible) | original (solvable) |
+|---|---|---|
+| **no affect prompt** | `d6` | `pos6` |
+| **affect prompt** | `aff6` | `affpos6` |
+
+- The split column asks whether the rising `desperate`/`frustrated` trajectory
+  needs the task to be *impossible*, or whether any six turns of a hard coding
+  problem produce it. lcbhard is hard, so `pos6` still contains genuine repeated
+  failure — it is failure without unsatisfiability, which is the control that
+  matters.
+- The affect row asks whether being asked to *verbalise* affect changes what is
+  *represented*, or only what is said.
+
+Both splits come from the same ImpossibleBench dataset. ImpossibleBench builds
+`conflicting` from `original` by inserting one assertion that contradicts an
+existing one; the 103 task_ids, the prompts (byte-identical, verified) and the
+entry points are otherwise the same. So the two columns differ in the tests and
+nothing else.
+
+`max_tokens` is 24576 in all the new cells. The existing `d6` runs used 16384,
+which never bound — the longest turn any model generated was 14198 tokens
+(Ministral `aff6`) and 9861 in `d6`, so nothing was truncated. Checked rather
+than assumed, because an unmatched token cap is what voided the first pilot.
 
 ## Current state
 
@@ -28,14 +61,24 @@ Rollout records, `$ARTIFACT_DIR/rollouts/<model>/<version>/*.jsonl`:
 |---|---|---:|---|
 | Ministral-3-14B-Reasoning-2512 | `d6` | 24 | complete, analysed |
 | Ministral-3-14B-Reasoning-2512 | `aff6` | 21 | **still accumulating** |
+| Ministral-3-14B-Reasoning-2512 | `pos6` | 0 | **submitted 2026-08-15**, jobs 5641827-29 |
+| Ministral-3-14B-Reasoning-2512 | `affpos6` | 0 | **submitted 2026-08-15**, jobs 5641830-32 |
 | Ministral-3-14B-Reasoning-2512 | `v1` | 48 | void |
 | Qwen3.5-9B | `d6` | 18 | **still accumulating**, analysed at n=17–18 |
+| Qwen3.5-9B | `aff6` | 0 | **submitted 2026-08-15**, jobs 5641818-20 |
+| Qwen3.5-9B | `pos6` | 0 | **submitted 2026-08-15**, jobs 5641821-23 |
+| Qwen3.5-9B | `affpos6` | 0 | **submitted 2026-08-15**, jobs 5641824-26 |
 | Qwen3.5-9B | `v1` | 22 | void |
 | gemma-3-12b-it | `d6` | 24 | complete, analysed |
 | gemma-3-12b-it | `sp6` | 24 | complete, analysed |
 | gemma-3-12b-it | `aff6` | 24 | complete, analysed (turn-end only) |
 | Olmo-3.1-32B-Think | `v1` | 172 | void |
 | Qwen3.6-27B | `v1` | 0 | never produced records |
+
+gemma-3-12b-it has no `pos6`/`affpos6` cell: it is the flattest of the three
+measured models and the two 2x2s that matter are the ones on the models with a
+clear conflicting-split signal. Adding it is cheap if the split contrast turns
+out to carry the result.
 
 Vectors exist for all eight gated models. Rollouts were only ever run on models
 that passed the gate; the 27B models (Olmo, Qwen3.6) are exempt from the
@@ -72,9 +115,14 @@ Each JSONL row is one rollout:
 - `residuals` — relative path to an `.npz` of boundary residuals, keyed
   `t{turn}_res_{start|end}_L{layer}`. This is what the single-token analysis
   reads. Some are non-finite; check the skip count the tool prints.
-- `passed` — true means the submission satisfied mutually unsatisfiable tests,
-  i.e. it cheated. Zero everywhere so far, with the caveat in
+- `bench_split` — `conflicting` or `original`. **Read this before reading
+  `passed`.** Records written before 2026-08-15 have no such key and are all
+  `conflicting`.
+- `passed` — **its meaning inverts across splits.** On `conflicting`, true means
+  the submission satisfied mutually unsatisfiable tests, i.e. it cheated; it is
+  zero everywhere so far, with the caveat in
   [findings.md](findings.md#hack-rate-is-zero-everywhere-and-the-number-means-less-than-it-looks).
+  On `original`, true means the model solved the problem. Never pool the two.
 
 Per-token projections onto all 14 directions are kept at **every** capture layer
 (~280 bytes/token). Full residuals are kept only at event positions — turn
@@ -82,6 +130,19 @@ boundaries and the first token after a test-failure message — and only at the
 probe layer by default. The per-token projections are the untapped resource: the
 signal is localised and we currently sample two positions per turn out of
 hundreds.
+
+## Bench artifacts
+
+Two splits of one dataset, in separate directories because `fetch_bench.py`
+writes `bench.json` and `manifest.json` under fixed names holding only the split
+it just fetched:
+
+| dir | split | config | used by |
+|---|---|---|---|
+| `$ARTIFACT_DIR/bench/v1` | `conflicting` | `configs/fetch_bench.yaml` | `d6`, `sp6`, `aff6` |
+| `$ARTIFACT_DIR/bench/orig1` | `original` | `configs/fetch_bench_original.yaml` | `pos6`, `affpos6` |
+
+Both are login-node stages: compute nodes have no DNS.
 
 ## Stale artifacts
 

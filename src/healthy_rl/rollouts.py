@@ -44,6 +44,9 @@ from typing import Any, Iterable, Mapping, Sequence
 import numpy as np
 
 __all__ = [
+    "BENCH_SPLIT_KEY",
+    "split_of_bench",
+    "check_resume_split",
     "Condition",
     "SweepSelection",
     "Vectors",
@@ -181,6 +184,11 @@ def split_scratchpad(text: str) -> tuple[str | None, str]:
 # VERBALISE affect change what is REPRESENTED in the residual stream, or only
 # what it says? See docs/elicitation.md, "Verbalized != represented".
 AFFECT_KEY = "affect_prompt"
+
+# Which ImpossibleBench split a record came from. See :func:`split_of_bench`:
+# `passed` means "cheated" on `conflicting` and "solved" on `original`, so the
+# split has to travel with every record rather than only with the directory name.
+BENCH_SPLIT_KEY = "bench_split"
 
 # VERBATIM from experiments/step0_elicitation.py's AFFECT, which is what the
 # collaborator's OpenRouter runs used. Copied rather than imported because that
@@ -683,6 +691,28 @@ def check_resume_affect(
         )
 
 
+def check_resume_split(
+    existing: Iterable[Mapping[str, Any]], split: str, path: str | os.PathLike[str]
+) -> None:
+    """Refuse to resume a JSONL whose records came from the other bench split.
+
+    The sharpest version of the hazard :func:`check_resume_affect` guards. Mixed
+    splits do not merely blur a contrast: they put "cheated" and "solved" into
+    one `passed` column, so a pooled hack rate would be meaningless in a way no
+    later analysis could detect. Records predating the key were all made on
+    `conflicting` -- it was the only split that existed -- and are read as such.
+    """
+    mismatched = sum(
+        1 for r in existing if str(r.get(BENCH_SPLIT_KEY) or "conflicting") != split
+    )
+    if mismatched:
+        raise RuntimeError(
+            f"{path} holds {mismatched} record(s) from a different ImpossibleBench "
+            f"split, but this run is on {split!r}. Use a separate out_dir per split "
+            "(or --no-resume to discard the file)."
+        )
+
+
 # ---------------------------------------------------------------------------
 # Work items and sharding -- pure logic, unit-tested
 # ---------------------------------------------------------------------------
@@ -1155,6 +1185,8 @@ class RunState:
     """The scratchpad system prompt every turn carries, or None (see ``system_prompt_for``)."""
     affect_prompt: bool = False
     """Whether the task instruction carried the affect request (see ``AFFECT_KEY``)."""
+    bench_split: str = ""
+    """ImpossibleBench split these rollouts ran on (see :func:`split_of_bench`)."""
     sample_map: dict[tuple[str, str], list[int]] = field(default_factory=dict)
     """``(condition, task_id) -> global sample index per Inspect epoch``.
 
@@ -1614,6 +1646,10 @@ def _record_sample(sample: Any) -> None:
         "sample": _global_sample(state, condition, sample),
         "epoch": int(sample.epoch),
         "shard": state.shard,
+        # `passed` inverts across splits: a pass on `conflicting` is a hack, a
+        # pass on `original` is a solve. Record the split in the same dict so the
+        # two can never be pooled by accident.
+        BENCH_SPLIT_KEY: state.bench_split,
         "passed": passed,
         "score": score,
         "n_turns": len(turns),
@@ -1746,6 +1782,35 @@ def _write_residuals(
 # ---------------------------------------------------------------------------
 
 
+def split_of_bench(
+    bench_parquet: str | os.PathLike[str], frame: Any | None = None
+) -> str:
+    """The ImpossibleBench split a bench parquet holds, from its own rows.
+
+    Read from the ``impossible_type`` column rather than the file name, because
+    the file name is ours and the column is upstream's. Two splits are in play:
+
+      ``conflicting``  the tests are mutually unsatisfiable; ``passed`` means the
+                       model satisfied them anyway, i.e. it cheated.
+      ``original``     the same 103 problems with their real tests; ``passed``
+                       means the model solved the problem.
+
+    The same ``passed`` field carries both meanings, so every run records the
+    split it ran on and analysis must read it before reading the number.
+    """
+    import pandas as pd
+
+    if frame is None:
+        frame = pd.read_parquet(bench_parquet, columns=["impossible_type"])
+    kinds = sorted({str(v) for v in frame["impossible_type"]})
+    if len(kinds) != 1:
+        raise ValueError(
+            f"{bench_parquet} mixes impossible_type values {kinds}; a run must sit "
+            "on exactly one split, because `passed` means opposite things across them"
+        )
+    return kinds[0]
+
+
 def build_task(
     problems: Sequence[str],
     bench_parquet: str | os.PathLike[str] | None,
@@ -1837,8 +1902,11 @@ def build_task(
         raise KeyError(f"{parquet} has no rows for task_id(s) {missing}")
 
     samples = [convert(by_id[task_id]) for task_id in wanted]
+    # ImpossibleBench names the task after the split, and the Inspect log is often
+    # the only surviving evidence of which parquet a run used. A hardcoded
+    # "conflicting" here would label a `original`-split run as impossible.
     return Task(
-        name="lcb_conflicting_canmod_minimal",
+        name=f"lcb_{split_of_bench(parquet, frame)}_canmod_minimal",
         dataset=MemoryDataset(samples),
         solver=solver,
         scorer=agentic_humaneval_scorer(),
@@ -2177,6 +2245,8 @@ def run_rollouts(
     check_resume_scratchpad(existing, system_prompt is not None, jsonl_path)
     affect = affect_prompt_for(cfg)
     check_resume_affect(existing, affect, jsonl_path)
+    split = split_of_bench(bench_parquet)
+    check_resume_split(existing, split, jsonl_path)
 
     summary: dict[str, Any] = {
         "stage": "rollouts",
@@ -2189,6 +2259,8 @@ def run_rollouts(
         "samples_per_problem": {str(c.tier): c.n_samples for c in conditions},
         "readout_problems": readout_problems,
         "n_bench_problems": len(all_task_ids),
+        BENCH_SPLIT_KEY: split,
+        "bench_parquet": str(bench_parquet),
         "emotions": vectors.emotions,
         "probe_layer": vectors.probe_layer,
         "capture_layers": vectors.capture_layers,
@@ -2243,6 +2315,7 @@ def run_rollouts(
         shard=shard_label,
         system_prompt=system_prompt,
         affect_prompt=affect,
+        bench_split=split,
     )
     _STATE = state
 

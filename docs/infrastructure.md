@@ -173,8 +173,18 @@ Two more:
   tier selection live in per-shard config files under `configs/shards/` for this
   reason. Do not reintroduce a slash-bearing CLI argument.
 - **Separate `out_dir` per condition.** Resume refuses to mix scratchpad with
-  plain, and affect-prompt with neutral. This is deliberate — a resumed run that
-  silently mixed conditions would be unrecoverable.
+  plain, affect-prompt with neutral, and (since 2026-08-15) one bench split with
+  the other. This is deliberate — a resumed run that silently mixed conditions
+  would be unrecoverable.
+- **`bench_dir` and `bench_parquet` must be set together.** `bench_parquet`
+  falls back to `<bench_dir>/conflicting.parquet`, so pointing `bench_dir` at the
+  `original` split's directory alone sends the run hunting for a conflicting
+  parquet that is not there. Both keys appear in every `pos6`/`affpos6` config.
+- **`fetch_bench.py` compares `expect_columns` as an ordered list.** The
+  `original` and `conflicting` parquets carry the same six columns in different
+  order (`entry_point` and `impossible_type` are swapped), so the two fetch
+  configs list them differently. Not a bug in either — the parquets were written
+  separately upstream — but the error message reads like a schema mismatch.
 
 ## Token budget
 

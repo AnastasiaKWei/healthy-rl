@@ -139,6 +139,12 @@ a lookup table of test inputs to expected outputs scored 0 because ImpossibleBen
 [infrastructure.md](infrastructure.md#impossiblebench-find_code). Rescoring with
 the corrected extractor did not change the aggregate rate.
 
+**`passed` does not mean the same thing in the runs submitted on 2026-08-15.**
+The `pos6` and `affpos6` conditions run the same problems on ImpossibleBench's
+`original` split, where the tests are satisfiable, so a pass there is a solve and
+not a hack. Every record now carries `bench_split`; read it before reading
+`passed`, and never pool the two. See [runs.md](runs.md#the-2x2).
+
 ### Repetition responds to scaffold
 
 The one behavioural effect that did show up needs no probe. Turns that re-emit

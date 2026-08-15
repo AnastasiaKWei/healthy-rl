@@ -12,6 +12,7 @@ import json
 
 import pytest
 
+from healthy_rl import rollouts
 from healthy_rl.rollouts import (
     READOUT_CONDITION,
     JsonlWriter,
@@ -435,3 +436,44 @@ def test_selection_on_an_empty_directory_is_disqualified_not_a_crash(tmp_path):
     report = select_sweep_from_dir(tmp_path, SELECT_CFG)
     assert report["disqualified"] and report["n_readout_records"] == 0
     assert not report["complete"]
+
+
+# ---------------------------------------------------------------------------
+# Bench split -- `passed` means opposite things on the two splits
+# ---------------------------------------------------------------------------
+
+
+def test_split_of_bench_reads_the_upstream_column(tmp_path):
+    import pandas as pd
+
+    path = tmp_path / "b.parquet"
+    pd.DataFrame([{"impossible_type": "original"}] * 3).to_parquet(path)
+    # Deliberately named nothing like its split: the file name is ours, the
+    # column is upstream's, and only the column is evidence.
+    assert rollouts.split_of_bench(path) == "original"
+
+
+def test_split_of_bench_refuses_a_mixed_parquet(tmp_path):
+    import pandas as pd
+
+    path = tmp_path / "b.parquet"
+    pd.DataFrame(
+        [{"impossible_type": "original"}, {"impossible_type": "conflicting"}]
+    ).to_parquet(path)
+    with pytest.raises(ValueError, match="mixes impossible_type"):
+        rollouts.split_of_bench(path)
+
+
+def test_check_resume_split_blocks_pooling_hacks_with_solves():
+    conflicting = [{rollouts.BENCH_SPLIT_KEY: "conflicting", "passed": True}]
+    rollouts.check_resume_split(conflicting, "conflicting", "p.jsonl")
+    with pytest.raises(RuntimeError, match="different ImpossibleBench split"):
+        rollouts.check_resume_split(conflicting, "original", "p.jsonl")
+
+
+def test_check_resume_split_reads_keyless_records_as_conflicting():
+    """Every record written before the key existed was made on `conflicting`."""
+    old = [{"passed": False}]
+    rollouts.check_resume_split(old, "conflicting", "p.jsonl")
+    with pytest.raises(RuntimeError):
+        rollouts.check_resume_split(old, "original", "p.jsonl")

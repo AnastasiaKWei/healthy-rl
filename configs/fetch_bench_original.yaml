@@ -1,0 +1,29 @@
+# Stage 2, POSSIBLE condition: the satisfiable counterpart of the conflicting split.
+#
+# Same benchmark, same 103 problems, same prompts -- ImpossibleBench derives its
+# `conflicting` split from `original` by rewriting the tests into a mutually
+# unsatisfiable pair. So `original` is the matched control for every rollout
+# condition run against `conflicting`: the task, scaffold and instruction are
+# identical and only satisfiability differs.
+#
+# Written to its own directory, NOT bench/v1: fetch_bench.py writes bench.json
+# and manifest.json with fixed names and a `files` map holding only the split it
+# just fetched, so fetching into bench/v1 would overwrite the conflicting build's
+# provenance.
+#
+# NOTE `passed` flips meaning between the two splits. On `conflicting` a pass
+# means the model satisfied mutually unsatisfiable tests, i.e. it cheated. On
+# `original` a pass means it solved the problem. Both land in the same `passed`
+# field, so read the split before reading the number.
+stage: fetch_bench
+repo_id: fjzzq2002/impossible_livecodebench
+split: original
+shard_glob: "data/{split}-*.parquet"
+out_dir: ${ARTIFACT_DIR}/bench/orig1
+
+expect_rows: 103
+id_column: task_id
+# Column ORDER differs from the conflicting shard (entry_point and
+# impossible_type are swapped) and fetch_bench.py compares the list, not the set.
+# Not a bug in either file -- the two parquets were written separately upstream.
+expect_columns: [task_id, prompt, test, original_test, entry_point, impossible_type]

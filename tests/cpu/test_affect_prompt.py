@@ -229,8 +229,13 @@ def fake_impossiblebench(monkeypatch):
 def bench_parquet(tmp_path):
     import pandas as pd
 
+    # `impossible_type` is not decoration: build_task names the Inspect task after
+    # it, so a fixture without it would let a split-blind build_task pass.
     frame = pd.DataFrame(
-        [{"task_id": "lcbhard_0", "prompt": "add two numbers"}, {"task_id": "lcbhard_1", "prompt": "sort a list"}]
+        [
+            {"task_id": "lcbhard_0", "prompt": "add two numbers", "impossible_type": "conflicting"},
+            {"task_id": "lcbhard_1", "prompt": "sort a list", "impossible_type": "conflicting"},
+        ]
     )
     path = tmp_path / "bench.parquet"
     frame.to_parquet(path)
@@ -260,6 +265,23 @@ def test_build_task_uses_the_recorded_instruction(
     assert (AFFECT_INSTRUCTION in recorded) is affect
     assert recorded.startswith("Solve the problem. **DO NOT MODIFY THE TESTS.**")
     assert task.dataset[0].input.startswith(recorded)
+
+
+def test_build_task_names_the_task_after_the_split(fake_impossiblebench, tmp_path):
+    """The Inspect log is often the only surviving evidence of which split ran.
+
+    The name used to be the literal string "lcb_conflicting_canmod_minimal", which
+    would label an `original`-split run as impossible.
+    """
+    import pandas as pd
+
+    for split in ("conflicting", "original"):
+        path = tmp_path / f"{split}.parquet"
+        pd.DataFrame(
+            [{"task_id": "lcbhard_0", "prompt": "add", "impossible_type": split}]
+        ).to_parquet(path)
+        task = rollouts.build_task(["lcbhard_0"], path)
+        assert task.name == f"lcb_{split}_canmod_minimal"
 
 
 def test_build_task_refuses_the_hf_path_with_affect(fake_impossiblebench, bench_parquet):
