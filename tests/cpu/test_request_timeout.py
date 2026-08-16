@@ -83,3 +83,21 @@ def test_every_shard_config_clears_its_own_max_tokens(path):
         f"max_tokens={cfg.get('max_tokens')} ({needed:.0f}s at "
         f"{MEASURED_HOOKED_TOKENS_PER_S} tok/s) -- this is the hang"
     )
+
+
+def test_provider_sets_the_http_client_timeout_not_just_generate_config():
+    """`GenerateConfig.timeout` is NOT the HTTP client timeout.
+
+    Inspect's OpenAI-compatible provider builds its httpx client from a
+    `client_timeout` constructor argument; it never reads `config.timeout`. The
+    first fix for the hang set `config.timeout` and was tested -- and the hang
+    continued, with the server's KV usage resetting exactly 600 s apart, the
+    OpenAI SDK's own default. This asserts the knob the provider actually reads.
+    """
+    src = (
+        __import__("pathlib").Path("src/healthy_rl/rollouts.py").read_text()
+    )
+    assert 'kwargs.setdefault("client_timeout"' in src, (
+        "HealthyRLLensAPI must set client_timeout; config.timeout alone leaves "
+        "the SDK default of 600s in force"
+    )

@@ -236,6 +236,19 @@ mysterious:
 The hook is why the margin vanished: 11% overhead alone would have kept a
 12288-token turn under 600 s; 55% at concurrency 8 does not.
 
+**`GenerateConfig.timeout` is NOT the HTTP client timeout.** This cost two
+fixes. Inspect's OpenAI-compatible provider builds its httpx client from a
+`client_timeout` *constructor* argument and never reads `config.timeout`, so
+setting the latter changes nothing the transport sees. Proof, from a run with
+`request_timeout_s: 3600` reaching `GenerateConfig`: the server's KV cache usage
+sawtoothed — climbing 0.6% to 1.7%, dropping back, climbing again — with resets
+**exactly 600 s apart**, while throughput held at ~31 tok/s. The GPU was
+generating continuously and the work was being discarded and restarted on the
+SDK's own default. `HealthyRLLensAPI.__init__` now sets `client_timeout`.
+
+That sawtooth is also the honest reading of the "flat KV" observation: KV is not
+frozen, it is being reset. A snapshot at the wrong moment looks flat.
+
 **Fix:** `request_timeout_s` is now 3600 everywhere (base config and all 155
 shard configs), the code default is 3600 rather than the SDK's 600, and
 `tests/cpu/test_request_timeout.py` asserts per config file that the timeout

@@ -1739,6 +1739,15 @@ def _register_inspect_extensions() -> str:
             config = config if config is not None else GenerateConfig()
             if getattr(config, "attempt_timeout", None) is None:
                 config = config.merge(GenerateConfig(attempt_timeout=ATTEMPT_TIMEOUT_S))
+            # THE HTTP CLIENT TIMEOUT IS NOT `GenerateConfig.timeout`.
+            # Inspect's OpenAI-compatible provider builds its httpx client from a
+            # `client_timeout` CONSTRUCTOR argument and never reads
+            # `config.timeout`, so setting the latter -- which this project did,
+            # and tested -- leaves the OpenAI SDK's own 600 s default in force.
+            # Measured: with request_timeout_s=3600 reaching GenerateConfig, the
+            # server's KV usage still sawtoothed with resets exactly 600 s apart,
+            # i.e. the client was still abandoning and retrying on the SDK default.
+            kwargs.setdefault("client_timeout", float(ATTEMPT_TIMEOUT_S))
             super().__init__(
                 model_name=model_name,
                 base_url=base_url,
