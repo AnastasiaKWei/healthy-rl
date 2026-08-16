@@ -60,6 +60,22 @@ def test_turn_readout_think_end_answer_start_end():
     np.testing.assert_allclose(stats.turn_readout(readout="end", **kw), proj[4, 1] / 10.0)
 
 
+def test_turn_readout_end_is_none_for_a_capped_turn_whose_last_row_is_padding():
+    # assemble_generation pads one all-NaN row when a generation stops at
+    # max_tokens: that token has no residual, so its "end" readout is the cap,
+    # not the model. The earlier readouts still land on real rows.
+    proj, norm, pp, pn, kind = _turn()
+    proj = proj.copy(); norm = norm.copy()
+    proj[-1] = np.nan; norm[-1] = np.nan
+    kw = dict(proj=proj, norm=norm, proj_prefill=pp, norm_prefill=pn, token_kind=kind, layer_index=1)
+    assert stats.turn_readout(readout="end", **kw) is None
+    np.testing.assert_allclose(stats.turn_readout(readout="think_end", **kw), proj[1, 1] / 10.0)
+    np.testing.assert_allclose(stats.turn_readout(readout="answer_start", **kw), proj[2, 1] / 10.0)
+    # the padding row is skipped by the finite mask, not counted as a zero
+    m = stats.turn_mean(proj=proj, norm=norm, token_kind=kind, layer_index=1, segment="answer")
+    np.testing.assert_allclose(m, proj[2:4, 1, :].mean(axis=0) / 10.0)
+
+
 def test_turn_readout_none_when_no_reasoning_or_nonfinite():
     proj, norm, pp, pn, _ = _turn()
     kind = ["answer"] * 5

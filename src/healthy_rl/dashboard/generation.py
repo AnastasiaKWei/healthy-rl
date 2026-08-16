@@ -227,6 +227,18 @@ def assemble_generation(
             pp_out[li] = pp
 
     misaligned = T != len(tokens)
+    if misaligned and finish_reason == "length" and T == len(tokens) - 1:
+        # A generation that stops at the cap is one decode row short: the last
+        # sampled token is never fed back through the model, so no forward pass
+        # ever runs at its position and it has no residual. (A stop-finished
+        # generation does feed its final token back, which is why rows == tokens
+        # there.) Pad one all-NaN row per layer so token index == row index;
+        # downstream readouts drop it through their finite masks.
+        proj_out = np.concatenate([proj_out, np.full((1, L, n_emotions), np.nan, np.float32)])
+        norm_out = np.concatenate([norm_out, np.full((1, L), np.nan, np.float32)])
+        T = len(tokens)
+        misaligned = False
+        warns.append("last token has no residual (generation hit max_tokens)")
     if misaligned:
         problems.append(f"{len(tokens)} logprob tokens but {T} decode rows in hook results")
 

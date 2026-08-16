@@ -278,6 +278,16 @@ record (hook rows ≠ `len(tokens)`) rather than as a quietly shifted token stri
 before hunting elsewhere. A misaligned turn's per-token readouts are unusable
 either way — the dashboard hides its token strip.
 
+**A capped turn is one decode row short, and that is not misalignment.** When
+generation stops at `max_tokens` the last sampled token is never fed back through
+the model, so no forward pass runs at its position and it has no residual row —
+`finish_reason="length"` turns arrive with `len(tokens) - 1` rows. `assemble_generation`
+pads one all-NaN row so token index still equals row index, warns
+(`last token has no residual...`), and leaves `misaligned=False`. The `end` readout
+of a capped turn is therefore `None`: skipped and counted, which is right anyway,
+since that position is where the budget ran out rather than where the model
+finished. `think_end`, `answer_start`, `start` and the segment means are unaffected.
+
 Its `start` readout, though, is still valid: `start` is read at the prefill row,
 before any token, so it does not depend on the token alignment at all.
 `/api/aggregate` therefore includes misaligned records in `position=start` like

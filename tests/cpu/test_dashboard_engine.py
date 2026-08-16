@@ -63,8 +63,12 @@ def test_fake_engine_is_deterministic_and_shaped():
     fe = FakeEngine()
     g1 = fe.generate([{"role": "user", "content": "please think"}], max_tokens=8, temperature=0)
     g2 = FakeEngine().generate([{"role": "user", "content": "please think"}], max_tokens=8, temperature=0)
-    assert g1.text == g2.text and np.allclose(g1.proj, g2.proj)
+    assert g1.text == g2.text and np.allclose(g1.proj, g2.proj, equal_nan=True)
     assert g1.n_think > 0 and g1.proj.shape == (g1.n_generated, 2, 3) and g1.norm_prefill.shape == (2,)
+    # capped, so the fake emits one decode row fewer than it has tokens and the
+    # padded row keeps token index == row index
+    assert g1.at_cap and g1.proj.shape[0] == g1.n_generated == len(g1.tokens)
+    assert np.isnan(g1.proj[-1]).all() and np.isfinite(g1.proj[:-1]).all()
     assert len(fe.calls) == 1
 
 
