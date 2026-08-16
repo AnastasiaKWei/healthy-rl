@@ -5,7 +5,7 @@ Written for someone picking this up cold, or for me in a week.
 
 Companion documents: `docs/elicitation.md` (why ImpossibleBench, what the prior
 work constrains), `docs/interventions.md` (a proposal for three interventions we
-have **not** built), `docs/prompts-v2.md` (the exact prompt text now running).
+have **not** built), `docs/prompts/v2.md` (the exact prompt text now running).
 
 ---
 
@@ -169,7 +169,7 @@ Recorded because each one silently corrupted results that looked fine.
 
 ## 5 The v2 prompts, and the one that nearly shipped broken
 
-`docs/prompts-v2.md` is generated from the code by
+`docs/prompts/v2.md` is generated from the code by
 `experiments/render_prompts.py`. Edit prompts in `step0_elicitation.py` and
 regenerate; edits to the doc are overwritten and never reach a model.
 

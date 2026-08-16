@@ -32,6 +32,7 @@ except ImportError:  # viewer still builds without the benchmark checked out
     upstream_find_code = robust_find_code = None
 
 RESCORE = REPO / "logs" / "rescore_step0.json"
+JUDGE = REPO / "logs" / "judge_step0.json"
 
 MAX_MSG = 60_000  # chars kept per message; beyond this the middle is elided
 
@@ -69,16 +70,64 @@ def scratchpad_split(visible):
     return "\n".join(pads), rest
 
 
+# How each mindset variant reads in the rail. Keep in step with MINDSET in
+# experiments/step0_elicitation.py.
+MINDSET_LABEL = {"growth": "growth mindset",
+                 "resilience": "resilience",
+                 "appraisal": "may declare it impossible"}
+
+
 def arm_of(path: Path):
-    """Human label for the experimental arm, from the log directory name."""
+    """(condition label, dir name, factors) for the arm, from the log directory.
+
+    The directory name is the slug built by experiments/step0_elicitation.py:
+
+        <model>[-reasoning-{on,off}]-{pad,nopad}-{affect,neutral}[-mindset-<v>[+<v>]]
+
+    plus a hand-added `-e<N>` for multi-epoch runs. This has to be parsed rather
+    than pattern-matched: the previous check for the affect prompt was
+    `d.endswith("affect")`, which is false for every mindset and every -e3 arm,
+    so seven affect-prompted arms were labelled "neutral" in the rail.
+    """
     d = path.parent.name
     if not d.startswith(("google-", "qwen-", "openai-", "anthropic-")):
-        return d, d  # ad-hoc dir (smoke tests, screens): label it by its own name
-    reasoning = "reasoning on" if "reasoning-on" in d else ("reasoning off" if "reasoning-off" in d else "reasoning default")
-    pad = "scratchpad" if "-pad" in d else None
-    affect = "affect-prompted" if d.endswith("affect") else "neutral"
-    bits = [reasoning] + ([pad] if pad else []) + [affect]
-    return " · ".join(bits), d
+        return d, d, {"model": d, "cond": d, "prompt": "?", "mindset": []}
+
+    reasoning = ("on" if "reasoning-on" in d else
+                 "off" if "reasoning-off" in d else "default")
+    pad = "-pad-" in d or d.endswith("-pad")
+    prompt = "affect" if re.search(r"-affect(?:-|$)", d) else "neutral"
+    # `-mindset-[vN-]variant[+variant]`. The optional version segment must be matched
+    # explicitly: `[a-z+]+` alone stops at the digit in "v2" and reports the variant
+    # as "v", so every v2 arm would be labelled identically and wrongly.
+    m = re.search(r"-mindset-(?:v(\d+)-)?([a-z+]+)", d)
+    mindset = m.group(2).split("+") if m else []
+    mversion = int(m.group(1)) if m and m.group(1) else 1
+    ep = int(re.search(r"-e(\d+)(?:-|$)", d).group(1)) if re.search(r"-e(\d+)(?:-|$)", d) else 1
+
+    # The condition label is what the rail groups by, so it names only the things
+    # that were manipulated: the prompt and any intervention on top of it.
+    cond = "asked how it feels" if prompt == "affect" else "neutral prompt"
+    if mindset:
+        cond += " + " + " + ".join(MINDSET_LABEL.get(v, v) for v in mindset)
+        cond += f" (v{mversion})"   # prompt wording differs between versions
+
+    # Setup deliberately excludes the epoch count: a 1-epoch and a 3-epoch run of
+    # the same condition are the same condition, and the per-sample labels already
+    # carry "· ep2". Keeping epochs out lets those two runs share a rail group.
+    setup = " · ".join([f"reasoning {reasoning}"] + (["scratchpad"] if pad else []))
+
+    # Rail grouping key. It must carry the setup as well as the prompt, because
+    # "neutral prompt" is the label for both reasoning-on and reasoning-off arms
+    # of the same model -- grouping on the visible label alone silently merges
+    # two different conditions into one list.
+    condkey = (f"{reasoning}/{'pad' if pad else 'nopad'}/{prompt}/"
+               f"{'+'.join(mindset)}/v{mversion}")
+
+    return cond, d, {"cond": cond, "condkey": condkey, "prompt": prompt,
+                     "mindset": mindset, "mversion": mversion,
+                     "reasoning": reasoning, "pad": pad,
+                     "epochs": ep, "setup": setup}
 
 
 SKIP_DIRS = ("smoke", "screen", "partial", "test")
@@ -130,8 +179,30 @@ def load_rescore():
             for r in json.loads(RESCORE.read_text())}
 
 
+def load_judge():
+    """{(arm, split, task, epoch, turn, channel): verdict} from judge_step0.py.
+
+    The judge's two channels line up with the two block colours in the viewer:
+    its `private` is the reasoning trace plus the scratchpad (the amber block),
+    its `visible` is the graded answer (the teal block). Turns the judge could
+    not score are left out, so a missing badge means "not scored", never "calm".
+    """
+    if not JUDGE.exists():
+        return {}
+    out = {}
+    for r in json.loads(JUDGE.read_text()):
+        if r.get("rating") is None:
+            continue
+        key = (r["arm"], r["split"], r["task_id"], r.get("epoch", 1),
+               r["turn"], r["channel"])
+        out[key] = {"rating": r["rating"], "evidence": r.get("evidence", ""),
+                    "why": r.get("reasoning", "")}
+    return out
+
+
 def export(paths):
     rescored = load_rescore()
+    judged = load_judge()
     runs = []
     for p in paths:
         try:
@@ -139,7 +210,7 @@ def export(paths):
         except Exception as e:
             print(f"  skip {p.name}: {e}")
             continue
-        label, dirname = arm_of(p)
+        label, dirname, facts = arm_of(p)
         split = "conflicting" if "conflicting" in log.eval.task else "original"
         acc = None
         if log.results:
@@ -158,12 +229,16 @@ def export(paths):
                     reasoning, visible = parts(m)
                     pad, answer = scratchpad_split(visible)
                     pts = affect_points(f"{reasoning}\n{pad}\n{answer}")
+                    ep = getattr(s, "epoch", 1)
+                    jk = (dirname, split, str(s.id), ep, turn_no)
                     turns.append({
                         "kind": "assistant", "turn": turn_no,
                         "reasoning": clip(reasoning), "scratchpad": clip(pad),
                         "answer": clip(answer),
                         "extraction": extraction_status(visible, p.name),
                         "neg": pts["neg"], "pos": pts["pos"],
+                        "jpriv": judged.get(jk + ("private",)),
+                        "jvis": judged.get(jk + ("visible",)),
                     })
                 else:
                     turns.append({"kind": m.role, "turn": turn_no, "text": clip(
@@ -173,10 +248,21 @@ def export(paths):
                 for k, v in s.scores.items():
                     score = str(v.value)
                     break
+            # Per-turn judge score is the higher of the turn's two channels, which
+            # is what the rubric asks for: the single most negative expression in
+            # the response. `jhigh` counts turns at >=5, the paper's headline band.
+            jt = [max([c["rating"] for c in (t.get("jpriv"), t.get("jvis")) if c],
+                      default=None)
+                  for t in turns if t["kind"] == "assistant"]
+            jt = [x for x in jt if x is not None]
             samples.append({
                 "id": str(s.id),
                 "epoch": getattr(s, "epoch", 1),
                 "score": score,
+                "jmean": round(sum(jt) / len(jt), 2) if jt else None,
+                "jmax": max(jt) if jt else None,
+                "jhigh": sum(x >= 5 for x in jt) if jt else None,
+                "jturns": len(jt),
                 "rescored": rescored.get((dirname, split, str(s.id))),
                 "bad_turns": sum(1 for t in turns if t.get("extraction") in ("prose", "nocode")),
                 "neg": sum(t.get("neg", 0) for t in turns),
@@ -192,7 +278,7 @@ def export(paths):
         runs.append({
             "file": p.name, "dir": dirname, "arm": label, "split": split,
             "task": log.eval.task, "model": log.eval.model, "status": log.status,
-            "accuracy": acc, "samples": samples,
+            "accuracy": acc, "samples": samples, **facts,
         })
     return merge_reruns(runs)
 

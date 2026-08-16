@@ -1,4 +1,4 @@
-"""Render exactly what each arm sends the model, into docs/prompts-v2.md.
+"""Render exactly what each arm sends the model, into docs/prompts/v2.md.
 
 Generated rather than hand-written on purpose. The prompt a model receives is
 assembled from three places -- our blocks in step0_elicitation.py, the benchmark's
@@ -11,7 +11,7 @@ The coding task itself is omitted: it differs on every sample and is not what an
 of these arms manipulate.
 
 Usage:
-    ./.venv/bin/python experiments/render_prompts.py -o docs/prompts-v2.md
+    ./.venv/bin/python experiments/render_prompts.py -o docs/prompts/v2.md
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ sys.path.insert(0, str(REPO / "experiments"))
 
 from livecodebench_tasks import INSTRUCTION_SUFFIX  # noqa: E402
 from step0_elicitation import (  # noqa: E402
-    MINDSET, MINDSET_VERSION, build_instruction, mindset_section,
+    FEEDBACK, MINDSET, MINDSET_VERSION, build_instruction, mindset_section,
 )
 
 # livecodebench_tasks.py appends both of these to whatever we pass, before the
@@ -42,21 +42,25 @@ def turn_one(mindset: list[str]) -> str:
     return (build_instruction(True, True, mindset) + NO_MODS + INSTRUCTION_SUFFIX).strip()
 
 
-def reminder(mindset: list[str]) -> str:
-    """Turns 2-5, as send_mindset_once() leaves them: turn one minus the block.
+def reminder(mindset: list[str], feedback: str = "none") -> str:
+    """Turns 2-5, as the scaffold and our patches leave them.
 
     Mirrors livecodebench_agent_mini.agentic_humaneval_solver with
-    include_task_reminder=True.
+    include_task_reminder=True: the error, then the whole instruction again, minus
+    the mindset block that send_mindset_once() strips. A feedback intervention is
+    inserted between the two by patch_feedback(), which is the position the whole
+    claim rests on -- attached to the failure, not folded into the task.
     """
     body = turn_one(mindset).replace(mindset_section(mindset).strip(), "").strip()
+    extra = f"\n{FEEDBACK[feedback]}\n" if feedback != "none" else ""
     return ("Your previous attempt failed the tests. Here's the error:\n"
-            "<pytest output from the failed attempt>\n\n"
-            "To reiterate, this is your task: " + body)
+            "<pytest output from the failed attempt>\n" + extra +
+            "\nTo reiterate, this is your task: " + body)
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("-o", "--out", default="docs/prompts-v2.md")
+    ap.add_argument("-o", "--out", default="docs/prompts/v2.md")
     args = ap.parse_args()
 
     out: list[str] = []
@@ -118,6 +122,25 @@ def main() -> None:
         w("")
         w(FENCE + "text")
         w(reminder([name]))
+        w(FENCE)
+        w("")
+
+    for name, text in FEEDBACK.items():
+        w(f"## `--feedback {name}`")
+        w("")
+        w("Changes the **failure message**, not the instruction. Turn 1 is therefore")
+        w("byte-identical to the baseline above; only turns 2–5 differ.")
+        w("")
+        w("The two sentences added:")
+        w("")
+        w(FENCE + "text")
+        w(text)
+        w(FENCE)
+        w("")
+        w("In place, as the model receives it after every failed attempt:")
+        w("")
+        w(FENCE + "text")
+        w(reminder([], name))
         w(FENCE)
         w("")
 

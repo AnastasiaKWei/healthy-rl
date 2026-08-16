@@ -151,10 +151,17 @@ def parts(msg) -> tuple[str, str]:
         visible.append(content or "")
 
     private, shown = "\n".join(reasoning), "\n".join(visible)
-    pads = re.findall(r"<scratchpad>(.*?)</scratchpad>", shown, re.S | re.I)
+    # `(?:</scratchpad>|$)` also closes an unterminated tag at end of text. 32 of
+    # 383 scratchpad turns never close it -- 15 of them in one arm -- and demanding
+    # the closing tag files that thinking as *visible*, inflating the graded
+    # channel and emptying the private one on exactly the turns where the model
+    # was most discursive. Same pattern as viewer/export_viewer.py, deliberately:
+    # the two must agree or the badge and the table describe different text.
+    pads = re.findall(r"<scratchpad>(.*?)(?:</scratchpad>|$)", shown, re.S | re.I)
     if pads:
         private = (private + "\n" + "\n".join(pads)).strip()
-        shown = re.sub(r"<scratchpad>.*?</scratchpad>", "", shown, flags=re.S | re.I)
+        shown = re.sub(r"<scratchpad>.*?(?:</scratchpad>|$)", "", shown,
+                       flags=re.S | re.I)
     return private, shown
 
 
