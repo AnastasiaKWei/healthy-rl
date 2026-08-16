@@ -121,10 +121,13 @@ class Generation:
         out = {"proj": self.proj.astype(np.float32), "norm": self.norm.astype(np.float32),
                "proj_prefill": self.proj_prefill.astype(np.float32),
                "norm_prefill": self.norm_prefill.astype(np.float32)}
+        # float32 for the same reason the hook stores them that way: a prefill
+        # row can hold a coordinate above the float16 max and the cast makes the
+        # whole vector non-finite (docs/measurement.md, "Non-finite residuals").
         if self.res_start is not None:
-            out[f"res_start_L{probe_layer}"] = self.res_start.astype(np.float16)
+            out[f"res_start_L{probe_layer}"] = self.res_start.astype(np.float32)
         if self.res_end is not None:
-            out[f"res_end_L{probe_layer}"] = self.res_end.astype(np.float16)
+            out[f"res_end_L{probe_layer}"] = self.res_end.astype(np.float32)
         return out
 
 

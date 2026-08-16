@@ -51,19 +51,27 @@ anyway — the failures are lexical, not semantic; see the ruling in
   matters.
 
   **Trajectory depth in the solvable arm is model-specific — check it per model
-  before comparing at late turn indices.** Rollouts reaching t5, out of 24:
+  before comparing at late turn indices.** Rollouts reaching t5, out of 24
+  (counting **non-empty** turns, per
+  [measurement.md](measurement.md#turn-indexing) — several records carry an
+  empty turn, so a raw `n_turns` count overstates this):
 
   | model | `d6` | `pos6` | `aff6` | `affpos6` | solve rate on `pos6` |
   |---|---:|---:|---:|---:|---:|
-  | Ministral-3-14B | 23 | 20 | 23 | 20 | 5/24 |
+  | Ministral-3-14B | 23 | 20 | 24 | **7** | 5/24 |
   | Nemotron-3-Nano-4B | 23 | 11 | 23 | 8 | 13/24 |
   | Qwen3-14B | — | **≈0** | — | **≈0** | **17/17 so far** |
 
   Depth in the solvable arm is set by how good the model is at the problems, and
   it varies from "barely matters" to "the arm does not exist":
 
-  - **Ministral** keeps failing for six turns whether or not the tests can be
-    satisfied, so its columns compare over nearly equal depth.
+  - **Ministral** keeps failing for six turns on `d6`, `pos6` and `aff6`, so
+    those three columns compare over nearly equal depth — but **`affpos6` is the
+    exception and must not be read at late turn indices**. At the completed
+    n=24 only 7 rollouts reach t5 and 15 are single-turn, because the affect
+    prompt lifts that cell's solve rate to **16/24** against 5/24 on `pos6`.
+    (This cell read 20 of 24 while it was still incomplete; the number above is
+    the final one.)
   - **Nemotron** solves early more often and thins to 11 and 8 rollouts by t5.
   - **Qwen3-14B solves the original split almost perfectly** — 17 of 17 and 18 of
     20 in the records so far — in 1–4 turns and ~11k tokens, against ~42–45k
@@ -235,7 +243,7 @@ Rollout records, `$ARTIFACT_DIR/rollouts/<model>/<version>/*.jsonl`:
 | Ministral-3-14B-Reasoning-2512 | `d6` | 24 | complete, analysed |
 | Ministral-3-14B-Reasoning-2512 | `aff6` | 24 | complete |
 | Ministral-3-14B-Reasoning-2512 | `pos6` | 24 | complete; 5/24 solved, 20/24 ran all six turns |
-| Ministral-3-14B-Reasoning-2512 | `affpos6` | 23 | last shard running |
+| Ministral-3-14B-Reasoning-2512 | `affpos6` | 24 | complete; 16/24 solved, only 7/24 ran all six turns |
 | Ministral-3-14B-Reasoning-2512 | `v1` | 48 | void |
 | Qwen3.5-9B | `d6` | 18 | **still accumulating**, analysed at n=17–18 |
 | Qwen3.5-9B | `aff6` | 21 | resumed, running |
@@ -537,7 +545,10 @@ Each JSONL row is one rollout:
   [measurement.md](measurement.md#granularity-single-token-vs-turn-mean).
 - `residuals` — relative path to an `.npz` of boundary residuals, keyed
   `t{turn}_res_{start|end}_L{layer}`. This is what the single-token analysis
-  reads. Some are non-finite; check the skip count the tool prints.
+  reads. In records written before 2026-08-16 ~12:30 these are float16 and many
+  gemma turn-start vectors are non-finite because of it; check the skip count
+  the tool prints, and see
+  [measurement.md](measurement.md#non-finite-residuals).
 - `bench_split` — `conflicting` or `original`. **Read this before reading
   `passed`.** Records written before 2026-08-15 have no such key and are all
   `conflicting`.
@@ -602,7 +613,13 @@ arrays, but `summarise_hook_results` reduced them to `turn_stat` and dropped
 them; an earlier version of this paragraph said they were kept, and was wrong.
 Full residuals are still kept only at event positions — turn boundaries and the
 first token after a test-failure message — and only at the probe layer by
-default. Records also carry `turn_completion` so the rows can be re-tokenised
+default. **Their dtype changed on 2026-08-16 ~12:30:** `t{turn}_res_{start|end}_L{n}`
+is **float32** in records written after that point and **float16** before it. The
+float16 storage is what made gemma's turn-start residuals non-finite — one
+coordinate above 65,504 overflowed to `inf` — so for older records check
+finiteness before use and recover the position from the per-token arrays where
+they exist; see
+[measurement.md](measurement.md#non-finite-residuals). Records also carry `turn_completion` so the rows can be re-tokenised
 offline and the count checked against the decode rows; for reasoning models the
 completion may omit reasoning tokens, so a mismatch is expected and must be
 reported. Exact token strings via `logprobs` are the follow-up.

@@ -159,9 +159,17 @@ new analysis must do the same.
 
 ### Non-finite residuals
 
-Some checkpoints emit inf/NaN at individual stored positions. A single NaN
-poisons the mean for that whole turn index, silently, producing an all-NaN table
-that is easy to misread as "no data".
+**Cause (found 2026-08-16): a float16 storage overflow, not a sick model.** The
+hook stored the boundary residual as float16. gemma-3-12b-it's prefill row
+carries one coordinate near or above the float16 max (65,504); the cast turned
+that one coordinate into `inf`, and a single `inf` makes the whole vector
+non-finite. Across all 629 non-finite boundary residuals in seven gemma
+conditions, **exactly one of 3,840 coordinates** had overflowed in every single
+case, and the median largest *finite* coordinate in the `d6`/`sp6` cells was
+~60k — right under the ceiling. The model's activations were fine throughout.
+
+A single NaN poisons the mean for that whole turn index, silently, producing an
+all-NaN table that is easy to misread as "no data".
 
 Observed rates at turn **start** for gemma-3-12b-it:
 
@@ -171,9 +179,25 @@ Observed rates at turn **start** for gemma-3-12b-it:
 | `sp6` scratchpad | 55/144 |
 | `aff6` affect | 144/144 (all) |
 
+Scratchpad plus affect (`spaff6`) improves on `aff6` but does not fix it: 132/144
+non-finite at turn start.
+
 Turn **end** is finite 144/144 in every condition. This is why the Gemma 3
 three-way comparison in [findings.md](findings.md#gemma-3-three-conditions) is
 reported at turn end: it is the only position finite in all three.
+
+**Fixed 2026-08-16** by storing boundary residuals in float32
+(`make_projection_hook` in `src/healthy_rl/rollouts.py`, and the dashboard's
+`Generation.arrays`). Records written **before** that date still hold the float16
+residuals and the skip counts above stand for them — the data is lost at rest,
+not recoverable by re-reading the `.npz`.
+
+For those older cells a finite turn-start readout can still be recovered from the
+per-token `proj`/`norm` arrays, which were computed in float32 before any cast
+and are 100% finite. They exist only where per-token capture was on (the mindset
+cells and the `<base>r` re-runs). Take the **last** `kind == 1` row: chunked
+prefill can stamp more than one prefill row, and the last one is the position
+that generates the turn's first token.
 
 `live_trajectory.py` skips non-finite residuals and prints the skipped count in
 its `statistic:` line. Read that line. A skip rate above a few percent means the

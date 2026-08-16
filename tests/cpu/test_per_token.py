@@ -80,3 +80,69 @@ def test_missing_layer_is_reported_and_the_others_are_still_kept():
     assert "layer 3 missing" in (stats.error or "")
     arrays = stash.pop(stats.residual_key)
     assert "proj_L5" in arrays and "proj_L3" not in arrays
+
+
+# ---------------------------------------------------------------------------
+# Boundary residuals must survive a coordinate above the float16 max.
+#
+# gemma-3-12b-it's prefill row carries one coordinate near/above 65,504. Stored
+# as float16 that coordinate became inf and the whole turn-start residual read
+# as non-finite -- 629/629 of the non-finite cases across seven gemma
+# conditions were exactly one overflowed coordinate out of 3,840
+# (docs/measurement.md, "Non-finite residuals"). The per-token proj/norm arrays
+# were never affected: they are reduced in float32 before any cast.
+# ---------------------------------------------------------------------------
+
+
+class _FakeCtx:
+    """The three attributes ``project_tokens`` touches on a vllm-lens context."""
+
+    def __init__(self, layer_idx: int):
+        self.layer_idx = layer_idx
+        self.saved: dict = {}
+        self._prefetched: dict = {}
+
+
+def _run_hook(hidden_states: torch.Tensor, layer: int = 5) -> dict:
+    """Drive the real hook body over one pass and return what it saved."""
+    from healthy_rl.rollouts import make_projection_hook
+
+    hook = make_projection_hook(_vectors().directions, [3, 5], [5])
+    ctx = _FakeCtx(layer)
+    hook.fn(ctx, hidden_states)
+    return ctx.saved
+
+
+def test_boundary_residual_survives_a_coordinate_above_the_float16_max():
+    # bfloat16 is what vLLM hands the hook, and it holds 70000 fine; float16
+    # cannot, which is the whole bug.
+    hidden = torch.zeros(6, 8, dtype=torch.bfloat16)
+    hidden[-1, 3] = 70000.0
+    hidden[-1, 0] = 1.5
+
+    saved = _run_hook(hidden)
+
+    event = saved["res_start_L5"]
+    assert event.dtype == torch.float32, f"boundary residual stored as {event.dtype}"
+    assert torch.isfinite(event).all(), "the outsized coordinate overflowed"
+    assert float(event.max()) > 65504.0, "the test lost the outsized coordinate"
+    # a decode pass writes the other key, and it is float32 too
+    decode = _run_hook(torch.ones(1, 8, dtype=torch.bfloat16))
+    assert decode["res_end_L5"].dtype == torch.float32
+
+
+def test_outsized_boundary_residual_stays_finite_through_the_summary():
+    """End to end: the stashed .npz array is float32 and finite."""
+    results = _hook_results()
+    start = torch.zeros(8, dtype=torch.float32)
+    start[3] = 70000.0
+    results["hook0"]["res_start_L5"] = start
+
+    stash = ResidualStash()
+    stats = summarise_hook_results(results, _vectors(), stash)
+    arrays = stash.pop(stats.residual_key)
+
+    stashed = arrays["res_start_L5"]
+    assert stashed.dtype == np.float32
+    assert np.isfinite(stashed).all()
+    assert stashed.max() > 65504.0

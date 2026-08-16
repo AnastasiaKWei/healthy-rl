@@ -1252,7 +1252,8 @@ def make_projection_hook(
     are saved at *event positions only*: the last prefill position (the residual
     that generates the turn's first token -- which, on a retry turn, is the first
     token after a test-failure message) and the final decode position (the turn's
-    other boundary).
+    other boundary). Those two are stored in float32; see the comment at the
+    store itself for why the float16 saving does not apply to them.
 
     Every value in ``ctx.saved`` is stored under a fixed key and **overwritten**
     rather than appended to a list. That is not a style choice: with tensor
@@ -1311,7 +1312,14 @@ def make_projection_hook(
             ctx.saved[key] = value if previous is None else _torch.cat([previous, value], dim=0)
 
         if int(ctx.layer_idx) in residual_set:
-            event = rows32[-1].to(_torch.float16).cpu()
+            # float32, not float16: a prefill row can carry one coordinate above
+            # the float16 max (65,504) -- gemma-3-12b-it does, in every turn --
+            # and the cast turned that single coordinate into inf, which made
+            # the whole boundary residual non-finite (docs/measurement.md,
+            # "Non-finite residuals"). The float16 saving belongs to the
+            # directions payload above, not here: one 5120-d float32 vector is
+            # 20 KB, twice a turn.
+            event = rows32[-1].cpu()
             ctx.saved[f"res_start_{suffix}" if is_prefill else f"res_end_{suffix}"] = event
         return None
 

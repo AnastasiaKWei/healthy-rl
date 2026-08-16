@@ -79,6 +79,13 @@ Pinned at `vllm-lens==1.2.1`. Provides activation capture via persistent hooks
 **It forces `enforce_eager=True`.** No CUDA graphs, so throughput is well below a
 plain vLLM server. Budget for it.
 
+- **The "non-finite residuals" trap is ours, not vllm-lens's.** Capture was
+  correct all along; our hook downcast the boundary residual to float16 and one
+  outsized gemma coordinate overflowed to `inf`. Cause, the affected records and
+  the recovery route are in
+  [measurement.md](measurement.md#non-finite-residuals). Fixed 2026-08-16. It is
+  a storage-dtype trap — do not go looking for a capture fault.
+
 ### Process-global zstd singletons corrupt concurrent captures
 
 The bug that cost the most. vllm-lens keeps **three pairs** of process-global
