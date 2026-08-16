@@ -66,6 +66,10 @@ EOF
     echo "refusing to overwrite $dst: it exists with different content" >&2; rm -f "$tmp"; exit 1
   fi
   mv "$tmp" "$dst"
+  # mktemp makes the temp file 0600 and mv keeps that mode, which would leave these
+  # configs unreadable to the rest of the group while every other config in
+  # configs/shards is 0664. Take the base config's mode instead.
+  chmod --reference="$src" "$dst"
 }
 
 submit() {  # prints or runs sbatch; echoes job id (or DRYRUN)
