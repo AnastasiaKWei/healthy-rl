@@ -328,15 +328,16 @@ fatal (see [infrastructure.md](infrastructure.md#the-zstd-patch-is-recorded-not-
 |---|---|---|
 | 5643496 | smoke gate, `--stage scripts/dashboard.py::--smoke` | submitted 2026-08-15, pending at time of writing |
 | 5643744 | the dashboard itself, `--dependency=afterok:5643496` | submitted 2026-08-15, pending (Dependency) at time of writing |
-| 5643851 | streaming-hook spike, `--stage scripts/spike_stream_hooks.py` | submitted 2026-08-15, pending at time of writing |
+| 5643851 | streaming-hook spike, `--stage scripts/spike_stream_hooks.py` | completed 2026-08-15 on spockmk2-03: `{"per_request_stream_hooks": true, "persistent_keyed_by_response_id": true, "rows_match_tokens": true}` |
 
 All three are `slurm/serve.slurm` on Ministral-3-14B-Reasoning-2512 with
 `configs/dashboard.yaml`; logs are `logs/serve-<jobid>.out`. **No dashboard
 session has run on a GPU yet** — nothing in this section has been confirmed
 against a real record file. If 5643496 fails, 5643744 shows
 `DependencyNeverSatisfied` and must be cancelled and resubmitted after the fix.
-5643851 decides whether token-text streaming is possible at all; the dashboard
-renders a turn only when the response lands until it passes.
+5643851 has answered its question — token-text streaming is feasible, per-request
+hooks and all, and stays unimplemented in this version; the verdict and the
+traps that come with it are in docs/infrastructure.md, "Streaming and hooks".
 
 ## Jobs hit a 4-hour wall
 

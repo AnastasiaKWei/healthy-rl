@@ -346,8 +346,8 @@ the smoke gate is called passing.
 ## 8. Out of scope (this version)
 
 Steering controls; overlaying the committed pilot records as a baseline;
-several models per job; token-text streaming (pending the spike); auth;
-editing past turns.
+several models per job; token-text streaming (the spike has since reported it
+feasible — see below — but it is unimplemented here); auth; editing past turns.
 
 ## Deviations
 
@@ -473,5 +473,8 @@ end of the build (2026-08-15), before the GPU smoke gate had run.
 
 Still open at the time of writing: **nothing here has run on a GPU.** The smoke
 gate (5643496), the dashboard job behind it (5643744) and the streaming spike
-(5643851) were all pending. §3.1's "token-text streaming is not in this version"
-stands until 5643851 reports.
+(5643851) were all pending. 5643851 has since run: token-text streaming is
+**feasible** — per-request hooks come back in a final SSE chunk on a streamed
+request, with decode rows still matching the token count — so §3.1's "not in
+this version" is now a scope decision rather than an open question, and the
+verdict with its traps is in docs/infrastructure.md, "Streaming and hooks".

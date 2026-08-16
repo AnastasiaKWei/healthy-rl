@@ -171,6 +171,46 @@ match is `^(<models>)-(<cells>)-s[0-9]`, driven by the script's own `MODELS` and
 `CELLS`; anything else is skipped. Whoever adds a cell must add it to `CELLS` or
 it silently goes unmonitored.
 
+### Streaming and hooks
+
+**Hook results survive `stream: true`, per request, with no vllm-lens change.**
+Measured by `scripts/spike_stream_hooks.py` — a throwaway probe, job 5643851 on
+Ministral-3-14B-Reasoning-2512, one 39-token reply per route:
+
+| route | result |
+|---|---|
+| per-request (`vllm_xargs.apply_hooks`) + `stream: true` | hook results arrive as one extra chunk, 42 of 42, immediately before `data: [DONE]` |
+| persistent (`/v1/hooks/register` + `/v1/hooks/collect`) + `stream: true` | collected under `chatcmpl-<id>-<suffix>` — the response id plus a suffix, not the id |
+| non-streamed per-request (what the dashboard does today) | reference |
+
+All three produced **39 decode rows and 1 prefill row at every capture layer**
+against 39 `usage.completion_tokens`. Streaming costs no row, and the alignment
+`assemble_generation` already enforces holds unchanged.
+
+vllm-lens 1.2.1 patches `OpenAIServingChat.chat_completion_stream_generator`
+(`_activations_plugin.py`, `_patched_chat_stream_generator`) to serialize the
+finished request's hook results into a final SSE chunk. That chunk carries
+neither `choices` nor `id`, so a client parsing the stream has to accept a
+`data:` line that is not a completion chunk rather than stopping at the first
+one without `choices`.
+
+**The persistent route also works, but the collect key is not the response id.**
+`_worker_ext.py` keys persistent contexts by the *internal* request id and finds
+them by `internal.startswith(f"{external}-")`. The probe saw `exact_key=False`
+and a prefix match, so a client on that route must prefix-match the
+`chatcmpl-…` id, never look it up.
+
+**The trap if streaming is ever built: do not count text deltas.** The same
+reply came back as **38** chunks carrying text but **39** tokens — the final
+stop token carries no delta — while the hook produced 39 rows. A token strip
+aligned to the delta count is off by one at the end of every turn. The
+authoritative count is `usage.completion_tokens` (request it with
+`stream_options: {"include_usage": true}`) or the logprob token list; both read
+39 here.
+
+So token-text streaming is **feasible and unimplemented**. The dashboard still
+renders a turn only when the whole response lands (spec §8).
+
 ## Gemma 4 under vLLM
 
 Gemma 4 needs `src/healthy_rl/vllm_plugins.py`, registered under the
