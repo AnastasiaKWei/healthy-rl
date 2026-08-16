@@ -286,25 +286,36 @@ def arrays_from_npz(z, *, turn: int, capture_layers: list[int], probe_layer: int
     return out, problems
 
 
-def sample_messages(samples: list[dict], task_id: str, completions: list[str]) -> list[dict] | None:
-    """The messages of the sample that produced these completions.
+def sample_messages(samples: list[dict], task_id: str, completions: list[str], epoch: int | None = None
+                    ) -> tuple[list[dict] | None, str | None]:
+    """``(messages, rule)`` for the sample that produced these completions.
 
     Several samples share a task id at Inspect epoch 1 (resumed shards restart the
     numbering), so the id alone is ambiguous; the completion text is not -- the
     ``.eval``'s assistant messages equal ``turn_completion`` verbatim. Turns that
     generated nothing wrote no assistant message, so both sides drop the empties.
+
+    Cells written before the mindset merge (2026-08-16) store no ``turn_completion``
+    at all, so there is no text to match on for any of their rollouts. There the
+    ``.eval``'s ``epoch`` is tried instead (``epoch == sample + 1``), and only when
+    exactly one candidate carries it. ``rule`` names which of the three matched
+    (``"completion"``, ``"epoch"``, ``"id"``) so the caller can say so on the page.
     """
     want = [c for c in completions if c]
     cands = [s for s in samples if str(s.get("id")) == str(task_id)]
     if not want:
-        # A rollout that generated nothing anywhere has no text to be matched on, but its prompt
-        # is still worth recovering, so fall back to the id -- only where the id is unambiguous.
-        return list(cands[0]["messages"]) if len(cands) == 1 else None
+        # No text to be matched on, but the prompt (and, for an old cell, the completions
+        # themselves) are still worth recovering: the epoch first, then an unambiguous id.
+        if epoch is not None:
+            by_epoch = [s for s in cands if int(s.get("epoch") or 1) == int(epoch)]
+            if len(by_epoch) == 1:
+                return list(by_epoch[0]["messages"]), "epoch"
+        return (list(cands[0]["messages"]), "id") if len(cands) == 1 else (None, None)
     for s in cands:
         got = [m["content"] for m in s.get("messages", []) if m.get("role") == "assistant" and m["content"]]
         if got[:len(want)] == want:
-            return list(s["messages"])
-    return None
+            return list(s["messages"]), "completion"
+    return None, None
 
 
 def _locked(fn):
@@ -427,25 +438,16 @@ class RolloutStore:
         n_decode, problem = self._decode_rows(rec)
         rec["n_decode"] = n_decode
         rec["has_token_arrays"] = n_decode is not None
-        tok = self._tokenizer_for(rec["model"])
-        if tok is None:
-            rec.update(tokens=[], token_kind=[], n_think=0, misaligned=True, error=f"no tokenizer for {rec['model']}")
-            warnings.append("tokenizer missing: text and turn readouts only")
-        else:
-            _, _, think_end = split_reasoning(rec["text"])
-            toks, starts = tokenise(rec["text"], tok)
-            toks, kinds, mis, err = align_tokens(toks, starts, think_end, n_decode)
-            rec.update(tokens=toks, token_kind=kinds, n_think=sum(1 for k in kinds if k == "think"),
-                       misaligned=mis, error=err)
-        if problem is not None and rec["error"] is None:
-            # the text and the turn readouts are still good; only the token strip is not
-            rec.update(misaligned=True, error=problem, has_token_arrays=False)
-        msgs, why = self._messages_for(rec)
+        # The .eval is read before the text is tokenised: an old cell stores no turn_completion,
+        # so the text being tokenised may be the one recovered from the log just below.
+        msgs, why, rule = self._messages_for(rec)
         t = rec["turn_index"]
-        rec["messages_in"], rec["feedback"] = [], None
+        rec["messages_in"], rec["feedback"], rec["text_source"] = [], None, "record"
         if msgs is None:
             warnings.append(f"transcript context unavailable: {why}")
         else:
+            if rule == "epoch":
+                warnings.append("context matched by epoch: the record stores no completion text")
             # A turn that generated nothing wrote no assistant message, so the .eval's assistant
             # messages line up with the *non-empty* turns, not with turn_index.
             turns = self._conversation_records(rec)
@@ -464,6 +466,32 @@ class RolloutStore:
                 rec["messages_in"] = [dict(m) for m in msgs[:i]]
                 nxt = msgs[i + 1] if i + 1 < len(msgs) else None
                 rec["feedback"] = nxt["content"] if nxt is not None and nxt.get("role") == "user" else None
+                text = msgs[i].get("content") or ""
+                if not rec["text"] and rec["n_generated"] > 0 and text:
+                    # An old cell wrote the token count but not the text. The .eval has it, so the
+                    # bubble is filled from there and labelled: this is the log's copy, not the row's.
+                    rec["text"] = text
+                    rec["reasoning"], rec["answer"], _ = split_reasoning(text)
+                    rec["text_source"] = "eval"
+                    warnings.append("completion text taken from the .eval log (not stored in the record)")
+        tok = self._tokenizer_for(rec["model"])
+        if tok is None:
+            rec.update(tokens=[], token_kind=[], n_think=0, misaligned=True, error=f"no tokenizer for {rec['model']}")
+            warnings.append("tokenizer missing: text and turn readouts only")
+        else:
+            # Recovered text is never aligned against arrays: an old cell has none, so n_decode is
+            # None and align_tokens leaves the record aligned whatever the re-tokenised count is.
+            _, _, think_end = split_reasoning(rec["text"])
+            toks, starts = tokenise(rec["text"], tok)
+            toks, kinds, mis, err = align_tokens(toks, starts, think_end, n_decode)
+            rec.update(tokens=toks, token_kind=kinds, n_think=sum(1 for k in kinds if k == "think"),
+                       misaligned=mis, error=err)
+        if problem is not None:
+            # the text and the turn readouts are still good; only the token strip is not.
+            # A model with no tokenizer already put its own error here: keep both.
+            prev = rec.get("error")
+            rec.update(misaligned=True, has_token_arrays=False,
+                       error=problem if not prev else f"{prev}; {problem}")
         last = t == rec["n_turns_total"] - 1
         # a turn that drew feedback failed the tests; only the last turn's verdict is the rollout's
         rec["passed"] = False if rec["feedback"] is not None else (rec["passed"] if last else None)
@@ -625,25 +653,38 @@ class RolloutStore:
             raise v
         return v
 
-    def _messages_for(self, rec: dict) -> tuple[list[dict] | None, str | None]:
-        """(messages, warning) -- the sample's whole message list, or None + why."""
+    def _messages_for(self, rec: dict) -> tuple[list[dict] | None, str | None, str | None]:
+        """(messages, warning, rule) -- the sample's whole message list, or None + why."""
         files = self._eval_files(rec)
         if not files:
-            return None, "no .eval log under inspect-logs for this shard"
+            return None, "no .eval log under inspect-logs for this shard", None
         comps = self._completions_of(rec)
         errors = 0
+        weak: list[tuple[list[dict], str]] = []
         for f in files:
             try:
                 samples = self._eval_samples(f)
             except Exception:
                 errors += 1
                 continue
-            m = sample_messages(samples, rec["task_id"], comps)
-            if m is not None:
-                return m, None
+            m, rule = sample_messages(samples, rec["task_id"], comps, epoch=int(rec["sample"]) + 1)
+            if m is None:
+                continue
+            if rule == "completion":
+                return m, None, rule          # the text is its own proof: the first match is the match
+            # The id and the epoch are only unique *within* one log. A steering sweep runs the
+            # same shard once per condition and writes one log per run, so several of them hold a
+            # sample with this id and epoch -- and nothing in the row says which run it came from.
+            # Taking the first would put another arm's completion in this rollout's bubble.
+            weak.append((m, rule))
+            if len(weak) > 1:
+                return None, (f"{len(files)} .eval logs in this shard hold a sample with this id"
+                              " and epoch, and the record stores no completion text to tell them apart"), None
+        if len(weak) == 1:
+            return weak[0][0], None, weak[0][1]
         if errors == len(files):
-            return None, "the .eval log(s) could not be read"
-        return None, "no .eval sample matches this rollout's completions"
+            return None, "the .eval log(s) could not be read", None
+        return None, "no .eval sample matches this rollout's completions", None
 
     def _conversation_records(self, rec: dict) -> list[dict]:
         """The light records of every turn of this rollout, in turn order."""

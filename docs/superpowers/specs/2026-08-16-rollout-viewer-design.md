@@ -416,14 +416,20 @@ end of the build (2026-08-16), after `tests/cpu` and the manual gate on the real
    composer's controls are hidden but `#cstat` stays, so a status line still has
    somewhere to land.
 
-9. **Old cells have no completion text at all** (§3.4). §3.4 assumed the
-   pre-mindset-merge cells were missing only their per-token arrays. They are also
-   missing `turn_completion`: the two keys arrived in the same merge, and of the
-   1645 rows on disk on 2026-08-16 the same 1031 have both, with no row having one
-   without the other. So a `d6`/`aff6`/`sp6`/`v1` rollout renders with its problem
-   statement, its test feedback, its `start`/`end` readouts and its trajectory, but
-   with **empty assistant bubbles**. The text is not lost — turns 1..n−1 appear as
-   the next turn's `messages_in`, read out of the `.eval` — but the page does not
-   re-attribute it, and its "text and start/end readouts only" note promises a text
-   those records do not carry. Worth a wording fix, and worth knowing before
-   opening an old cell expecting a transcript.
+9. **Old cells have no completion text, so it is recovered from the `.eval`**
+   (§3.4). §3.4 assumed the pre-mindset-merge cells were missing only their
+   per-token arrays. They are also missing `turn_completion`: the two keys arrived
+   in the same merge, and of the 1645 rows on disk on 2026-08-16 the same 1031 have
+   both, with no row having one without the other. A `d6`/`aff6`/`sp6`/`v1` row
+   therefore has nothing to match a `.eval` sample on, so `sample_messages` falls
+   back to `(task_id, epoch)` with `epoch == sample + 1` and uses it only where
+   exactly one sample carries that pair — and `_messages_for` additionally requires
+   that only one of the shard's logs does, because a steering sweep writes one log
+   per condition and all of them repeat the same ids and epochs. When it matches,
+   `record()` fills the
+   turn's `text` from that sample's assistant message, re-splits
+   `reasoning`/`answer`, sets `text_source = "eval"` and warns twice (context
+   matched by epoch; text taken from the log). The page labels the turn
+   `· text from .eval`. That text is never aligned against arrays — those cells
+   have none, `n_decode` is `None`, and `align_tokens` leaves the record aligned.
+   A rollout the log cannot identify still renders with empty bubbles and says so.

@@ -365,15 +365,25 @@ as you read, and is not a share of the cell until the cell has been read.
 
 A rollout's identity here is `(task_id, sample)`, not `(task_id, epoch)`: a cell
 holds several samples of each task, all at Inspect epoch 1, and a resumed shard
-restarts the numbering. The surrounding messages come from the cell's `.eval` log,
-and the sample is matched **by completion text**, not by id, for the same reason —
-ids repeat within one log. Two consequences worth knowing: a turn that generated
+restarts the numbering. A steering sweep re-runs each pair once per condition, so
+a row whose `condition_name` is neither absent nor `readout` carries it in the id
+too (`Olmo-3.1-32B-Think/v1`: all 172 rows show as 172 rollouts over 36 pairs, 0
+`n_duplicate_rows`, the condition on the rail line).
+
+The surrounding messages come from the cell's `.eval` log, and the sample is
+matched **by completion text**, not by id — ids repeat within one log. Cells
+written before the mindset merge store no `turn_completion` at all, so there is no
+text to match on; those fall back to `(task_id, epoch)` with `epoch == sample + 1`,
+and the assistant message is used as the turn's text (flagged `text from .eval`).
+That pair is unique only inside one log, so it is used only when a single `.eval`
+in the shard carries it — a sweep writes one log per condition, all repeating the
+same ids and epochs, and nothing in the row says which run wrote it, so those turns
+keep empty bubbles and name the ambiguity. Verified on 2026-08-16 by re-tokenising
+every recovered completion against the row's own `turn_n_generated`: on
+`Ministral-3-14B-Reasoning-2512/d6`, 143 of 143 turns recovered and every one
+within one token of the stored count. One consequence more: a turn that generated
 nothing wrote no assistant message, so `.eval` messages line up with the non-empty
-turns; and a cell that ran the same `(task, sample)` under several conditions
-(`Olmo-3.1-32B-Think/v1` is a steering sweep, 172 rows over 36 task-sample pairs)
-shows one rollout per pair, the row read last. The cell table counts the rest as
-`n_duplicate_rows` rather than hiding them silently, but the viewer is not the
-tool for reading a steering sweep.
+turns.
 
 The cross-cell aggregate draws each group **at its own model's probe layer**
 (`layer=probe`; an explicit integer must be a capture layer of every selected

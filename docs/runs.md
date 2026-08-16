@@ -387,10 +387,19 @@ cell have them; older cells show only the `start` and `end` readouts computed fr
 the boundary residuals, which needs `$ARTIFACT_DIR/vectors/<model>/v1` for that
 model. Older rows carry no `turn_completion` either (the two keys arrived
 together: of the 1645 rows on disk on 2026-08-16, the same 1031 have both and no
-row has one without the other), so an older rollout renders with its problem
-statement, its test feedback and its readouts, but with empty assistant bubbles —
-the completion text of turns 1..n−1 is still visible as the *next* turn's context,
-which comes from the `.eval` log.
+row has one without the other), so for those cells the viewer takes the assistant
+text out of the `.eval` log instead: the sample is matched by `(task_id, epoch)`
+with `epoch == sample + 1`, the bubble is filled and split into thinking/answer as
+usual, and both the turn header (`· text from .eval`) and the record's warnings say
+where the text came from. Nothing is aligned against arrays there — there are none.
+That pair only identifies a sample **within one log**, so it is used only when a
+single `.eval` in the rollout's shard carries it. A steering sweep runs its shard
+once per condition and writes a log per run, all holding the same ids and epochs
+(`Olmo-3.1-32B-Think/v1`: 9–13 logs per shard), and nothing in the row says which
+run it came from — those turns keep their empty bubbles and say `N .eval logs in
+this shard hold a sample with this id and epoch`. Checked on 2026-08-16 by
+re-tokenising every recovered completion against the row's own
+`turn_n_generated`.
 
 ## Record fields worth knowing
 

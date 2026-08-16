@@ -977,7 +977,9 @@ function assistantMessage(turn, i) {
       READOUT_LABEL[r] + ' <span class="num">' + fmt(v) + "</span></span>";
   });
   h.innerHTML = "<b>assistant · turn " + (i + 1) + "</b><span>" + esc(facts.join(" · ")) +
-    (turn.at_cap ? ' <span class="cap">· at cap</span>' : "") + '</span><span class="r">' + right + "</span>";
+    (turn.at_cap ? ' <span class="cap">· at cap</span>' : "") +
+    (turn.text_source === "eval" ? ' <span class="cap" title="this cell stored no turn_completion; the text is the .eval log\'s copy">· text from .eval</span>' : "") +
+    '</span><span class="r">' + right + "</span>";
   const b = el("div", "mb");
   m.appendChild(h); m.appendChild(b);
   renderTurnBody(b, turn);

@@ -480,9 +480,9 @@ EMPTY_ROW = {"task_id": "lcbhard_2", "sample": 0, "completions": ["", ""], "n_ge
 EMPTY_SAMPLE = {"id": "lcbhard_2", "epoch": 1, "messages": [{"role": "user", "content": "PROBLEM"}]}
 
 
-def _eval_store(tmp_path, samples, rows=ROWS):
+def _eval_store(tmp_path, samples, rows=ROWS, **kw):
     """A one-cell store whose shard holds exactly one .eval, carrying ``samples``."""
-    make_cell(tmp_path / "rollouts", "fake-model", "appr6", rows=rows)
+    make_cell(tmp_path / "rollouts", "fake-model", "appr6", rows=rows, **kw)
     log = tmp_path / "rollouts" / "fake-model" / "appr6" / "inspect-logs" / "shard0of2" / "x.eval"
     evals = FakeEvalSamples({str(log): samples})
     st = RolloutStore.open([tmp_path / "rollouts"], tokenizer_loader=lambda m: WhitespaceTokenizer(),
@@ -491,16 +491,101 @@ def _eval_store(tmp_path, samples, rows=ROWS):
 
 
 def test_sample_messages_matches_by_completion():
-    m = sample_messages(SAMPLES, "lcbhard_0", ["p q", "r s t u"])
-    assert m[1]["content"] == "p q"
-    assert sample_messages(SAMPLES, "lcbhard_0", ["a b c", "[THINK]x y[/THINK] z"])[3]["content"].endswith(" z")
-    assert sample_messages(SAMPLES, "lcbhard_0", ["nope"]) is None
-    assert sample_messages(SAMPLES, "lcbhard_7", ["a b c"]) is None
+    m, rule = sample_messages(SAMPLES, "lcbhard_0", ["p q", "r s t u"])
+    assert m[1]["content"] == "p q" and rule == "completion"
+    assert sample_messages(SAMPLES, "lcbhard_0", ["a b c", "[THINK]x y[/THINK] z"])[0][3]["content"].endswith(" z")
+    assert sample_messages(SAMPLES, "lcbhard_0", ["nope"]) == (None, None)
+    assert sample_messages(SAMPLES, "lcbhard_7", ["a b c"]) == (None, None)
     # a rollout whose first turn generated nothing matches on its first non-empty completion
-    assert sample_messages(SAMPLES, "lcbhard_0", ["", "p q"]) is not None
+    assert sample_messages(SAMPLES, "lcbhard_0", ["", "p q"])[0] is not None
     # nothing generated at all: no completion to match on, so the id alone -- if it is unambiguous
-    assert sample_messages([EMPTY_SAMPLE], "lcbhard_2", ["", ""])[0]["content"] == "PROBLEM"
-    assert sample_messages([EMPTY_SAMPLE, EMPTY_SAMPLE], "lcbhard_2", ["", ""]) is None
+    assert sample_messages([EMPTY_SAMPLE], "lcbhard_2", ["", ""])[0][0]["content"] == "PROBLEM"
+    assert sample_messages([EMPTY_SAMPLE, EMPTY_SAMPLE], "lcbhard_2", ["", ""]) == (None, None)
+
+
+OLD_SAMPLES = [
+    {"id": "lcbhard_5", "epoch": 1, "messages": [
+        {"role": "user", "content": "PROBLEM ep1"}, {"role": "assistant", "content": "a b c"},
+        {"role": "user", "content": "FAIL ep1"}, {"role": "assistant", "content": "d e f g"}]},
+    {"id": "lcbhard_5", "epoch": 2, "messages": [
+        {"role": "user", "content": "PROBLEM ep2"}, {"role": "assistant", "content": "[THINK]x y[/THINK] z"},
+        {"role": "user", "content": "FAIL ep2"}, {"role": "assistant", "content": "q r s t"}]},
+]
+
+# an old cell (before the mindset merge, 2026-08-16): token counts but no turn_completion, no arrays
+OLD_ROW = {"task_id": "lcbhard_5", "sample": 1, "completions": ["", ""], "n_generated": [3, 4], "passed": False}
+
+
+def test_sample_messages_matches_an_old_cell_by_epoch():
+    """No completion text anywhere, and two samples share the id: the epoch tells them apart."""
+    m, rule = sample_messages(OLD_SAMPLES, "lcbhard_5", ["", ""], epoch=2)
+    assert rule == "epoch" and m[0]["content"] == "PROBLEM ep2"
+    assert sample_messages(OLD_SAMPLES, "lcbhard_5", ["", ""], epoch=1)[0][0]["content"] == "PROBLEM ep1"
+    assert sample_messages(OLD_SAMPLES, "lcbhard_5", ["", ""], epoch=3) == (None, None)   # ambiguous id
+    assert sample_messages(OLD_SAMPLES, "lcbhard_5", ["", ""]) == (None, None)
+    # one candidate and no epoch of its own: the id rule still answers
+    assert sample_messages([OLD_SAMPLES[0]], "lcbhard_5", ["", ""], epoch=9)[1] == "id"
+
+
+def test_record_recovers_an_old_cells_text_from_the_eval(tmp_path):
+    """d6/aff6/sp6/v1 rows store turn_n_generated but not turn_completion. The text is in the
+    .eval log; it is put in the bubble and flagged, never aligned against arrays (there are none)."""
+    st, _ = _eval_store(tmp_path, OLD_SAMPLES, rows=[OLD_ROW], token_arrays=False)
+    t0 = st.record("fake-model/appr6/lcbhard_5/s1/t0")
+    t1 = st.record("fake-model/appr6/lcbhard_5/s1/t1")
+    assert t0["text"] == "[THINK]x y[/THINK] z" and t0["text_source"] == "eval"     # epoch 2, not epoch 1
+    assert t0["reasoning"] == "x y" and t0["answer"] == "z"
+    assert t0["has_token_arrays"] is False and t0["misaligned"] is False and t0["error"] is None
+    assert t0["messages_in"] == [{"role": "user", "content": "PROBLEM ep2"}]
+    assert t0["feedback"] == "FAIL ep2"
+    assert any("matched by epoch" in w for w in t0["warnings"])
+    assert any("taken from the .eval log" in w for w in t0["warnings"])
+    assert t1["text"] == "q r s t" and t1["answer"] == "q r s t" and t1["text_source"] == "eval"
+    assert [m["role"] for m in t1["messages_in"]] == ["user", "assistant", "user"]
+
+
+def test_record_of_a_new_cell_keeps_its_own_text(tmp_path):
+    st, _ = _eval_store(tmp_path, SAMPLES)
+    r = st.record("fake-model/appr6/lcbhard_0/s0/t0")
+    assert r["text"] == "a b c" and r["text_source"] == "record"
+
+
+def _two_log_store(tmp_path, x_samples, y_samples, rows, **kw):
+    """A cell whose shard holds two .eval logs -- what a steering sweep writes, one run per arm."""
+    make_cell(tmp_path / "rollouts", "fake-model", "appr6", rows=rows, **kw)
+    d = tmp_path / "rollouts" / "fake-model" / "appr6" / "inspect-logs" / "shard0of2"
+    (d / "y.eval").write_bytes(b"")
+    evals = FakeEvalSamples({str(d / "x.eval"): x_samples, str(d / "y.eval"): y_samples})
+    return RolloutStore.open([tmp_path / "rollouts"], tokenizer_loader=lambda m: WhitespaceTokenizer(),
+                             vectors_loader=lambda m: None, eval_loader=evals)
+
+
+def test_an_old_cell_refuses_a_rollout_two_eval_logs_could_both_be(tmp_path):
+    """The id and the epoch are unique inside one log, not across a shard's logs. Olmo-3.1-32B-Think/v1
+    is a 9-condition sweep with 9-13 logs per shard, all carrying the same (id, epoch): taking the
+    first put another arm's completion in this rollout's bubble."""
+    other = [{"id": "lcbhard_5", "epoch": 2, "messages": [
+        {"role": "user", "content": "PROBLEM other arm"}, {"role": "assistant", "content": "not this rollout"}]}]
+    st = _two_log_store(tmp_path, OLD_SAMPLES, other, [OLD_ROW], token_arrays=False)
+    r = st.record("fake-model/appr6/lcbhard_5/s1/t0")
+    assert r["text"] == "" and r["text_source"] == "record" and r["messages_in"] == []
+    assert any("tell them apart" in w for w in r["warnings"])
+
+
+def test_a_new_cells_completion_text_still_picks_its_log_out(tmp_path):
+    """Text equality is its own proof, so the strong rule is unaffected by a second log."""
+    st = _two_log_store(tmp_path, [], SAMPLES, ROWS)
+    r = st.record("fake-model/appr6/lcbhard_0/s0/t0")
+    assert r["text"] == "a b c" and r["text_source"] == "record"
+    assert r["messages_in"] == [{"role": "user", "content": "PROBLEM"}] and r["feedback"].endswith("FAIL1")
+
+
+def test_record_of_an_old_cell_the_eval_cannot_identify(tmp_path):
+    """Neither the epoch nor the id picks a sample out: no context, no text, and it says so."""
+    st, _ = _eval_store(tmp_path, OLD_SAMPLES, rows=[dict(OLD_ROW, sample=7)], token_arrays=False)
+    r = st.record("fake-model/appr6/lcbhard_5/s7/t0")
+    assert r["messages_in"] == [] and r["text"] == "" and r["text_source"] == "record"
+    assert any("no .eval sample matches" in w for w in r["warnings"])
 
 
 def test_record_messages_in_and_feedback(tmp_path):
@@ -533,7 +618,9 @@ def test_record_of_a_rollout_that_generated_nothing(tmp_path):
     for rid in ("fake-model/appr6/lcbhard_2/s0/t0", "fake-model/appr6/lcbhard_2/s0/t1"):
         r = st.record(rid)
         assert r["messages_in"] == [{"role": "user", "content": "PROBLEM"}]   # the prompt is still recovered
-        assert r["feedback"] is None and r["warnings"] == [] and r["misaligned"] is False
+        assert r["feedback"] is None and r["misaligned"] is False
+        # sample 0 <-> epoch 1: the epoch rule answers before the id rule does, and says so
+        assert [w for w in r["warnings"] if "matched by epoch" not in w] == []
     assert st.record("fake-model/appr6/lcbhard_2/s0/t1")["passed"] is False    # last turn: the rollout's verdict
 
 
