@@ -300,6 +300,32 @@ replicate on Nemotron (13/24 → 15/24, p=0.77). One model, twelve problems.
   cannot finish, the honest fallback is a 3-model 2x2 plus a Qwen3-14B cell
   reported at whatever n it reached — not a quiet drop.
 
+## Qwen3.5-9B's cells do not cover the same problems
+
+The never-returning Qwen requests are problem-specific, and the problems they
+strand differ per cell. Measured across the four `d6`/`aff6`/`pos6`/`affpos6`
+cells:
+
+| model | cells cover an identical problem set? | detail |
+|---|---|---|
+| Ministral-3-14B | **yes** | all four cells, all 12 problems |
+| Nemotron-3-Nano-4B | **yes** | all four cells, all 12 problems |
+| Qwen3.5-9B | **no** | `d6` missing `lcbhard_7`; `pos6` missing `lcbhard_7` and `lcbhard_10`; `aff6` and `affpos6` complete |
+
+**So do not compare Qwen3.5-9B's cells against each other.** The 2x2 contrasts
+are paired within problem; a cell that is missing a problem its partner has is
+not a matched arm, and the missing ones are exactly the problems that strand
+(`lcbhard_10`, `11`, `7`, `4` — see
+[infrastructure.md](infrastructure.md)). The difference between two such cells
+mixes the condition with problem composition, and the stranded problems are
+plausibly the hardest, i.e. the most affect-laden.
+
+The headline results are unaffected: they rest on Ministral and Nemotron, whose
+cells are problem-identical, and both were checked rather than assumed. If
+Qwen3.5-9B is wanted as a third model, restrict every cell to the intersection
+(10 problems) before comparing, or finish the short cells once the stranding
+fault is fixed.
+
 ## Reading a run
 
 ```bash
