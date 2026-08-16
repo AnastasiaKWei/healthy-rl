@@ -397,9 +397,9 @@ single `.eval` in the rollout's shard carries it. A steering sweep runs its shar
 once per condition and writes a log per run, all holding the same ids and epochs
 (`Olmo-3.1-32B-Think/v1`: 9–13 logs per shard), and nothing in the row says which
 run it came from — those turns keep their empty bubbles and say `N .eval logs in
-this shard hold a sample with this id and epoch`. Checked on 2026-08-16 by
-re-tokenising every recovered completion against the row's own
-`turn_n_generated`.
+this shard hold a sample with this id and epoch`. Checked on 2026-08-16 over
+every old cell on disk by re-tokenising the recovered text against the row's own
+`turn_n_generated` (see [measurement.md](measurement.md#rollout-token-strips)).
 
 ## Record fields worth knowing
 

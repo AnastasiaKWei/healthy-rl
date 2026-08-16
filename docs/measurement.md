@@ -379,9 +379,11 @@ That pair is unique only inside one log, so it is used only when a single `.eval
 in the shard carries it — a sweep writes one log per condition, all repeating the
 same ids and epochs, and nothing in the row says which run wrote it, so those turns
 keep empty bubbles and name the ambiguity. Verified on 2026-08-16 by re-tokenising
-every recovered completion against the row's own `turn_n_generated`: on
-`Ministral-3-14B-Reasoning-2512/d6`, 143 of 143 turns recovered and every one
-within one token of the stored count. One consequence more: a turn that generated
+every recovered completion against the row's own `turn_n_generated`, over all 21
+cells on disk that store no `turn_completion`: 2212 turns recovered, 395 refused
+(356 of them the Olmo sweep), and the largest disagreement anywhere was 8 tokens
+— 1.2% — which is the same round-trip deficit the strips show. A wrong sample
+would not be off by 3 tokens in 3000. One consequence more: a turn that generated
 nothing wrote no assistant message, so `.eval` messages line up with the non-empty
 turns.
 
