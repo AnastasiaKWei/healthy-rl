@@ -1117,7 +1117,8 @@ def make_projection_hook(
     """Build the vllm-lens ``Hook`` that turns residuals into 14 scalars a token.
 
     Raw residuals cost ~32KB a token; 14 projections at 5 layers cost ~280
-    bytes, so only the projections are kept for every position. Full residuals
+    bytes, so the projections are kept for every position -- on the wire and,
+    since 2026-08-15, in the rollout's .npz at every capture layer. Full residuals
     are saved at *event positions only*: the last prefill position (the residual
     that generates the turn's first token -- which, on a retry turn, is the first
     token after a test-failure message) and the final decode position (the turn's
@@ -1231,9 +1232,10 @@ class TurnStats:
 
 
 class ResidualStash:
-    """Holds event-position residuals between the model call and the sample end.
+    """Holds a turn's per-token arrays and event-position residuals between the
+    model call and the sample end.
 
-    Full residuals are far too large to route through Inspect's eval log, so the
+    Both are far too large to route through Inspect's eval log, so the
     provider parks them here under a uuid and puts only the uuid in the model
     output's metadata. ``pop`` empties the entry as the rollout's record is
     written.
@@ -1318,6 +1320,20 @@ def summarise_hook_results(
             norm_arr = np.asarray(_to_numpy(norms)).reshape(-1)[generated]
             if norm_arr.size:
                 observed[str(layer)] = float(norm_arr.mean())
+
+        # Keep every position's projections, not only their mean. ~126 KB a turn
+        # at float16 for a 900-token turn at 5 layers; the mean washed out a
+        # localised signal in this pilot (docs/measurement.md, "Granularity").
+        # `kind` is stored, not filtered, so a chunked-prefill one-position
+        # chunk (recorded as a decode row) stays visible instead of shifting
+        # every later position.
+        residuals[f"proj_{suffix}"] = proj.astype(np.float16)
+        residuals[f"kind_{suffix}"] = kind.astype(np.int8)
+        norms_all = saved.get(f"norm_{suffix}")
+        if norms_all is not None:
+            residuals[f"norm_{suffix}"] = np.asarray(
+                _to_numpy(norms_all), dtype=np.float32
+            ).reshape(-1)
 
         for kind_name in ("res_start", "res_end"):
             event = saved.get(f"{kind_name}_{suffix}")
@@ -1958,7 +1974,9 @@ def _sample_score(sample: Any) -> tuple[str | None, bool]:
 def _write_residuals(
     state: RunState, sample: Any, condition: Condition, keys: Sequence[tuple[int, str]]
 ) -> Path | None:
-    """One ``.npz`` per rollout: event-position residuals keyed by turn index."""
+    """One ``.npz`` per rollout: per-token projections/norms/kinds at every
+    capture layer, plus event-position residuals at the residual layers, keyed
+    by turn index."""
     arrays: dict[str, np.ndarray] = {}
     for index, key in keys:
         entry = state.stash.pop(key)
