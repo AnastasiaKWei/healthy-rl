@@ -174,3 +174,27 @@ def test_paired_delta_keeps_its_columns_when_no_conversation_is_usable():
     assert out["n"] == 0
     for key in ("mean", "sem", "p"):
         assert out[key].shape == (E,) and np.isnan(out[key]).all()
+
+
+def test_end_readout_from_boundary_row_when_no_decode_rows():
+    import numpy as np
+    from healthy_rl.dashboard import stats
+    L, E = 2, 3
+    empty = np.zeros((0, L, E)); empty_norm = np.zeros((0, L))
+    pre = np.array([[0.1, 0.2, 0.3], [1.0, 2.0, 3.0]]); pre_n = np.array([1.0, 2.0])
+    end = np.array([[np.nan, 0.0, 0.0], [0.5, -0.5, 0.25]]); end_n = np.array([np.nan, 5.0])
+    v = stats.turn_readout(proj=empty, norm=empty_norm, proj_prefill=pre, norm_prefill=pre_n,
+                           token_kind=[], layer_index=1, readout="end", proj_end=end, norm_end=end_n)
+    assert np.allclose(v, [0.1, -0.1, 0.05])
+    # non-finite norm at the other layer -> None, not inf
+    assert stats.turn_readout(proj=empty, norm=empty_norm, proj_prefill=pre, norm_prefill=pre_n,
+                              token_kind=[], layer_index=0, readout="end", proj_end=end, norm_end=end_n) is None
+    # without the pair the old answer stands: no decode rows -> None
+    assert stats.turn_readout(proj=empty, norm=empty_norm, proj_prefill=pre, norm_prefill=pre_n,
+                              token_kind=[], layer_index=1, readout="end") is None
+    # think_end / answer_start stay None with no decode rows even if the pair is passed
+    assert stats.turn_readout(proj=empty, norm=empty_norm, proj_prefill=pre, norm_prefill=pre_n,
+                              token_kind=[], layer_index=1, readout="think_end", proj_end=end, norm_end=end_n) is None
+    # start is unaffected by the pair
+    assert np.allclose(stats.turn_readout(proj=empty, norm=empty_norm, proj_prefill=pre, norm_prefill=pre_n,
+                                          token_kind=[], layer_index=1, readout="start", proj_end=end, norm_end=end_n), [0.5, 1.0, 1.5])

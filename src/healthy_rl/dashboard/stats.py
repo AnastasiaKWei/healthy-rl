@@ -21,7 +21,8 @@ Two deliberate divergences from ``scripts/live_trajectory.py``:
 
 Shapes: ``proj`` is ``(T, L, E)`` (decode tokens x capture layers x emotions),
 ``norm`` is ``(T, L)``, ``proj_prefill`` is ``(L, E)``, ``norm_prefill`` is
-``(L,)``. Login-node importable: numpy only, scipy optional.
+``(L,)``, ``proj_end`` (``L, E``) / ``norm_end`` (``L,``) optional. Login-node
+importable: numpy only, scipy optional.
 """
 from __future__ import annotations
 
@@ -79,6 +80,8 @@ def turn_readout(
     token_kind: Sequence[str],
     layer_index: int,
     readout: str,
+    proj_end: np.ndarray | None = None,
+    norm_end: np.ndarray | None = None,
 ) -> np.ndarray | None:
     """One turn's ``(E,)`` cosine at a named position, or None if unavailable.
 
@@ -86,7 +89,9 @@ def turn_readout(
     generated token: the paper's Assistant-colon analogue). ``think_end`` is
     the last ``think`` token, ``answer_start`` the first ``answer`` token,
     ``end`` the last decode token. None when the position does not exist
-    (no reasoning, empty turn) or the value is non-finite.
+    (no reasoning, empty turn) or the value is non-finite. ``end`` may also be
+    read from an explicit ``proj_end``/``norm_end`` row when there are no decode
+    rows.
 
     Raises ValueError if ``token_kind`` does not have one entry per decode token
     (``start`` excepted: it reads the prefill row and ignores ``token_kind``).
@@ -100,6 +105,13 @@ def turn_readout(
         return _finite_or_none(np.asarray(proj_prefill, dtype=np.float64)[layer_index] / n)
     T = int(np.asarray(proj).shape[0])
     if T == 0:
+        if readout == "end" and proj_end is not None and norm_end is not None:
+            # A record that kept only boundary residuals (rollouts before 2026-08-16):
+            # the end row is stored on its own, exactly like the prefill row.
+            n = float(np.asarray(norm_end, dtype=np.float64)[layer_index])
+            if not np.isfinite(n) or n == 0:
+                return None
+            return _finite_or_none(np.asarray(proj_end, dtype=np.float64)[layer_index] / n)
         return None
     _check_kind_length(token_kind, T)
     kinds = list(token_kind)
