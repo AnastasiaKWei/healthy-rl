@@ -31,7 +31,16 @@ print('-' if not v else ('/'.join(sorted(v))+('  <-- MIXED SPLITS' if len(v)>1 e
 " 2>/dev/null || echo '?')
     r=$(squeue -u "$USER" -h -t R -o "%j" 2>/dev/null | grep -c "^$m-$c-s")
     p=$(squeue -u "$USER" -h -t PD -o "%j" 2>/dev/null | grep -c "^$m-$c-s")
-    q=$(printf 'R%d PD%d done%d' "$r" "$p" $((3 - r - p)))
+    # A cell can have MORE than its three shards in flight: a slow cell gets
+    # dependent continuation jobs queued behind the running ones. Deriving
+    # "done" by subtraction then prints nonsense like "done-3", so clamp it and
+    # say plainly when the cell is oversubscribed.
+    done=$((3 - r - p))
+    if [ "$done" -lt 0 ]; then
+      q=$(printf 'R%d PD%d +cont' "$r" "$p")
+    else
+      q=$(printf 'R%d PD%d done%d' "$r" "$p" "$done")
+    fi
     flag=""
     [ "$recs" -ge "$TARGET" ] && flag="  complete"
     [ "$recs" -lt "$TARGET" ] && [ $((r + p)) -eq 0 ] && flag="  <-- SHORT, nothing queued"
