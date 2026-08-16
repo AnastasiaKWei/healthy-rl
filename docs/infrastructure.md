@@ -373,6 +373,10 @@ Two more:
   plain, affect-prompt with neutral, and (since 2026-08-15) one bench split with
   the other. This is deliberate — a resumed run that silently mixed conditions
   would be unrecoverable.
+- **`mindset:` takes a list of block names** (`growth`, `resilience`,
+  `appraisal`); an unknown name raises at startup, and each arm needs its own
+  `out_dir` — resume refuses to mix one arm with another, or one prompt version
+  with another, exactly as it refuses to mix conditions above.
 - **`bench_dir` and `bench_parquet` must be set together.** `bench_parquet`
   falls back to `<bench_dir>/conflicting.parquet`, so pointing `bench_dir` at the
   `original` split's directory alone sends the run hunting for a conflicting

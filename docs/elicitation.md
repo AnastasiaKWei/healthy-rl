@@ -121,7 +121,10 @@ additionally the most contaminated by roleplay priors of anything considered.
   papers: [2510.04340](https://arxiv.org/pdf/2510.04340),
   [2510.05024](https://arxiv.org/pdf/2510.05024). Known to be brittle to phrasing.
 - **Mindset prompts** — growth mindset and resilience framing, added to the task
-  instruction (`--mindset growth resilience appraisal` in the step 0 runner). Cheapest
+  instruction (`--mindset growth resilience appraisal` in the step 0 runner) and, since
+  2026-08-15, as the `mindset:` key of the rollout pipeline, which reads the probes
+  under the same v2 blocks — cells `growth6`/`resil6`/`appr6` and the affect-on trio,
+  registered in [runs.md](runs.md). Cheapest
   possible intervention, and a useful pilot for the expensive ones: it is the same
   causal claim (framing changes the affective trajectory of a failure loop) with none
   of the training cost. Two cautions carried in the code. First, they are demand

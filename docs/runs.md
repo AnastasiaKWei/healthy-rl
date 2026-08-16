@@ -18,6 +18,8 @@ versions encode the condition:
 | `aff6` | 6 | affect prompt (`affect_prompt: true`), conflicting split |
 | `pos6` | 6 | no affect prompt, **original (solvable) split** |
 | `affpos6` | 6 | affect prompt, original split |
+| `growth6`, `resil6`, `appr6` | 6 | mindset block (growth / resilience / appraisal, v2), otherwise `d6`: no affect prompt, conflicting split. Block sent on turn 1 only. Compare against `d6` |
+| `affgrowth6`, `affresil6`, `affappr6` | 6 | same blocks with the affect prompt on, otherwise `aff6`. Compare against `aff6` |
 
 `d6` / `sp6` / `aff6` / `pos6` / `affpos6` are the trustworthy set. Each condition
 needs its own `out_dir` — resume refuses to mix them, and since 2026-08-15 it
@@ -85,6 +87,43 @@ which never bound — the longest turn any model generated was 14198 tokens
 (Ministral `aff6`) and 9861 in `d6`, so nothing was truncated. Checked rather
 than assumed, because an unmatched token cap is what voided the first pilot.
 
+## The mindset arms
+
+Anastasia's three v2 mindset blocks (`experiments/step0_elicitation.py`, rendered
+in [prompts-v2.md](prompts-v2.md); the rollout versions in
+[prompts-rollouts.md](prompts-rollouts.md)) inserted into the turn-1 instruction
+between the benchmark text and the affect sentence, and stripped from the
+reminder the scaffold re-sends after each failed attempt, so the model sees the
+block once per rollout. The reminder a mindset arm sends is byte-identical to its
+base arm's — turn 1 is the only place the two differ (see the word-count table in
+[prompts-rollouts.md](prompts-rollouts.md), and
+[measurement.md](measurement.md#the-mindset-arms-send-once-mechanism) for what
+that mechanism depends on). `mindset` and `mindset_version` are on every record
+and summary, with the exact turn-1 `instruction` and the stripped
+`instruction_reminder` on the summary; resume refuses to mix arms or prompt
+versions.
+
+Everything else is the base cell's shard config byte for byte except
+`max_tokens`. Ministral `d6` used `max_tokens` 16384; the mindset cells use
+24576, the 2x2 value; the cap never bound (longest `d6` turn 9861 tokens), so the
+comparison holds.
+
+Read a mindset cell only against its base cell — `growth6` vs `d6`, `affgrowth6`
+vs `aff6` — single-token, both positions, at t0 and first-to-last. The blocks
+are demand characteristics pointing the opposite way from the affect prompt: a
+cell whose *words* calm down while its trajectory does not is the decoupling
+result, not a success. See [interventions.md](interventions.md) §8.
+
+Shard configs and submission are one script, `scripts/mindset_cells.sh` —
+dry-run by default, `--submit` to act. It writes the 27 shard configs
+(`configs/shards/rollouts-<model>-<version>-s{0,1,2}of3.yaml`) from the base
+cell's, then submits per shard a primary job plus `-cont` and `-cont2` chained
+with `--dependency=afterany`, and prints the job-id table for the section below.
+Priority is carried by `--nice`: Ministral `growth6`/`resil6`/`appr6` first at
+nice 0, then Qwen3.5-9B's three at `--nice=2000`, then Ministral's affect-on
+three at `--nice=4000`. Qwen3-14B was dropped by the peer session, so the
+capacity its cells were holding is free for these.
+
 ## Current state
 
 Rollout records, `$ARTIFACT_DIR/rollouts/<model>/<version>/*.jsonl`:
@@ -114,6 +153,15 @@ Rollout records, `$ARTIFACT_DIR/rollouts/<model>/<version>/*.jsonl`:
 | Nemotron-3-Nano-4B-BF16 | `aff6` | 24 | complete |
 | Nemotron-3-Nano-4B-BF16 | `pos6` | 22 | running |
 | Nemotron-3-Nano-4B-BF16 | `affpos6` | 23 | last shard running |
+| Ministral-3-14B-Reasoning-2512 | `growth6` | 0 | submitted 2026-08-16, priority 1 |
+| Ministral-3-14B-Reasoning-2512 | `resil6` | 0 | submitted 2026-08-16, priority 1 |
+| Ministral-3-14B-Reasoning-2512 | `appr6` | 0 | submitted 2026-08-16, priority 1 |
+| Qwen3.5-9B | `growth6` | 0 | submitted 2026-08-16, priority 2 (`--nice=2000`) |
+| Qwen3.5-9B | `resil6` | 0 | submitted 2026-08-16, priority 2 (`--nice=2000`) |
+| Qwen3.5-9B | `appr6` | 0 | submitted 2026-08-16, priority 2 (`--nice=2000`) |
+| Ministral-3-14B-Reasoning-2512 | `affgrowth6` | 0 | submitted 2026-08-16, priority 3 (`--nice=4000`) |
+| Ministral-3-14B-Reasoning-2512 | `affresil6` | 0 | submitted 2026-08-16, priority 3 (`--nice=4000`) |
+| Ministral-3-14B-Reasoning-2512 | `affappr6` | 0 | submitted 2026-08-16, priority 3 (`--nice=4000`) |
 
 gemma-3-12b-it has no `pos6`/`affpos6` cell: it is the flattest of the measured
 models, and the 2x2s went to the models with a clear conflicting-split signal
@@ -125,6 +173,13 @@ two that never ran are gemma-4-12B-it (the one genuine gate failure) and the
 27B models Olmo and Qwen3.6, which are exempt from the "every new passing model
 runs the benchmark" rule because they predate it and are the wrong size for this
 question.
+
+### Mindset jobs
+
+| model | version | shard | primary | continuations |
+|---|---|---|---|---|
+
+(filled from `scripts/mindset_cells.sh --submit` output)
 
 ## Handoff: state at 2026-08-15, end of day
 
@@ -208,13 +263,38 @@ Each JSONL row is one rollout:
   zero everywhere so far, with the caveat in
   [findings.md](findings.md#hack-rate-is-zero-everywhere-and-the-number-means-less-than-it-looks).
   On `original`, true means the model solved the problem. Never pool the two.
+- `mindset`, `mindset_version` — which mindset blocks the turn-1 instruction
+  carried, as a list in prompt order (growth, resilience, appraisal), and the
+  version of the block text (2). `[]` on every cell before the mindset arms.
+  **A mindset record is comparable only with its base cell** (`d6` or `aff6`);
+  resume enforces the same rule. Records predating the keys count as no mindset,
+  version 0.
+- `turn_completion` — each turn's completion text, one string per turn. What the
+  model wrote, kept so the per-token arrays below can be re-tokenised offline.
 
-Per-token projections onto all 14 directions are kept at **every** capture layer
-(~280 bytes/token). Full residuals are kept only at event positions — turn
-boundaries and the first token after a test-failure message — and only at the
-probe layer by default. The per-token projections are the untapped resource: the
-signal is localised and we currently sample two positions per turn out of
-hundreds.
+`summary.json` beside the JSONL records the stimulus itself: `instruction` (the
+exact turn-1 text the model was shown) and `instruction_reminder` (what the
+scaffold re-sends after each failed attempt — the same string with the mindset
+section removed), plus `mindset` and `mindset_version`. Both strings are stored
+so what the model saw is checkable without opening an eval log.
+
+Per-token projections are on disk **only for records written after the mindset
+merge (2026-08-16)** — the mindset cells and anything run after them. Check for a
+`t0_proj_L*` key rather than trusting a date. The rollout's `.npz` then holds,
+per turn and per capture layer, `t{turn}_proj_L{n}` (P × 14, float16 — every hook
+row's projection onto the 14 directions), `t{turn}_norm_L{n}` (P, float32) and
+`t{turn}_kind_L{n}` (P, int8; 1 = the prefill row that produced the first
+generated token, 0 = a decode row). Cosine at row *i* is `proj[i] / norm[i]`.
+Older records have only the boundary residuals
+(`t{turn}_res_{start|end}_L{probe}`) — the hook always computed the per-token
+arrays, but `summarise_hook_results` reduced them to `turn_stat` and dropped
+them; an earlier version of this paragraph said they were kept, and was wrong.
+Full residuals are still kept only at event positions — turn boundaries and the
+first token after a test-failure message — and only at the probe layer by
+default. Records also carry `turn_completion` so the rows can be re-tokenised
+offline and the count checked against the decode rows; for reasoning models the
+completion may omit reasoning tokens, so a mismatch is expected and must be
+reported. Exact token strings via `logprobs` are the follow-up.
 
 ## Bench artifacts
 

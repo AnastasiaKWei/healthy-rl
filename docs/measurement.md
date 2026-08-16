@@ -196,6 +196,27 @@ residual's norm, which does not fix this.
 from the order stored in the rollout records. Do not relax this — the columns are
 positional and a silent mismatch relabels every result.
 
+### The mindset arm's send-once mechanism
+
+A mindset cell (`growth6`, `affresil6`, …) carries its block in the **turn-1
+instruction only**. Turns 2–6 do not repeat it: `strip_mindset_from_reminders`
+takes the section out of `metadata["instruction_prompt"]`, which is the string
+`impossiblebench.livecodebench_agent_mini.agentic_humaneval_solver` re-sends
+after every failed attempt (`include_task_reminder=True`, the default our
+`build_task` inherits). The section is replaced by nothing, so a mindset arm's
+reminder is byte-identical to its base arm's and turn 1 is the only place the two
+differ — the word-count table in [prompts-rollouts.md](prompts-rollouts.md) is
+the check (63 words per reminder with the affect prompt off, 97 with it on, in
+every arm).
+
+That reminder path is a load-bearing external dependency. The strip raises if the
+section is absent from `instruction_prompt`, so a renamed or reformatted key
+fails at startup — but if a future ImpossibleBench built the reminder from
+somewhere else, the strip would still "succeed" and the arm would silently become
+a six-times arm wearing a once-only label. **On the first run of any new mindset
+cell, spot-check turn 2's user message in one transcript**
+(`scripts/read_transcript.sh`): it must not contain the block.
+
 ## Reading the tools
 
 ```bash
