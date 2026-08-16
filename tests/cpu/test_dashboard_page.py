@@ -34,3 +34,20 @@ def test_rollouts_mode_strings_present():
     for s in ["S.rollouts", "applyModelLayers", "no per-token arrays", "session.models", "railFilter",
               "renderAggPicker", "aggDrawGroups", "--g1", "with base"]:
         assert s in PAGE, s
+
+
+def test_turn_body_separates_an_empty_turn_from_an_old_record():
+    """A zero-token turn in a new cell has no arrays either, so the "written before the mindset
+    merge" note must not claim it, and its "no tokenizer" error is not a generation failure."""
+    body = PAGE.split("function renderTurnBody(")[1].split("\nasync function")[0]
+    assert "This turn generated nothing" in body
+    assert body.index("This turn generated nothing") < body.index("Generation failed")
+    assert body.index("This turn generated nothing") < body.index("written before the mindset merge")
+    # the old-record note is gated on the turn having generated something
+    assert "turn.has_token_arrays === false && !turn.misaligned && !empty" in body
+
+
+def test_turn_header_reports_recovered_text_and_a_mismatched_emotion_order():
+    head = PAGE.split("function assistantMessage(")[1].split("function renderTurnBody(")[0]
+    assert 'turn.text_source === "eval"' in head and "text from .eval" in head
+    assert "turn.emotion_order_mismatch" in head and "emotion order differs" in head

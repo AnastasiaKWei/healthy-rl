@@ -967,6 +967,8 @@ function assistantMessage(turn, i) {
   let right = "";
   const warns = (turn.warnings || []).slice();
   if (turn.misaligned) warns.unshift("hook/token misalignment: readouts and strip hidden");
+  // Otherwise every readout reads "—" and the only note the page gives blames the residuals.
+  if (turn.emotion_order_mismatch) warns.unshift("emotion order differs from the model's vectors: readouts withheld");
   if (turn.error) right += '<span class="wchip crit" title="' + esc(turn.error) + '">error</span>';
   if (warns.length) right += '<span class="wchip" title="' + esc(warns.join(" · ")) + '">⚑ ' + (warns.length === 1 ? "warning" : warns.length + " warnings") + "</span>";
   // The readouts come from /api/conversations/{id}, which reads at the probe layer only.
@@ -988,13 +990,23 @@ function assistantMessage(turn, i) {
 
 function renderTurnBody(host, turn) {
   host.innerHTML = "";
-  if (turn.error && !(turn.n_generated > 0)) {
+  const empty = !(turn.n_generated > 0);
+  // A rollout turn that generated nothing has no arrays either, so it must not be read as an
+  // old record, and its "no tokenizer" error is not a generation failure. It takes precedence.
+  if (S.rollouts && empty) {
+    const w = el("div", "warnbox");
+    w.innerHTML = "<b>This turn generated nothing:</b> no tokens, no arrays.";
+    host.appendChild(w); return;
+  }
+  if (turn.error && empty) {
     const w = el("div", "warnbox crit"); w.innerHTML = "<b>Generation failed.</b> " + esc(turn.error);
     host.appendChild(w); return;
   }
-  if (S.rollouts && turn.has_token_arrays === false && !turn.misaligned) {
+  if (S.rollouts && turn.has_token_arrays === false && !turn.misaligned && !empty) {
     const w = el("div", "warnbox");
-    w.innerHTML = "<b>No per-token arrays</b> for this record (written before the mindset merge, 2026-08-16): text and start/end readouts only.";
+    w.innerHTML = "<b>No per-token arrays</b> for this record (written before the mindset merge, 2026-08-16): " +
+      (turn.text_source === "eval" ? "the text below is recovered from the .eval log; start/end readouts only."
+                                   : "text and start/end readouts only.");
     host.appendChild(w);
   }
   if (turn.misaligned) {
