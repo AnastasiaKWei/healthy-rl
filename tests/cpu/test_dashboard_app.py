@@ -45,6 +45,7 @@ def test_index_and_session(client):
     s = client.get("/api/session").json()
     assert s["session"]["model"] == "fake" and "health" in s and s["read_only"] is False
     assert s["emotions"] == ["desperate", "frustrated", "joyful"] and s["probe_layer"] == 20
+    assert s["mode"] == "live"
 
 
 def test_chat_roundtrip_and_conversation_readouts(client):
@@ -369,3 +370,65 @@ def test_task_start_carries_the_mindset_into_the_condition(client):
         rec = [d for n, d in _sse(r) if n == "turn"][0]["record"]
     assert rec["condition"]["mindset"] == ["growth"]
     assert rec["condition"]["mindset_version"] == MINDSET_VERSION
+
+
+from rollout_cell import EMOTIONS, FakeEvalSamples, WhitespaceTokenizer, make_cell
+
+from healthy_rl.dashboard.rollout_store import RolloutStore
+
+RROWS = [
+    {"task_id": "lcbhard_0", "sample": 0, "completions": ["a b c", "[THINK]x y[/THINK] z"], "passed": False},
+    {"task_id": "lcbhard_0", "sample": 1, "completions": ["p q", "r s t u"], "passed": True, "bench_split": "original"},
+]
+
+
+def _rollout_client(tmp_path):
+    make_cell(tmp_path / "r", "m-a", "appr6", rows=RROWS[:1])
+    make_cell(tmp_path / "r", "m-a", "d6", rows=RROWS[:1], token_arrays=False)
+    make_cell(tmp_path / "r", "m-b", "appr6", rows=RROWS, capture_layers=(5, 15), probe_layer=15)
+    store = RolloutStore.open([tmp_path / "r"], tokenizer_loader=lambda m: WhitespaceTokenizer(),
+                              vectors_loader=lambda m: None, eval_loader=FakeEvalSamples({}))
+    st = AppState(engine=None, sandbox=None, store=store, vectors=None, cfg={}, read_only=True, mode="rollouts")
+    return TestClient(create_app(st))
+
+
+def test_rollouts_session_and_conversations(tmp_path):
+    c = _rollout_client(tmp_path)
+    s = c.get("/api/session").json()
+    assert s["mode"] == "rollouts" and s["read_only"] is True
+    assert set(s["session"]["models"]) == {"m-a", "m-b"} and s["session"]["models"]["m-b"]["probe_layer"] == 15
+    assert len(s["session"]["cells"]) == 3 and s["emotions"] == list(EMOTIONS)
+    convs = c.get("/api/conversations").json()["conversations"]
+    assert len(convs) == 4 and all(x["source"] == "rollout" for x in convs)
+    assert len(c.get("/api/conversations", params={"model": "m-b"}).json()["conversations"]) == 2
+    assert len(c.get("/api/conversations", params={"model": "m-a", "version": "d6"}).json()["conversations"]) == 1
+
+
+def test_rollouts_conversation_readouts_at_own_probe_layer(tmp_path):
+    c = _rollout_client(tmp_path)
+    conv = c.get("/api/conversations/m-b/appr6/lcbhard_0/s0").json()
+    t = conv["turns"][1]
+    assert t["probe_layer"] == 15 and t["has_token_arrays"] is True and t["misaligned"] is False
+    assert isinstance(t["readouts"]["desperate"]["start"], float) and isinstance(t["readouts"]["desperate"]["think_end"], float)
+    assert t["tokens"][-1] == "<eos>" and t["emotion_order_mismatch"] is False
+    old = c.get("/api/conversations/m-a/d6/lcbhard_0/s0").json()["turns"][0]
+    assert old["has_token_arrays"] is False and old["readouts"]["desperate"]["start"] is None   # no vectors loaded
+    assert any("vectors" in w for w in old["warnings"])
+    assert c.get("/api/conversations/nope").status_code == 404
+
+
+def test_rollouts_tokens_route_validates_record_layers(tmp_path):
+    c = _rollout_client(tmp_path)
+    rid = "m-b/appr6/lcbhard_0/s0/t1"
+    p = c.get(f"/api/records/{rid}/tokens").json()
+    assert p["layer"] == 15 and len(p["tokens"]) == 4 and len(p["cosine"]) == 4 and p["markers"]["think_end"] == 1
+    assert c.get(f"/api/records/{rid}/tokens", params={"layer": 5}).status_code == 200
+    assert c.get(f"/api/records/{rid}/tokens", params={"layer": 20}).status_code == 400
+    assert c.get("/api/records/nope/tokens").status_code == 404
+
+
+def test_rollouts_mode_refuses_generation(tmp_path):
+    c = _rollout_client(tmp_path)
+    assert c.post("/api/chat/new/send", json={"text": "x"}).status_code == 409
+    assert c.post("/api/task/start", json={"split": "original", "task_id": "lcbhard_0"}).status_code == 409
+    assert c.get("/api/problems").status_code == 409
