@@ -664,6 +664,7 @@ function applyModelLayers(model) {
   S.probeLayer = m.probe_layer === undefined ? null : m.probe_layer;
   if (S.layers.indexOf(S.layer) < 0) S.layer = S.probeLayer !== null ? S.probeLayer : (S.layers.length ? S.layers[0] : null);
   renderLayerSeg();
+  renderSettings();     // the Measurement card names the probe layer, so it moves with the model
 }
 
 function renderEmpty() {
@@ -809,7 +810,8 @@ async function openConversation(id) {
   renderTrajectory();
   fillTokTurns();
   const last = lastMeasurableTurn();
-  if (last && (!S.tokens || S.tokens.record_id !== last.record_id || !sameConv)) loadTokens(last.record_id);
+  if (!last) loadTokens(null);      // clears the previous conversation's chart
+  else if (!S.tokens || S.tokens.record_id !== last.record_id || !sameConv) loadTokens(last.record_id);
   markRailSelection();
   updateComposer();
   fillAggFilter();
@@ -828,7 +830,9 @@ function markRailSelection() {
 
 const turnsOf = () => (S.current && S.current.turns) || [];
 function lastMeasurableTurn() {
-  const t = turnsOf().filter(x => (x.n_generated || 0) > 0 && !x.misaligned);
+  // has_token_arrays is false only for a rollout record written without the per-token
+  // arrays; there is no /tokens payload behind it, so asking for one buys an error box.
+  const t = turnsOf().filter(x => (x.n_generated || 0) > 0 && !x.misaligned && x.has_token_arrays !== false);
   return t.length ? t[t.length - 1] : null;
 }
 function readoutOf(turn, emotion, readout) {
@@ -854,6 +858,7 @@ function renderConversation() {
   if (isRoll) {
     [conv.model, conv.version, (conv.bench_split || "?") + " split",
      conv.mindset && conv.mindset.length ? "mindset:" + conv.mindset.join("+") : null,
+     conv.epoch === undefined || conv.epoch === null || conv.epoch === 1 ? null : "ep " + conv.epoch,
      turns.length + " turn" + (turns.length === 1 ? "" : "s")].forEach(b => { if (b) bits.push(b); });
   } else if (isTask) { bits.push("ImpossibleBench · " + (conv.bench_split || "?") + " split"); bits.push("attempt " + turns.length); }
   else bits.push("chat · " + turns.length + " turn" + (turns.length === 1 ? "" : "s"));
@@ -1250,7 +1255,8 @@ function fillTokTurns() {
   const sel = $("#tokTurn"); sel.innerHTML = "";
   turnsOf().forEach((t, i) => {
     if (!((t.n_generated || 0) > 0)) return;
-    const o = el("option", null, "turn " + (i + 1) + " · " + t.n_generated + " tok" + (t.at_cap ? " · at cap" : "") + (t.misaligned ? " · misaligned" : ""));
+    const o = el("option", null, "turn " + (i + 1) + " · " + t.n_generated + " tok" + (t.at_cap ? " · at cap" : "") +
+      (t.misaligned ? " · misaligned" : "") + (t.has_token_arrays === false ? " · no arrays" : ""));
     o.value = t.record_id;
     if (S.tokens && S.tokens.record_id === t.record_id) o.selected = true;
     sel.appendChild(o);
@@ -1282,7 +1288,9 @@ function tokChartDraw() {
   S.tokChart = null;
   const p = S.tokens;
   if (!p || !(p.tokens || []).length) {
-    host.innerHTML = '<p class="hint">No token-level data for this turn. Pick a turn above, or generate one.</p>';
+    host.innerHTML = S.rollouts
+      ? '<p class="hint">No per-token arrays for this record: turn readouts only. Pick a turn above, or a rollout from a cell that carries them.</p>'
+      : '<p class="hint">No token-level data for this turn. Pick a turn above, or generate one.</p>';
     return;
   }
   const kinds = p.token_kind || [], n = p.tokens.length, ae = p.emotions || [];
