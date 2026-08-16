@@ -9,6 +9,7 @@ import pytest
 from rollout_cell import EMOTIONS, FakeEvalSamples, GappedTokenizer, WhitespaceTokenizer, make_cell
 from healthy_rl.dashboard.generation import split_reasoning
 from healthy_rl.dashboard.rollout_store import RolloutStore, align_tokens, discover_cells, records_from_row, tokenise
+from healthy_rl.rollouts import Vectors
 
 ROWS = [
     {"task_id": "lcbhard_0", "sample": 0, "completions": ["a b c", "[THINK]x y[/THINK] z"], "passed": False},
@@ -339,3 +340,56 @@ def test_arrays_layer_mismatch_marks_misaligned(tmp_path):
     assert a["proj"].shape == (0, 2, 3)      # nothing usable is served under the wrong layer list
     r = st.record("fake-model/appr6/lcbhard_0/s0/t0")
     assert r["misaligned"] is True and "L30" in r["error"]
+
+
+def _fake_vectors(*, emotions=EMOTIONS, probe_layer=20, capture_layers=(10, 20), d=8):
+    """A vectors artifact whose probe-layer directions read the first ``E`` residual components."""
+    E, L = len(emotions), len(capture_layers)
+    dirs = np.zeros((E, L, d), np.float32)
+    dirs[:, list(capture_layers).index(probe_layer), :E] = np.eye(E)
+    return Vectors(directions=dirs, emotions=list(emotions), capture_layers=list(capture_layers),
+                   probe_layer=probe_layer, mean_residual_norm={l: 1.0 for l in capture_layers}, path=Path("fake"))
+
+
+def _old_cell_store(tmp_path, vec):
+    """One old cell (boundary residuals only), with ``vec`` as the model's vectors artifact."""
+    make_cell(tmp_path / "rollouts", "fake-model", "d6", rows=ROWS[:1], token_arrays=False)
+    return RolloutStore.open([tmp_path / "rollouts"], tokenizer_loader=lambda m: WhitespaceTokenizer(),
+                             vectors_loader=lambda m: vec, eval_loader=FakeEvalSamples({}))
+
+
+def test_arrays_for_row_without_a_residuals_file(tmp_path):
+    cell = make_cell(tmp_path / "rollouts", "fake-model", "d6", rows=ROWS[:1], token_arrays=False)
+    f = cell / "rollouts.shard0of2.jsonl"
+    row = json.loads(f.read_text()); row["residuals"] = None; f.write_text(json.dumps(row) + "\n")
+    st = RolloutStore.open([tmp_path / "rollouts"], tokenizer_loader=lambda m: WhitespaceTokenizer(),
+                           vectors_loader=lambda m: None, eval_loader=FakeEvalSamples({}))
+    a = st.arrays("fake-model/d6/lcbhard_0/s0/t0")
+    assert a["proj"].shape == (0, 2, 3) and np.isnan(a["norm_prefill"]).all() and np.isnan(a["proj_prefill"]).all()
+    r = st.record("fake-model/d6/lcbhard_0/s0/t0")
+    assert r["misaligned"] is False and r["error"] is None    # no npz to be missing: an honest array-less row
+
+
+def test_arrays_rejects_vectors_from_a_different_probe_layer(tmp_path):
+    st = _old_cell_store(tmp_path, _fake_vectors(capture_layers=(10, 30), probe_layer=30))
+    a = st.arrays("fake-model/d6/lcbhard_0/s0/t0")
+    assert a["proj"].shape == (0, 2, 3) and np.isnan(a["proj_prefill"]).all()
+    assert "proj_end" not in a and "res_start_L20" not in a   # nothing is served off the wrong artifact
+    r = st.record("fake-model/d6/lcbhard_0/s0/t0")
+    assert r["misaligned"] is True and "vectors probe layer L30 differs from the record's L20" in r["error"]
+
+
+def test_arrays_rejects_vectors_with_a_different_emotion_count(tmp_path):
+    st = _old_cell_store(tmp_path, _fake_vectors(emotions=(*EMOTIONS, "calm")))
+    a = st.arrays("fake-model/d6/lcbhard_0/s0/t0")
+    assert a["proj"].shape == (0, 2, 3) and np.isnan(a["proj_prefill"]).all() and "proj_end" not in a
+    r = st.record("fake-model/d6/lcbhard_0/s0/t0")
+    assert r["misaligned"] is True and "vectors list 4 emotions, record lists 3" in r["error"]
+
+
+def test_arrays_rejects_vectors_whose_emotion_order_differs(tmp_path):
+    st = _old_cell_store(tmp_path, _fake_vectors(emotions=(EMOTIONS[1], EMOTIONS[0], EMOTIONS[2])))
+    a = st.arrays("fake-model/d6/lcbhard_0/s0/t0")
+    assert a["proj"].shape == (0, 2, 3) and np.isnan(a["proj_prefill"]).all() and "proj_end" not in a
+    r = st.record("fake-model/d6/lcbhard_0/s0/t0")
+    assert r["misaligned"] is True and "vectors emotion order differs from the record's" in r["error"]

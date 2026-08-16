@@ -196,12 +196,26 @@ def _project_residual(h: np.ndarray, directions: np.ndarray) -> tuple[np.ndarray
     return directions @ h, n
 
 
-def arrays_from_npz(z, *, turn: int, capture_layers: list[int], probe_layer: int, n_emotions: int, vectors=None
-                    ) -> tuple[dict[str, np.ndarray], list[str]]:
+def arrays_from_npz(z, *, turn: int, capture_layers: list[int], probe_layer: int, n_emotions: int,
+                    emotions: list[str] | None = None, vectors=None) -> tuple[dict[str, np.ndarray], list[str]]:
     """Dashboard-shaped arrays for one turn of a rollout npz (spec §3.2, §3.4)."""
     L, files = len(capture_layers), set(z.files)
     problems: list[str] = []
     E = int(n_emotions)
+    if vectors is not None:
+        # The artifact names the columns the page labels, so a disagreement with the record is a
+        # problem for the record, not something to paper over by reordering or relabelling columns.
+        mismatch: list[str] = []
+        if vectors.probe_layer != probe_layer:
+            mismatch.append(f"vectors probe layer L{vectors.probe_layer} differs from the record's L{probe_layer}")
+        vem = list(vectors.emotions)
+        if len(vem) != E:
+            mismatch.append(f"vectors list {len(vem)} emotions, record lists {E}")
+        elif emotions is not None and list(emotions) != vem:
+            mismatch.append("vectors emotion order differs from the record's")
+        if mismatch:
+            problems += mismatch
+            vectors = None                     # never project with an artifact that disagrees
     per_layer: list[tuple[np.ndarray, np.ndarray, np.ndarray] | None] = []
     for layer in capture_layers:
         k = f"t{turn}_proj_L{layer}"
@@ -366,14 +380,17 @@ class RolloutStore:
         empty = {"proj": np.zeros((0, L, E), np.float32), "norm": np.zeros((0, L), np.float32),
                  "proj_prefill": np.full((L, E), np.nan, np.float32), "norm_prefill": np.full(L, np.nan, np.float32)}
         path = self._npz_path(rec)
-        if path is None or not path.is_file():
+        if path is None:
+            return empty       # the row names no residuals file: array-less, like _decode_rows reads it
+        if not path.is_file():
             self._mark(rec, f"npz missing: {path}")
             return empty
         vec = self._vectors_for(rec["model"])
         try:
             with np.load(path) as z:
                 out, problems = arrays_from_npz(z, turn=rec["turn_index"], capture_layers=rec["capture_layers"],
-                                                probe_layer=rec["probe_layer"], n_emotions=E, vectors=vec)
+                                                probe_layer=rec["probe_layer"], n_emotions=E,
+                                                emotions=rec["emotions"], vectors=vec)
         except (OSError, ValueError) as exc:
             self._mark(rec, f"npz unreadable: {exc}")
             return empty
