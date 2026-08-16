@@ -427,7 +427,7 @@ same `conversation_id` rather than nested in one row:
 | `warnings` | non-fatal notes from generation assembly, e.g. `reasoning_content offset is a guess: answer text not found in token stream` |
 | `text`, `reasoning`, `answer` | the full completion, and the two halves of it |
 | `messages_in` | the full input message list for this generation, so any attempt can be replayed exactly |
-| `condition` | task runs: `scratchpad`, `affect_prompt`, `temperature`, `max_tokens`, `auto_continue`, `system_prompt_hash`. Chat records carry only `max_tokens` and `temperature` — the other switches are task-loop settings and do not exist for a chat turn |
+| `condition` | task runs: `scratchpad`, `affect_prompt`, `mindset` (list of block names, `[]` for the base arm), `mindset_version`, `temperature`, `max_tokens`, `auto_continue`, `system_prompt_hash`. Chat records carry only `max_tokens` and `temperature` — the other switches are task-loop settings and do not exist for a chat turn |
 | `user_intervention` | text the user inserted before the feedback message, if any. Rollouts have no such thing |
 | `title` | first chat turn only; what the rail shows |
 | `passed`, `feedback` | task runs: the scorer result and the exact message fed back |

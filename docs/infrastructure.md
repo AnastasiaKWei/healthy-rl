@@ -539,6 +539,13 @@ what the stage itself prints in the tunnel line it logs; without it the line say
 There is no auth. The port is reachable from anything that can reach the compute
 node; the tunnel is the only intended route.
 
+The task dialog's mindset selector applies the chosen block to turn 1 only, the
+same as the rollout pipeline: `sandbox_cli problems --mindset <name>` builds the
+opening instruction with the block and a separate `reminder_prompt` without it,
+and every later turn quotes the reminder. The arm is part of the problem-list
+cache key and lands in each record's `condition` as `mindset` /
+`mindset_version` (docs/runs.md).
+
 ### No new dependencies
 
 `fastapi` and `uvicorn` come from vLLM's dependency set, and `httpx` was already a
