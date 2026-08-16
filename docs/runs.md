@@ -104,25 +104,31 @@ and summary, with the exact turn-1 `instruction` and the stripped
 versions.
 
 Everything else is the base cell's shard config byte for byte except
-`max_tokens`. Ministral `d6` used `max_tokens` 16384; the mindset cells use
-24576, the 2x2 value; the cap never bound (longest `d6` turn 9861 tokens), so the
-comparison holds.
+`max_tokens`, `out_dir` and the appended `mindset:` key. Ministral `d6` used
+`max_tokens` 16384; the mindset cells use 24576, the 2x2 value; the cap never
+bound (longest `d6` turn 9861 tokens), so the comparison holds.
 
 Read a mindset cell only against its base cell — `growth6` vs `d6`, `affgrowth6`
 vs `aff6` — single-token, both positions, at t0 and first-to-last. The blocks
 are demand characteristics pointing the opposite way from the affect prompt: a
 cell whose *words* calm down while its trajectory does not is the decoupling
-result, not a success. See [interventions.md](interventions.md) §8.
+result, not a success. See [interventions.md](interventions.md) §8. The base
+cells (`d6`, `aff6`) predate the per-token arrays, so the mindset-vs-base
+comparison uses the boundary residuals both sides have; a per-token comparison
+needs a base cell re-run (not queued tonight).
 
 Shard configs and submission are one script, `scripts/mindset_cells.sh` —
 dry-run by default, `--submit` to act. It writes the 27 shard configs
 (`configs/shards/rollouts-<model>-<version>-s{0,1,2}of3.yaml`) from the base
 cell's, then submits per shard a primary job plus `-cont` and `-cont2` chained
 with `--dependency=afterany`, and prints the job-id table for the section below.
-Priority is carried by `--nice`: Ministral `growth6`/`resil6`/`appr6` first at
-nice 0, then Qwen3.5-9B's three at `--nice=2000`, then Ministral's affect-on
-three at `--nice=4000`. Qwen3-14B was dropped by the peer session, so the
-capacity its cells were holding is free for these.
+The 27 configs are already committed and the script refuses to overwrite one
+that exists with different content, so re-running the config phase is a no-op.
+Priority is carried by `--nice`: Ministral `growth6`/`resil6`/`appr6` first,
+with no `--nice` flag (slurm default 0), then Qwen3.5-9B's three at
+`--nice=2000`, then Ministral's affect-on three at `--nice=4000`. Qwen3-14B was
+dropped by the peer session, so the capacity its cells were holding is free for
+these.
 
 ## Current state
 
@@ -145,23 +151,23 @@ Rollout records, `$ARTIFACT_DIR/rollouts/<model>/<version>/*.jsonl`:
 | gemma-3-12b-it | `aff6` | 24 | complete, analysed (turn-end only) |
 | Olmo-3.1-32B-Think | `v1` | 172 | void |
 | Qwen3.6-27B | `v1` | 0 | never produced records |
-| Qwen3-14B | `d6` | 1 | **the problem cell** — see below |
-| Qwen3-14B | `aff6` | 17 | running |
-| Qwen3-14B | `pos6` | 21 | running |
-| Qwen3-14B | `affpos6` | 21 | running |
+| Qwen3-14B | `d6` | 1 | **the problem cell**; dropped 2026-08-15 (GPU budget) — see the Handoff section |
+| Qwen3-14B | `aff6` | 17 | dropped 2026-08-15 (GPU budget) — see the Handoff section |
+| Qwen3-14B | `pos6` | 21 | dropped 2026-08-15 (GPU budget) — see the Handoff section |
+| Qwen3-14B | `affpos6` | 21 | dropped 2026-08-15 (GPU budget) — see the Handoff section |
 | Nemotron-3-Nano-4B-BF16 | `d6` | 24 | complete |
 | Nemotron-3-Nano-4B-BF16 | `aff6` | 24 | complete |
 | Nemotron-3-Nano-4B-BF16 | `pos6` | 22 | running |
 | Nemotron-3-Nano-4B-BF16 | `affpos6` | 23 | last shard running |
-| Ministral-3-14B-Reasoning-2512 | `growth6` | 0 | submitted 2026-08-16, priority 1 |
-| Ministral-3-14B-Reasoning-2512 | `resil6` | 0 | submitted 2026-08-16, priority 1 |
-| Ministral-3-14B-Reasoning-2512 | `appr6` | 0 | submitted 2026-08-16, priority 1 |
-| Qwen3.5-9B | `growth6` | 0 | submitted 2026-08-16, priority 2 (`--nice=2000`) |
-| Qwen3.5-9B | `resil6` | 0 | submitted 2026-08-16, priority 2 (`--nice=2000`) |
-| Qwen3.5-9B | `appr6` | 0 | submitted 2026-08-16, priority 2 (`--nice=2000`) |
-| Ministral-3-14B-Reasoning-2512 | `affgrowth6` | 0 | submitted 2026-08-16, priority 3 (`--nice=4000`) |
-| Ministral-3-14B-Reasoning-2512 | `affresil6` | 0 | submitted 2026-08-16, priority 3 (`--nice=4000`) |
-| Ministral-3-14B-Reasoning-2512 | `affappr6` | 0 | submitted 2026-08-16, priority 3 (`--nice=4000`) |
+| Ministral-3-14B-Reasoning-2512 | `growth6` | 0 | configs generated; submission pending — see Mindset jobs table; priority 1 |
+| Ministral-3-14B-Reasoning-2512 | `resil6` | 0 | configs generated; submission pending — see Mindset jobs table; priority 1 |
+| Ministral-3-14B-Reasoning-2512 | `appr6` | 0 | configs generated; submission pending — see Mindset jobs table; priority 1 |
+| Qwen3.5-9B | `growth6` | 0 | configs generated; submission pending — see Mindset jobs table; priority 2 (`--nice=2000`) |
+| Qwen3.5-9B | `resil6` | 0 | configs generated; submission pending — see Mindset jobs table; priority 2 (`--nice=2000`) |
+| Qwen3.5-9B | `appr6` | 0 | configs generated; submission pending — see Mindset jobs table; priority 2 (`--nice=2000`) |
+| Ministral-3-14B-Reasoning-2512 | `affgrowth6` | 0 | configs generated; submission pending — see Mindset jobs table; priority 3 (`--nice=4000`) |
+| Ministral-3-14B-Reasoning-2512 | `affresil6` | 0 | configs generated; submission pending — see Mindset jobs table; priority 3 (`--nice=4000`) |
+| Ministral-3-14B-Reasoning-2512 | `affappr6` | 0 | configs generated; submission pending — see Mindset jobs table; priority 3 (`--nice=4000`) |
 
 gemma-3-12b-it has no `pos6`/`affpos6` cell: it is the flattest of the measured
 models, and the 2x2s went to the models with a clear conflicting-split signal
@@ -265,10 +271,12 @@ Each JSONL row is one rollout:
   On `original`, true means the model solved the problem. Never pool the two.
 - `mindset`, `mindset_version` — which mindset blocks the turn-1 instruction
   carried, as a list in prompt order (growth, resilience, appraisal), and the
-  version of the block text (2). `[]` on every cell before the mindset arms.
+  version of the block text (2). Records written before the mindset merge have
+  no `mindset` key; newly written non-mindset records carry `[]` and
+  `mindset_version: 2`. Records predating the keys count as no mindset, version
+  0 in the resume guard.
   **A mindset record is comparable only with its base cell** (`d6` or `aff6`);
-  resume enforces the same rule. Records predating the keys count as no mindset,
-  version 0.
+  resume enforces the same rule.
 - `turn_completion` — each turn's completion text, one string per turn. What the
   model wrote, kept so the per-token arrays below can be re-tokenised offline.
 
@@ -285,6 +293,11 @@ per turn and per capture layer, `t{turn}_proj_L{n}` (P × 14, float16 — every 
 row's projection onto the 14 directions), `t{turn}_norm_L{n}` (P, float32) and
 `t{turn}_kind_L{n}` (P, int8; 1 = the prefill row that produced the first
 generated token, 0 = a decode row). Cosine at row *i* is `proj[i] / norm[i]`.
+That is 33 bytes per token per layer (28 proj + 4 norm + 1 kind), so ~165 bytes
+per token at the five capture layers; measured against Ministral `d6` token
+counts (mean 10.7k generated tokens per rollout) it is ~1.75 MB per rollout npz
+and ~42 MB per cell of 24, uncompressed — not the ~0.8 MB / ~20 MB estimated in
+the design spec, which assumed a much lower per-rollout token count.
 Older records have only the boundary residuals
 (`t{turn}_res_{start|end}_L{probe}`) — the hook always computed the per-token
 arrays, but `summarise_hook_results` reduced them to `turn_stat` and dropped

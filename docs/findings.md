@@ -265,8 +265,10 @@ These bear on the numbers above and belong with any presentation of them.
 ## What would sharpen this
 
 - Per-token maxima rather than boundary tokens. The signal is concentrated near
-  the start of a turn and we currently sample two positions out of hundreds; the
-  per-token projections are already stored at every capture layer.
+  the start of a turn and we currently sample two positions out of hundreds;
+  per-token projections are stored at every capture layer for records written
+  after the 2026-08-16 mindset merge, but the analysed cells have only the
+  boundary residuals (see runs.md, Record fields).
 - A held-out context where the model discusses nothing emotional, to separate
   represented affect from verbalised affect.
 - A benchmark split whose available hack is the one the literature reports, so the

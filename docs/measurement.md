@@ -211,7 +211,9 @@ every arm).
 
 That reminder path is a load-bearing external dependency. The strip raises if the
 section is absent from `instruction_prompt`, so a renamed or reformatted key
-fails at startup — but if a future ImpossibleBench built the reminder from
+fails on the first eval batch, before any generation (the strip runs inside
+`build_task`); unknown mindset names and resume mismatches fail at startup — but
+if a future ImpossibleBench built the reminder from
 somewhere else, the strip would still "succeed" and the arm would silently become
 a six-times arm wearing a once-only label. **On the first run of any new mindset
 cell, spot-check turn 2's user message in one transcript**
