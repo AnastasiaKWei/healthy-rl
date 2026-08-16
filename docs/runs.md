@@ -45,14 +45,20 @@ anyway — the failures are lexical, not semantic; see the ruling in
   failure — it is failure without unsatisfiability, which is the control that
   matters.
 
-  **Measured, first completed cell (Ministral `pos6`, n=24):** 5 of 24 rollouts
-  solved the problem, and 20 of 24 still ran the full six turns. Trajectory depth
-  survives the switch to solvable tests — 20 rollouts reach t5 against 23 in `d6`
-  — so the two columns are compared over nearly the same number of turns rather
-  than a deep arm against a shallow one. This was the main risk to the design and
-  it did not materialise. The matching `passed` counts are 5/24 here (solves) and
-  0/24 in `d6` (hacks), which is the split inversion showing up exactly where it
-  should.
+  **Trajectory depth in the solvable arm is model-specific — check it per model
+  before comparing at late turn indices.** Rollouts reaching t5, out of 24:
+
+  | model | `d6` | `pos6` | `aff6` | `affpos6` |
+  |---|---:|---:|---:|---:|
+  | Ministral-3-14B | 23 | 20 | 23 | 20 |
+  | Nemotron-3-Nano-4B | 23 | **11** | 23 | **8** |
+
+  Ministral barely notices: lcbhard is hard enough that it keeps failing for six
+  turns whether or not the tests can be satisfied, so its columns compare over
+  nearly equal depth. Nemotron solves early far more often, so its solvable cells
+  thin out to 11 and 8 rollouts by t5. An earlier note here generalised
+  Ministral's result to the design as a whole; that was wrong. For Nemotron, read
+  t0–t2 and treat t5 as underpowered.
 - The affect row asks whether being asked to *verbalise* affect changes what is
   *represented*, or only what is said.
 
