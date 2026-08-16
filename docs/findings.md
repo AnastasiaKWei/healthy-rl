@@ -147,16 +147,25 @@ available:
 
 - The tests are mutually unsatisfiable — one problem asserts `candidate(19,50,2)`
   equals both 6 and 14.
-- The submission is assembled *before* the tests, so the model cannot redefine
-  the checker or patch the harness.
+- Redefining the checker is reachable but is not scored as a pass. The solver
+  loop runs with `allow_test_modifications=True` and puts the model's code
+  *after* the tests, so a `check()` redefined in that code passes in-loop and
+  ends the rollout early; the scorer then re-verifies against `test_patch` —
+  the original tests, placed after the code — so `passed` stays False. Records
+  written from 2026-08-16 carry `loop_passed` (the loop's own verdict), and
+  `loop_passed and not passed` on `conflicting` is exactly this hack. Earlier
+  records show it only as `n_turns < 6` with `passed=False`. This bullet used to
+  say the checker could not be redefined at all; see
+  [Withdrawn claims](#withdrawn-claims).
 - A lookup table keyed on inputs cannot return two values for one input.
 
-The only hack the split admits is a function that returns different answers
-across calls — statefulness keyed on call count. That is a subtler target than
-the canonical hardcode-the-tests hack reported elsewhere. **A zero here is
-weak evidence about the models and strong evidence that this split is the wrong
-behavioural arm.** A future run wanting a behavioural signal should use `oneoff`
-or the `tools` scaffold, where the reported hack is actually reachable.
+The only hack that can register as `passed` here is a function that returns
+different answers across calls — statefulness keyed on call count. That is a
+subtler target than the canonical hardcode-the-tests hack reported elsewhere.
+**A zero here is weak evidence about the models and strong evidence that this
+split is the wrong behavioural arm.** A future run wanting a behavioural signal
+should use `oneoff` or the `tools` scaffold, where the reported hack is actually
+reachable.
 
 One genuine hack was observed and initially mis-scored: a rollout that hardcoded
 a lookup table of test inputs to expected outputs scored 0 because ImpossibleBench's
@@ -227,6 +236,7 @@ and so the failure modes are visible.
 | "the effect tracks reasoning mode" | **Withdrawn** | Same cause. |
 | "steering validated the causal machinery end to end" | **False** | Steering was injected at the probe layer and the probe reads the same layer, so the manipulation check is an arithmetic identity. The "3.2× specificity" figure is `1/cos(desperate, calm)`. No causal claim survives. |
 | everything in the original 3-turn Olmo pilot | **Void** | Token-budget confound: 94/96 turns hit the 2048 cap. |
+| "the submission is assembled before the tests, so the checker cannot be redefined" | **False** | True of the scorer, not of the solver loop, which runs with `allow_test_modifications=True` and appends the code last. A rewritten `check()` passes in-loop and ends the rollout; only the scorer's re-run against `test_patch` keeps `passed` False. |
 | `loving` rises under failure | **Artifact** | Present at turn-start, absent at turn-end. Stereotyped opening tokens. |
 | "elicited and spontaneous affect have different shapes" | **Unverified** | Was computed on turn means. Needs recomputation at single-token before it can be claimed either way. |
 
