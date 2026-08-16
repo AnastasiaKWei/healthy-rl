@@ -6,6 +6,7 @@
 #
 #   ONLY_MODEL=gemma-3-12b-it scripts/mindset_cells.sh --submit   # just that model
 #   ONLY_BASE=spaff6 scripts/mindset_cells.sh --submit             # just that base cell
+#   ONLY_TEXT=fixed scripts/mindset_cells.sh --submit              # just the …6b re-runs
 #
 # Cells (docs/superpowers/specs/2026-08-15-mindset-vectors-design.md §2):
 #   priority 1  Ministral d6-base   growth6 resil6 appr6            nice 0
@@ -14,6 +15,12 @@
 #   priority 4  gemma sp6-base      spgrowth6 spresil6 spappr6      nice 0
 #   priority 5  gemma aff6-base     affgrowth6 affresil6 affappr6   nice 2000
 #   priority 6  gemma spaff6-base   spaffgrowth6 spaffresil6 spaffappr6  nice 0
+# and each of those 18 again under its own name with a `b` suffix (growth6b,
+# affgrowth6b, spaffgrowth6b, ...): the same cell re-run with the mindset prompt
+# whose trigger sentence Anastasia fixed on 2026-08-16 (7d6fd07). The 6th field of
+# a row says which text it runs -- `orig` for the 18 run overnight with the text as
+# of 9d6615a, `fixed` for the 18 re-runs. MINDSET_VERSION stays 2; each record
+# carries a mindset_hash, so the two texts cannot be resumed into one another.
 # Each shard: primary (4h) -> -cont -> -cont2, chained afterany. Resume appends;
 # an idle continuation exits after model load. Priority is honoured because the
 # cluster runs PriorityType=priority/multifactor.
@@ -33,10 +40,12 @@
 # SHARD_DIR overrides where configs are written (tests use a temp dir).
 #
 # ONLY_MODEL restricts the run to one model (exact name), ONLY_BASE to one base
-# version (exact name). They filter BOTH phases, so the configs of the other rows
-# are neither rewritten nor submitted -- which is what makes it safe to re-run this
-# script to add a cell after earlier ones are already queued. Unset means every
-# row, the original behaviour; setting both keeps only the rows matching BOTH.
+# version (exact name), ONLY_TEXT to one prompt text (`orig` or `fixed`). They filter
+# BOTH phases, so the configs of the other rows are neither rewritten nor submitted
+# -- which is what makes it safe to re-run this script to add a cell after earlier
+# ones are already queued. Unset means every row, the original behaviour; setting
+# more than one keeps only the rows matching ALL of them. A filter that matches no
+# row is an error, raised in phase 1, before anything is submitted.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -46,26 +55,47 @@ case "${1:-}" in --dry-run|"") MODE=dry ;; --submit) MODE=submit ;; *) echo "usa
 SHARD_DIR="${SHARD_DIR:-configs/shards}"
 mkdir -p "$SHARD_DIR"
 
-# model|version|base_version|mindset|nice
+# model|version|base_version|mindset|nice|text
 CELLS=(
-  "Ministral-3-14B-Reasoning-2512|growth6|d6|growth|0"
-  "Ministral-3-14B-Reasoning-2512|resil6|d6|resilience|0"
-  "Ministral-3-14B-Reasoning-2512|appr6|d6|appraisal|0"
-  "Qwen3.5-9B|growth6|d6|growth|2000"
-  "Qwen3.5-9B|resil6|d6|resilience|2000"
-  "Qwen3.5-9B|appr6|d6|appraisal|2000"
-  "Ministral-3-14B-Reasoning-2512|affgrowth6|aff6|growth|4000"
-  "Ministral-3-14B-Reasoning-2512|affresil6|aff6|resilience|4000"
-  "Ministral-3-14B-Reasoning-2512|affappr6|aff6|appraisal|4000"
-  "gemma-3-12b-it|spgrowth6|sp6|growth|0"
-  "gemma-3-12b-it|spresil6|sp6|resilience|0"
-  "gemma-3-12b-it|spappr6|sp6|appraisal|0"
-  "gemma-3-12b-it|affgrowth6|aff6|growth|2000"
-  "gemma-3-12b-it|affresil6|aff6|resilience|2000"
-  "gemma-3-12b-it|affappr6|aff6|appraisal|2000"
-  "gemma-3-12b-it|spaffgrowth6|spaff6|growth|0"
-  "gemma-3-12b-it|spaffresil6|spaff6|resilience|0"
-  "gemma-3-12b-it|spaffappr6|spaff6|appraisal|0"
+  "Ministral-3-14B-Reasoning-2512|growth6|d6|growth|0|orig"
+  "Ministral-3-14B-Reasoning-2512|resil6|d6|resilience|0|orig"
+  "Ministral-3-14B-Reasoning-2512|appr6|d6|appraisal|0|orig"
+  "Qwen3.5-9B|growth6|d6|growth|2000|orig"
+  "Qwen3.5-9B|resil6|d6|resilience|2000|orig"
+  "Qwen3.5-9B|appr6|d6|appraisal|2000|orig"
+  "Ministral-3-14B-Reasoning-2512|affgrowth6|aff6|growth|4000|orig"
+  "Ministral-3-14B-Reasoning-2512|affresil6|aff6|resilience|4000|orig"
+  "Ministral-3-14B-Reasoning-2512|affappr6|aff6|appraisal|4000|orig"
+  "gemma-3-12b-it|spgrowth6|sp6|growth|0|orig"
+  "gemma-3-12b-it|spresil6|sp6|resilience|0|orig"
+  "gemma-3-12b-it|spappr6|sp6|appraisal|0|orig"
+  "gemma-3-12b-it|affgrowth6|aff6|growth|2000|orig"
+  "gemma-3-12b-it|affresil6|aff6|resilience|2000|orig"
+  "gemma-3-12b-it|affappr6|aff6|appraisal|2000|orig"
+  "gemma-3-12b-it|spaffgrowth6|spaff6|growth|0|orig"
+  "gemma-3-12b-it|spaffresil6|spaff6|resilience|0|orig"
+  "gemma-3-12b-it|spaffappr6|spaff6|appraisal|0|orig"
+  # The same 18 cells with the fixed trigger sentence. Same model, base, mindset
+  # and nice as the row each one mirrors -- the prompt text is the only difference,
+  # which is what makes the pair a comparison rather than two unrelated runs.
+  "Ministral-3-14B-Reasoning-2512|growth6b|d6|growth|0|fixed"
+  "Ministral-3-14B-Reasoning-2512|resil6b|d6|resilience|0|fixed"
+  "Ministral-3-14B-Reasoning-2512|appr6b|d6|appraisal|0|fixed"
+  "Qwen3.5-9B|growth6b|d6|growth|2000|fixed"
+  "Qwen3.5-9B|resil6b|d6|resilience|2000|fixed"
+  "Qwen3.5-9B|appr6b|d6|appraisal|2000|fixed"
+  "Ministral-3-14B-Reasoning-2512|affgrowth6b|aff6|growth|4000|fixed"
+  "Ministral-3-14B-Reasoning-2512|affresil6b|aff6|resilience|4000|fixed"
+  "Ministral-3-14B-Reasoning-2512|affappr6b|aff6|appraisal|4000|fixed"
+  "gemma-3-12b-it|spgrowth6b|sp6|growth|0|fixed"
+  "gemma-3-12b-it|spresil6b|sp6|resilience|0|fixed"
+  "gemma-3-12b-it|spappr6b|sp6|appraisal|0|fixed"
+  "gemma-3-12b-it|affgrowth6b|aff6|growth|2000|fixed"
+  "gemma-3-12b-it|affresil6b|aff6|resilience|2000|fixed"
+  "gemma-3-12b-it|affappr6b|aff6|appraisal|2000|fixed"
+  "gemma-3-12b-it|spaffgrowth6b|spaff6|growth|0|fixed"
+  "gemma-3-12b-it|spaffresil6b|spaff6|resilience|0|fixed"
+  "gemma-3-12b-it|spaffappr6b|spaff6|appraisal|0|fixed"
 )
 
 # Empty means every model / every base. A row has to match every filter that is
@@ -73,17 +103,19 @@ CELLS=(
 # sbatch script and nothing else.
 ONLY_MODEL="${ONLY_MODEL:-}"
 ONLY_BASE="${ONLY_BASE:-}"
-in_scope() {  # model base
-  [[ -z $ONLY_MODEL || $1 == "$ONLY_MODEL" ]] && [[ -z $ONLY_BASE || $2 == "$ONLY_BASE" ]]
+ONLY_TEXT="${ONLY_TEXT:-}"
+in_scope() {  # model base text
+  [[ -z $ONLY_MODEL || $1 == "$ONLY_MODEL" ]] && [[ -z $ONLY_BASE || $2 == "$ONLY_BASE" ]] \
+    && [[ -z $ONLY_TEXT || $3 == "$ONLY_TEXT" ]]
 }
-echo "models in scope: ${ONLY_MODEL:-all (ONLY_MODEL unset)}; bases in scope: ${ONLY_BASE:-all (ONLY_BASE unset)}" >&2
+echo "models in scope: ${ONLY_MODEL:-all (ONLY_MODEL unset)}; bases in scope: ${ONLY_BASE:-all (ONLY_BASE unset)}; texts in scope: ${ONLY_TEXT:-all (ONLY_TEXT unset)}" >&2
 
 # Only ever called from phase 1, i.e. before the first sbatch -- which is what
 # makes "nothing submitted" true rather than hopeful.
 die() { echo "$*" >&2; echo "nothing submitted" >&2; exit 1; }
 
-write_config() {  # model version base mindset shard_index
-  local model=$1 version=$2 base=$3 mindset=$4 i=$5
+write_config() {  # model version base mindset text shard_index
+  local model=$1 version=$2 base=$3 mindset=$4 text=$5 i=$6
   local src="configs/shards/rollouts-${model}-${base}-s${i}of3.yaml"
   local dst="$SHARD_DIR/rollouts-${model}-${version}-s${i}of3.yaml"
   [[ -f "$src" ]] || die "missing base config $src"
@@ -91,7 +123,50 @@ write_config() {  # model version base mindset shard_index
   # max_tokens -> 24576; out_dir -> the new cell; then append the mindset block.
   sed -e 's/^max_tokens: .*/max_tokens: 24576/' \
       -e "s#^out_dir: .*#out_dir: /out/rollouts/${model}/${version}#" "$src" > "$tmp"
-  cat >> "$tmp" <<EOF
+  if [[ $text == fixed ]]; then
+    # The version this cell re-runs, and the cell whose per-token projections these
+    # records are read against. The `r` re-runs exist for d6/aff6/sp6; spaff6 was
+    # built after per-token arrays were switched on and already has them.
+    local orig="${version%b}" pertok_block
+    case "$base" in
+      spaff6) pertok_block="# The per-token comparison cell is ${model}/spaff6 itself: that
+# cell already carries the per-token projection arrays, so it needs no re-run." ;;
+      *)      pertok_block="# The per-token comparison cell is ${model}/${base}r." ;;
+    esac
+    if [[ $model == Qwen3.5-9B && $base == d6 ]]; then
+      pertok_block="# The per-token comparison cell is ${model}/${base}r, which does not exist yet --
+# no per-token re-run of the Qwen base has been built."
+    fi
+    cat >> "$tmp" <<EOF
+
+# --- MINDSET ARM: ${mindset} (prompt v2, trigger phrasing fixed 2026-08-16, astwei 7d6fd07) ---
+# One of Anastasia's three mindset blocks (experiments/step0_elicitation.py,
+# copied verbatim into healthy_rl.rollouts.MINDSET), inserted into the turn-1
+# instruction between the benchmark text and the affect request, and STRIPPED
+# from the reminder the scaffold re-sends after each failure -- so the model sees
+# it once per rollout.
+#
+# What changed: the two-part procedure is now triggered by a STANDING RULE,
+# "Your first attempt is just the code. Open every attempt after that with
+# these two lines", instead of by an event, "whenever a test fails". Those are
+# equivalent only while the block repeats every turn. Here it is sent on turn 1 and
+# only turn 1 -- before any test has failed, and gone by the time one does -- which
+# made the event-conditional wording inert: a smoke run measured 0/12 compliance
+# with the labelled prefixes on attempts 2+, and 12/12 after the rewrite.
+# MINDSET_VERSION stays 2; every record carries a mindset_hash, so this text and the
+# old one cannot be resumed into each other.
+#
+# This cell re-runs ${model}/${orig} with the fixed
+# text; the pair is the comparison, neither half alone. Everything except this
+# key and max_tokens (24576, the 2x2 value) is byte-identical to
+# ${model}/${base}'s shard config, which is the arm-off cell.
+${pertok_block}
+# It is a demand characteristic pointing the opposite way from the affect prompt;
+# read the probes, not the words.
+mindset: [${mindset}]
+EOF
+  else
+    cat >> "$tmp" <<EOF
 
 # --- MINDSET ARM: ${mindset} (prompt v2) -------------------------------------
 # One of Anastasia's three mindset blocks (experiments/step0_elicitation.py,
@@ -104,6 +179,7 @@ write_config() {  # model version base mindset shard_index
 # from the affect prompt; read the probes, not the words.
 mindset: [${mindset}]
 EOF
+  fi
   if [[ -f "$dst" ]] && ! cmp -s "$tmp" "$dst"; then
     rm -f "$tmp"
     die "refusing to overwrite $dst: it exists with different content"
@@ -147,21 +223,21 @@ done
 
 selected=0
 for row in "${CELLS[@]}"; do
-  IFS='|' read -r model version base mindset nice <<< "$row"
-  in_scope "$model" "$base" || continue
+  IFS='|' read -r model version base mindset nice text <<< "$row"
+  in_scope "$model" "$base" "$text" || continue
   selected=$((selected + 1))
   for i in 0 1 2; do
     src="configs/shards/rollouts-${model}-${base}-s${i}of3.yaml"
     [[ -f "$src" ]] || die "missing base config $src"
   done
 done
-(( selected > 0 )) || die "ONLY_MODEL='$ONLY_MODEL' ONLY_BASE='$ONLY_BASE' matches no row in CELLS"
+(( selected > 0 )) || die "ONLY_MODEL='$ONLY_MODEL' ONLY_BASE='$ONLY_BASE' ONLY_TEXT='$ONLY_TEXT' matches no row in CELLS"
 
 for row in "${CELLS[@]}"; do
-  IFS='|' read -r model version base mindset nice <<< "$row"
-  in_scope "$model" "$base" || continue
+  IFS='|' read -r model version base mindset nice text <<< "$row"
+  in_scope "$model" "$base" "$text" || continue
   for i in 0 1 2; do
-    write_config "$model" "$version" "$base" "$mindset" "$i"
+    write_config "$model" "$version" "$base" "$mindset" "$text" "$i"
   done
 done
 
@@ -176,8 +252,8 @@ if [[ $MODE == submit ]]; then
 fi
 
 for row in "${CELLS[@]}"; do
-  IFS='|' read -r model version base mindset nice <<< "$row"
-  in_scope "$model" "$base" || continue
+  IFS='|' read -r model version base mindset nice text <<< "$row"
+  in_scope "$model" "$base" "$text" || continue
   for i in 0 1 2; do
     # The sbatch line always names the real location; SHARD_DIR only redirects
     # where this run WROTE the config (so a test can generate into a temp dir).

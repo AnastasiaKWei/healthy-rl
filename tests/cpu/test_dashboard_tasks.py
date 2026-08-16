@@ -305,11 +305,13 @@ def test_harness_error_record_carries_the_feedback_the_model_was_actually_sent(t
 
 def test_condition_names_the_mindset_arm_and_the_prompt_version(tmp_path):
     """A mindset cell is only readable against its base cell if the record says which it is."""
-    from healthy_rl.rollouts import MINDSET_VERSION
+    from healthy_rl.rollouts import MINDSET_VERSION, mindset_hash
     run, eng, sb, store = _setup(tmp_path, attempts=1, auto_continue=True, mindset=("growth",))
     run.run()
     cond = store.records()[0]["condition"]
     assert cond["mindset"] == ["growth"] and cond["mindset_version"] == MINDSET_VERSION
+    # The version number does not pin the text; the hash does.
+    assert cond["mindset_hash"] == mindset_hash(["growth"])
 
 
 def test_harness_error_feedback_uses_the_reminder_not_the_turn_one_instruction(tmp_path):

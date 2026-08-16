@@ -18,7 +18,13 @@ from typing import Any
 
 from healthy_rl.dashboard.generation import Generation
 from healthy_rl.dashboard.sandbox_cli import feedback_message
-from healthy_rl.rollouts import MINDSET_VERSION, SCRATCHPAD_SYSTEM_PROMPT, Vectors, robust_find_code
+from healthy_rl.rollouts import (
+    MINDSET_VERSION,
+    SCRATCHPAD_SYSTEM_PROMPT,
+    Vectors,
+    mindset_hash,
+    robust_find_code,
+)
 
 HEARTBEAT_S = 1.0
 
@@ -137,6 +143,9 @@ class TaskRun:
         # both which blocks it carried and which version of their text.
         c["mindset"] = list(self.cfg.mindset)
         c["mindset_version"] = MINDSET_VERSION
+        # The version number does not pin the text (the v2 blocks were edited in
+        # place without a bump), so the record carries the hash of the section too.
+        c["mindset_hash"] = mindset_hash(self.cfg.mindset)
         return c
 
     def run(self) -> None:

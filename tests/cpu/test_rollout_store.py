@@ -6,7 +6,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from rollout_cell import EMOTIONS, FakeEvalSamples, WhitespaceTokenizer, make_cell
+from rollout_cell import EMOTIONS, FakeEvalSamples, GappedTokenizer, WhitespaceTokenizer, make_cell
+from healthy_rl.dashboard.generation import split_reasoning
 from healthy_rl.dashboard.rollout_store import RolloutStore, align_tokens, discover_cells, records_from_row, tokenise
 
 ROWS = [
@@ -66,6 +67,8 @@ def test_records_from_row_defaults_for_old_rows(tmp_path):
         row.pop(k)
     r = records_from_row(row, model="m1", version="d6", max_tokens=4, created_at="x")[0]
     assert r["bench_split"] == "conflicting" and r["mindset"] == [] and r["mindset_version"] == 0
+    # Rows predating the hash guard get "", the same value a base-arm row carries.
+    assert r["mindset_hash"] == ""
 
 
 def test_store_records_conversations_session(tmp_path):
@@ -123,10 +126,16 @@ def test_duplicate_row_is_collapsed_and_counted(tmp_path):
     f = cell / "rollouts.shard0of2.jsonl"
     row = json.loads(f.read_text().splitlines()[0])       # lcbhard_0/s0 again: a re-run after a crash
     row["passed"] = True                                  # the later row is the one that should win
+    stale = st.record("fake-model/appr6/lcbhard_0/s0/t0")  # tokenised from the row about to be replaced
+    untouched = st.record("fake-model/appr6/lcbhard_0/s1/t0")  # same shard file, a rollout nobody rewrote
+    assert stale["passed"] is False
     with f.open("a") as fh:
         fh.write(json.dumps(row) + "\n")
     import os, time
     os.utime(f, (time.time() + 5, time.time() + 5))
+    fresh = st.record("fake-model/appr6/lcbhard_0/s0/t0")
+    assert fresh is not stale and fresh["passed"] is True and fresh["tokenised"] is True
+    assert st.record("fake-model/appr6/lcbhard_0/s1/t0") is untouched   # the file's new mtime alone is not a change
     recs = st.records()
     assert len(recs) == 8 and len({r["record_id"] for r in recs}) == 8
     assert next(r for r in recs if r["record_id"] == "fake-model/appr6/lcbhard_0/s0/t0")["passed"] is True
@@ -143,6 +152,40 @@ def test_tokenise_tiles_text_and_keeps_true_starts():
     assert toks == ["ab", "  cd", " e"] and "".join(toks) == "ab  cd e"
     assert starts == [0, 2, 6]
     assert tokenise("", WhitespaceTokenizer()) == ([], [])
+
+
+class _SpecialSpanTokenizer:
+    """Fast tokenizer that emits a zero-width span, the way HF does for a special token."""
+    is_fast = True
+
+    def __call__(self, text, add_special_tokens=False, return_offsets_mapping=False):
+        spans = [(0, 2), (0, 0), (2, 6)]
+        out = {"input_ids": list(range(len(spans)))}
+        if return_offsets_mapping:
+            out["offset_mapping"] = spans
+        return out
+
+
+def test_tokenise_keeps_span_starts_when_offsets_have_gaps():
+    # the gap goes into the token's text, but the start stays the span's own start
+    assert tokenise("ab  cd", GappedTokenizer()) == (["ab", "  cd"], [0, 4])
+    toks, starts = tokenise("ab ", GappedTokenizer())          # trailing gap: no span covers it
+    assert "".join(toks) == "ab " and starts == [0]
+    # a whitespace-only completion has no spans at all
+    assert tokenise("  ", GappedTokenizer()) == (["  "], [0])
+    # a zero-width span keeps its slot in the strip instead of jumping back to 0
+    toks, starts = tokenise("ab  cd", _SpecialSpanTokenizer())
+    assert toks == ["ab", "", "  cd"] and starts == [0, 2, 2] and "".join(toks) == "ab  cd"
+
+
+def test_tokenise_start_offsets_decide_the_think_boundary():
+    text = "[THINK]x[/THINK]  z"
+    _, _, think_end = split_reasoning(text)
+    toks, starts = tokenise(text, GappedTokenizer())
+    assert toks == ["[THINK]x[/THINK]", "  z"] and starts == [0, 18]   # cumulative offsets would say 16
+    assert think_end == 16
+    _, kinds, _, _ = align_tokens(toks, starts, think_end, None)
+    assert kinds == ["think", "answer"]
 
 
 def test_align_tokens_eos_rule():
@@ -178,6 +221,7 @@ def test_record_is_tokenised_and_cached(tmp_path):
     # old cell: tokens exist (text is there) but there are no arrays to align against
     o = st.record("fake-model/d6/lcbhard_0/s0/t0")
     assert o["tokens"] == ["a", " b", " c"] and o["has_token_arrays"] is False and o["misaligned"] is False and o["n_decode"] is None
+    assert z["error"] is None and o["error"] is None       # neither is a problem, just no arrays
 
 
 def test_record_misaligned_when_counts_disagree(tmp_path):
@@ -189,6 +233,21 @@ def test_record_misaligned_when_counts_disagree(tmp_path):
     assert r["misaligned"] is True and "3 tokens" in r["error"] and "7 decode rows" in r["error"]
     assert st.session["cells"][0]["n_tokenised"] == 1 and st.session["cells"][0]["n_misaligned"] == 1
     assert st.conversations()[0]["n_misaligned"] == 1
+
+
+def test_record_reports_npz_problems(tmp_path):
+    st = _store(tmp_path)
+    res = tmp_path / "rollouts" / "fake-model" / "appr6" / "residuals"
+    (res / "lcbhard_0_s0.npz").unlink()
+    r = st.record("fake-model/appr6/lcbhard_0/s0/t1")
+    assert r["misaligned"] is True and "npz missing" in r["error"] and str(res / "lcbhard_0_s0.npz") in r["error"]
+    assert r["has_token_arrays"] is False and r["n_decode"] is None
+    assert r["tokens"] == ["[THINK]x", " y[/THINK]", " z"]        # the text is still fine
+    # half a pair is a problem too -- it is not the honest array-less turn
+    np.savez(res / "lcbhard_0_s1.npz", **{"t1_kind_L20": np.zeros(5, np.int8)})
+    h = st.record("fake-model/appr6/lcbhard_0/s1/t1")
+    assert h["misaligned"] is True and "without" in h["error"] and "t1_proj_L20" in h["error"]
+    assert h["has_token_arrays"] is False and h["n_decode"] is None
 
 
 def test_record_without_tokenizer(tmp_path):
@@ -203,3 +262,82 @@ def test_record_without_tokenizer(tmp_path):
 def test_record_unknown_id(tmp_path):
     with pytest.raises(KeyError):
         _store(tmp_path).record("nope")
+
+
+def test_arrays_for_token_cell(tmp_path):
+    st = _store(tmp_path)
+    r = st.record("fake-model/appr6/lcbhard_0/s0/t1")
+    a = st.arrays(r["record_id"])
+    assert a["proj"].shape == (4, 2, 3) and a["proj"].dtype == np.float32 and a["norm"].shape == (4, 2)
+    assert a["proj_prefill"].shape == (2, 3) and a["norm_prefill"].shape == (2,)
+    assert a["res_start_L20"].shape == (8,) and "proj_end" not in a
+    z = np.load(tmp_path / "rollouts" / "fake-model" / "appr6" / "residuals" / "lcbhard_0_s0.npz")
+    assert np.allclose(a["proj"][:, 1, :], z["t1_proj_L20"][1:].astype(np.float32))
+    assert np.allclose(a["proj_prefill"][1], z["t1_proj_L20"][0].astype(np.float32))
+    # readouts flow through stats unchanged
+    from healthy_rl.dashboard import stats
+    v = stats.turn_readout(proj=a["proj"], norm=a["norm"], proj_prefill=a["proj_prefill"], norm_prefill=a["norm_prefill"],
+                           token_kind=r["token_kind"], layer_index=1, readout="think_end")
+    assert v is not None and v.shape == (3,)
+
+
+def test_arrays_for_old_cell_project_residuals(tmp_path):
+    from healthy_rl.rollouts import Vectors
+    E, L, d = 3, 2, 8
+    dirs = np.zeros((E, L, d), np.float32); dirs[:, 1, :3] = np.eye(3)     # probe layer 20 = index 1
+    vec = Vectors(directions=dirs, emotions=list(EMOTIONS), capture_layers=[10, 20], probe_layer=20,
+                  mean_residual_norm={10: 1.0, 20: 1.0}, path=Path("fake"))
+    make_cell(tmp_path / "rollouts", "fake-model", "d6", rows=ROWS[:1], token_arrays=False)
+    st = RolloutStore.open([tmp_path / "rollouts"], tokenizer_loader=lambda m: WhitespaceTokenizer(),
+                           vectors_loader=lambda m: vec, eval_loader=FakeEvalSamples({}))
+    r = st.record("fake-model/d6/lcbhard_0/s0/t0")
+    a = st.arrays(r["record_id"])
+    assert a["proj"].shape == (0, 2, 3) and a["norm"].shape == (0, 2)
+    z = np.load(tmp_path / "rollouts" / "fake-model" / "d6" / "residuals" / "lcbhard_0_s0.npz")
+    h = z["t0_res_start_L20"].astype(np.float64)
+    assert np.allclose(a["proj_prefill"][1], h[:3]) and np.isclose(a["norm_prefill"][1], np.linalg.norm(h))
+    assert np.isnan(a["proj_prefill"][0]).all() and np.isnan(a["norm_prefill"][0])
+    he = z["t0_res_end_L20"].astype(np.float64)
+    assert np.allclose(a["proj_end"][1], he[:3]) and np.isclose(a["norm_end"][1], np.linalg.norm(he))
+    from healthy_rl.dashboard import stats
+    s = stats.turn_readout(proj=a["proj"], norm=a["norm"], proj_prefill=a["proj_prefill"], norm_prefill=a["norm_prefill"],
+                           token_kind=[], layer_index=1, readout="start")
+    e = stats.turn_readout(proj=a["proj"], norm=a["norm"], proj_prefill=a["proj_prefill"], norm_prefill=a["norm_prefill"],
+                           token_kind=[], layer_index=1, readout="end", proj_end=a["proj_end"], norm_end=a["norm_end"])
+    assert np.allclose(s, h[:3] / np.linalg.norm(h)) and np.allclose(e, he[:3] / np.linalg.norm(he))
+    assert st.session["models"]["fake-model"]["vectors"] == "ok"
+
+
+def test_arrays_for_old_cell_without_vectors(tmp_path):
+    st = _store(tmp_path)          # vectors_loader -> None
+    r = st.record("fake-model/d6/lcbhard_0/s0/t0")
+    a = st.arrays(r["record_id"])
+    assert a["proj"].shape == (0, 2, 3) and np.isnan(a["proj_prefill"]).all() and np.isnan(a["norm_prefill"]).all()
+    assert "proj_end" not in a
+    assert any("vectors" in w for w in st.record(r["record_id"])["warnings"])
+
+
+def test_arrays_zero_token_turn_and_missing_npz(tmp_path):
+    st = _store(tmp_path)
+    a = st.arrays("fake-model/appr6/lcbhard_1/s0/t0")
+    assert a["proj"].shape == (0, 2, 3) and np.isnan(a["norm_prefill"]).all()
+    import os
+    os.remove(tmp_path / "rollouts" / "fake-model" / "appr6" / "residuals" / "lcbhard_1_s0.npz")
+    # a fresh store over the same cells: re-running _store would re-create the npz just removed
+    st2 = RolloutStore.open([tmp_path / "rollouts"], tokenizer_loader=lambda m: WhitespaceTokenizer(),
+                            vectors_loader=lambda m: None, eval_loader=FakeEvalSamples({}))
+    r = st2.record("fake-model/appr6/lcbhard_1/s0/t1")
+    a = st2.arrays(r["record_id"])
+    assert a["proj"].shape[0] == 0 and st2.record(r["record_id"])["misaligned"] is True and "npz" in st2.record(r["record_id"])["error"]
+
+
+def test_arrays_layer_mismatch_marks_misaligned(tmp_path):
+    cell = make_cell(tmp_path / "rollouts", "fake-model", "appr6", rows=ROWS[:1], capture_layers=(10, 20, 30))
+    f = cell / "rollouts.shard0of2.jsonl"
+    row = json.loads(f.read_text()); row["capture_layers"] = [10, 20]; f.write_text(json.dumps(row) + "\n")   # row lies about its layers
+    st = RolloutStore.open([tmp_path / "rollouts"], tokenizer_loader=lambda m: WhitespaceTokenizer(),
+                           vectors_loader=lambda m: None, eval_loader=FakeEvalSamples({}))
+    a = st.arrays("fake-model/appr6/lcbhard_0/s0/t0")
+    assert a["proj"].shape == (0, 2, 3)      # nothing usable is served under the wrong layer list
+    r = st.record("fake-model/appr6/lcbhard_0/s0/t0")
+    assert r["misaligned"] is True and "L30" in r["error"]

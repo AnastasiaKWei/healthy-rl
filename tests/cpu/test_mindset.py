@@ -26,12 +26,14 @@ import healthy_rl.rollouts as rollouts
 from healthy_rl.rollouts import (
     AFFECT_INSTRUCTION,
     MINDSET,
+    MINDSET_HASH_KEY,
     MINDSET_HEADER,
     MINDSET_KEY,
     MINDSET_VERSION,
     bench_instruction,
     compose_instruction,
     mindset_for,
+    mindset_hash,
     mindset_section,
     reminder_instruction,
     strip_mindset_from_reminders,
@@ -83,6 +85,52 @@ def test_header_and_join_match_step0():
     src = _step0_mindset_section_source()
     assert MINDSET_HEADER == "\n\nHow to approach this:\n\n"
     assert 'return "\\n\\nHow to approach this:\\n\\n" + "\\n\\n".join(chosen) + "\\n\\n"' in src
+
+
+# ---------------------------------------------------------------------------
+# the content hash
+# ---------------------------------------------------------------------------
+#
+# MINDSET_VERSION is not enough to tell two texts apart: the v2 blocks were
+# edited in place on 2026-08-16 (the trigger sentence) without a version bump,
+# which is the exact event these tests exist to make detectable next time.
+
+
+def test_hash_is_twelve_hex_chars_and_deterministic():
+    h = mindset_hash(["growth"])
+    assert len(h) == 12
+    assert all(c in "0123456789abcdef" for c in h)
+    assert h == mindset_hash(["growth"])
+
+
+def test_hash_is_empty_without_mindset():
+    assert mindset_hash(()) == ""
+    assert mindset_hash([]) == ""
+
+
+def test_hash_differs_between_arms():
+    hashes = [mindset_hash([n]) for n in MINDSET]
+    hashes.append(mindset_hash(["growth", "appraisal"]))
+    assert len(set(hashes)) == len(hashes)
+
+
+def test_hash_follows_the_caller_order_of_mindset_section():
+    # mindset_section fixes the order, so asking for the same pair either way
+    # round is the same stimulus and must be the same hash.
+    assert mindset_hash(["appraisal", "growth"]) == mindset_hash(["growth", "appraisal"])
+
+
+def test_hash_changes_when_a_block_text_changes(monkeypatch):
+    before = mindset_hash(["resilience"])
+    edited = dict(MINDSET)
+    edited["resilience"] = MINDSET["resilience"].replace("Resilience", "resilience", 1)
+    assert edited["resilience"] != MINDSET["resilience"]
+    monkeypatch.setattr(rollouts, "MINDSET", edited)
+    assert mindset_hash(["resilience"]) != before
+
+
+def test_hash_key_name():
+    assert MINDSET_HASH_KEY == "mindset_hash"
 
 
 # ---------------------------------------------------------------------------
@@ -369,7 +417,13 @@ def test_resume_refuses_to_mix_mindset_arms(tmp_path):
     check_resume_mindset(plain, (), p)
     with pytest.raises(RuntimeError, match="mindset"):
         check_resume_mindset(plain, ("growth",), p)
-    growth = [{MINDSET_KEY: ["growth"], "mindset_version": MINDSET_VERSION}]
+    growth = [
+        {
+            MINDSET_KEY: ["growth"],
+            "mindset_version": MINDSET_VERSION,
+            MINDSET_HASH_KEY: mindset_hash(["growth"]),
+        }
+    ]
     check_resume_mindset(growth, ("growth",), p)
     with pytest.raises(RuntimeError, match="mindset"):
         check_resume_mindset(growth, ("resilience",), p)
@@ -379,9 +433,51 @@ def test_resume_refuses_to_mix_mindset_arms(tmp_path):
 
 def test_resume_refuses_a_different_prompt_version(tmp_path):
     p = tmp_path / "rollouts.jsonl"
-    old = [{MINDSET_KEY: ["growth"], "mindset_version": 1}]
+    old = [{MINDSET_KEY: ["growth"], "mindset_version": 1, MINDSET_HASH_KEY: mindset_hash(["growth"])}]
     with pytest.raises(RuntimeError, match="version"):
         check_resume_mindset(old, ("growth",), p)
+
+
+def _growth_record(**over) -> dict:
+    rec = {
+        MINDSET_KEY: ["growth"],
+        "mindset_version": MINDSET_VERSION,
+        MINDSET_HASH_KEY: mindset_hash(["growth"]),
+    }
+    rec.update(over)
+    return rec
+
+
+def test_resume_accepts_a_matching_hash(tmp_path):
+    check_resume_mindset([_growth_record()], ("growth",), tmp_path / "r.jsonl")
+
+
+def test_resume_refuses_a_different_hash(tmp_path):
+    p = tmp_path / "r.jsonl"
+    stale = [_growth_record(**{MINDSET_HASH_KEY: "0" * 12})]
+    with pytest.raises(RuntimeError, match="hash") as exc:
+        check_resume_mindset(stale, ("growth",), p)
+    assert "0" * 12 in str(exc.value)
+    assert mindset_hash(["growth"]) in str(exc.value)
+    assert str(p) in str(exc.value)
+    assert "separate out_dir" in str(exc.value)
+
+
+def test_resume_refuses_a_mindset_record_with_no_hash(tmp_path):
+    # The 18 cells run on the night of 2026-08-15 carry mindset_version 2 and no
+    # hash, and every one of them used the pre-fix trigger sentence. A missing
+    # hash is therefore evidence of the OLD text, not of agreement.
+    p = tmp_path / "r.jsonl"
+    hashless = [{MINDSET_KEY: ["growth"], "mindset_version": MINDSET_VERSION}]
+    with pytest.raises(RuntimeError, match="hash") as exc:
+        check_resume_mindset(hashless, ("growth",), p)
+    assert "predates" in str(exc.value)
+
+
+def test_resume_still_accepts_hashless_base_records(tmp_path):
+    # Base cells have no mindset text, so there is nothing for a hash to pin.
+    plain = [{}, {MINDSET_KEY: [], "mindset_version": MINDSET_VERSION}]
+    check_resume_mindset(plain, (), tmp_path / "r.jsonl")
 
 
 def _fake_vectors() -> Vectors:
@@ -442,6 +538,7 @@ def test_record_carries_mindset_and_completions(tmp_path, monkeypatch):
     [rec] = read_jsonl(tmp_path / "r.jsonl")
     assert rec[MINDSET_KEY] == ["growth"]
     assert rec["mindset_version"] == MINDSET_VERSION
+    assert rec[MINDSET_HASH_KEY] == mindset_hash(["growth"])
     assert rec["turn_completion"] == ["```python\nreturn 0\n```", "```python\nreturn 1\n```"]
     assert rec["turn_after_test_failure"] == [False, True]
 
@@ -462,3 +559,4 @@ def test_record_without_mindset_says_so(tmp_path, monkeypatch):
     [rec] = read_jsonl(tmp_path / "r.jsonl")
     assert rec[MINDSET_KEY] == []
     assert rec["mindset_version"] == MINDSET_VERSION
+    assert rec[MINDSET_HASH_KEY] == ""

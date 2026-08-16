@@ -358,3 +358,48 @@ def test_check_steer_fails_on_a_wrong_residual(smoke, fractions, message):
     client = FakeClient(fractions)
     with pytest.raises(AssertionError, match=message):
         smoke.Smoke(client, _spec(), _smoke_cfg()).check_steer()
+
+
+# ---------------------------------------------------------------------------
+# live_trajectory: an unresolvable token cap must be fatal, not skipped
+# ---------------------------------------------------------------------------
+
+
+def _live_trajectory_module():
+    import importlib.util
+    import pathlib
+
+    path = pathlib.Path("scripts/live_trajectory.py")
+    spec = importlib.util.spec_from_file_location("live_trajectory", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_unresolvable_token_cap_is_fatal():
+    """A silent skip here would quietly include truncated rollouts.
+
+    A turn at `max_tokens` ends where the cap fell, not where the model
+    finished, so including it measures the cap. The first version of this check
+    returned None when the config was missing and excluded nothing -- silently.
+    That is the failure class this project keeps rediscovering, so it is now an
+    error with an explicit opt-out (`--include-truncated`).
+    """
+    import pytest
+
+    module = _live_trajectory_module()
+    with pytest.raises(SystemExit, match="cannot resolve the token cap"):
+        module.token_cap("NoSuchModel", "nosuchcell")
+
+
+def test_drop_truncated_removes_rollouts_at_the_cap():
+    module = _live_trajectory_module()
+    rows = [
+        {"turn_n_generated": [100, 200]},          # fine
+        {"turn_n_generated": [100, 16384]},        # exactly at the cap
+        {"turn_n_generated": [16383]},             # cap - 1, still truncated
+        {"turn_n_generated": []},                  # no turns, keep
+    ]
+    keep, dropped = module.drop_truncated(rows, 16384)
+    assert dropped == 2
+    assert len(keep) == 2

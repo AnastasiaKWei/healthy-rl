@@ -146,5 +146,11 @@ preflight_max_tokens: 16
 # Qwen-only "hang" in docs/infrastructure.md. At the ~14 tokens/s each request
 # gets when 8 share a server, a 24576-token cap needs ~30 min, so 600 is far
 # too short for those cells and 3600 is the safer floor there.
-request_timeout_s: 600
+# 3600, not 600. MEASURED: at 8 concurrent requests carrying the projection
+# hook, Qwen3.5-9B generates 16.1 tok/s per request, so a 12288-token turn takes
+# 761 s and a full 24576-token turn ~1522 s. 600 is exceeded by any turn over
+# ~9700 tokens -- exactly the range lcbhard_7/10/11 occupy, which is why the
+# hang looked "problem-specific". Ministral's ~1k-token turns never came close,
+# which is why it looked "Qwen-only".
+request_timeout_s: 3600
 health_timeout_s: 1800

@@ -58,6 +58,51 @@ def load_rows(base: Path) -> list[dict]:
     return [json.loads(line) for f in sorted(base.glob("*.jsonl")) for line in f.open()]
 
 
+def token_cap(model: str, version: str) -> int:
+    """The cell's `max_tokens`, from its shard config. Fatal if unresolvable.
+
+    Read from the config rather than the records because summaries written before
+    2026-08-16 do not carry it. A rollout with a turn AT this value was truncated:
+    its end-of-turn residual is where the cap fell, not where the model finished.
+    """
+    import yaml
+
+    path = (Path(__file__).resolve().parent.parent / "configs" / "shards"
+            / f"rollouts-{model}-{version}-s0of3.yaml")
+    if not path.is_file():
+        raise SystemExit(
+            f"cannot resolve the token cap for {model}/{version}: no {path}.\n"
+            "Refusing to continue, because an unresolved cap would silently "
+            "include truncated rollouts -- a turn at the cap ends where the cap "
+            "fell, not where the model finished. Pass --include-truncated to "
+            "analyse without the exclusion, deliberately."
+        )
+    try:
+        return int(yaml.safe_load(path.read_text())["max_tokens"])
+    except Exception as exc:  # noqa: BLE001
+        raise SystemExit(
+            f"cannot read max_tokens from {path}: {type(exc).__name__}: {exc}\n"
+            "Refusing to continue rather than skip the truncation check silently. "
+            "Pass --include-truncated to analyse without the exclusion."
+        ) from exc
+
+
+def drop_truncated(rows: list[dict], cap: int) -> tuple[list[dict], int]:
+    """Remove rollouts with any turn at the token cap.
+
+    RULING 2026-08-16: excluded, not merely flagged. `d6` runs a 16384 cap where
+    its comparison arms run 24576, so a truncated `d6` rollout turns the affect
+    contrast into a cap contrast. Excluding costs n; including costs correctness.
+
+    These only appeared after the client_timeout fix -- before it, turns died at
+    600 s and never reached the cap, which is why the cap was recorded as
+    non-binding. See docs/runs.md.
+    """
+    keep = [r for r in rows
+            if not any(t >= cap - 1 for t in (r.get("turn_n_generated") or []))]
+    return keep, len(rows) - len(keep)
+
+
 def load_directions(root: str, model: str):
     from safetensors.numpy import load_file
 
@@ -120,6 +165,11 @@ def main() -> int:
     ap.add_argument("--stat", choices=["token", "mean"], default="token",
                     help="token = single-token cosine, paper-comparable (default); "
                          "mean = turn-averaged projection")
+    ap.add_argument("--include-truncated", action="store_true",
+                    help="keep rollouts with a turn at the token cap. Off by "
+                         "default: such a turn's end residual is where the cap "
+                         "fell, not where the model finished, and d6's cap "
+                         "(16384) differs from its comparison arms' (24576)")
     ap.add_argument("--position", choices=["start", "end"], default="start",
                     help="which boundary token for --stat token (default start: the first "
                          "generated token of the turn, closest analogue to the paper's "
@@ -131,6 +181,15 @@ def main() -> int:
     rows = load_rows(base)
     if not rows:
         print(f"no records yet for {args.model}/{args.version}")
+        return 0
+
+    if args.include_truncated:
+        cap, dropped = None, 0
+    else:
+        cap = token_cap(args.model, args.version)
+        rows, dropped = drop_truncated(rows, cap)
+    if not rows:
+        print(f"every rollout in {args.model}/{args.version} hit the {cap}-token cap")
         return 0
 
     emotions = rows[0]["emotions"]
@@ -163,6 +222,9 @@ def main() -> int:
     # fabricated finding, so the label comes from the record, not from a default.
     split = str(rows[0].get("bench_split") or "conflicting")
     label = "hack" if split == "conflicting" else "solved"
+    if dropped:
+        print(f"EXCLUDED {dropped} rollout(s) with a turn at the {cap}-token cap "
+              f"(truncated; --include-truncated to keep them)")
     print(f"{args.model}/{args.version}: {len(rows)} rollouts, {len(seqs)} with {args.stat} "
           f"data, turns/rollout {min(depths)}-{max(depths)}, split {split}, "
           f"{label} {passed}/{len(rows)}")

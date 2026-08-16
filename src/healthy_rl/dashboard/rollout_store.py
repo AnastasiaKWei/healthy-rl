@@ -91,6 +91,14 @@ def _now_iso(ts: float) -> str:
     return _dt.datetime.fromtimestamp(ts, _dt.timezone.utc).isoformat(timespec="seconds")
 
 
+def _same_light(a: dict | None, b: dict | None) -> bool:
+    """Did a re-read leave this light record alone? ``created_at`` does not count: it is the
+    shard file's mtime, which moves for every row of the file each time the file grows."""
+    if a is None or b is None:
+        return a is b
+    return {k: v for k, v in a.items() if k != "created_at"} == {k: v for k, v in b.items() if k != "created_at"}
+
+
 def records_from_row(row: dict, *, model: str, version: str, max_tokens: int | None, created_at: str) -> list[dict]:
     """One light record per turn of a rollout row (spec §3.1, minus the lazy fields)."""
     n_turns = int(row.get("n_turns") or len(row.get("turn_completion") or []))
@@ -104,6 +112,7 @@ def records_from_row(row: dict, *, model: str, version: str, max_tokens: int | N
     base = {
         "conversation_id": cid, "source": SOURCE, "model": model, "version": version,
         "mindset": list(row.get("mindset") or []), "mindset_version": int(row.get("mindset_version") or 0),
+        "mindset_hash": str(row.get("mindset_hash") or ""),
         "scratchpad_reasoning": bool(row.get("scratchpad_reasoning")), "affect_prompt": bool(row.get("affect_prompt")),
         "bench_split": row.get("bench_split") or "conflicting", "task_id": task_id, "sample": sample,
         "epoch": int(row.get("epoch") or 1), "passed": row.get("passed"), "shard": row.get("shard"),
@@ -147,11 +156,16 @@ def tokenise(text: str, tokenizer) -> tuple[list[str], list[int]]:
         spans = list(enc["offset_mapping"])
         tokens, starts, prev = [], [], 0
         for i, (s, e) in enumerate(spans):
-            e = max(int(e), prev)
+            s, e = int(s), int(e)
+            if e <= prev:            # a special token's (0, 0) span keeps its place in the strip
+                s = max(s, prev)
+                e = prev
             if i == len(spans) - 1:
                 e = max(e, len(text))
-            tokens.append(text[prev:e]); starts.append(int(s))
+            tokens.append(text[prev:e]); starts.append(s)
             prev = e
+        if prev < len(text):         # no spans at all (whitespace-only text): keep the tiling
+            tokens.append(text[prev:]); starts.append(prev)
         return tokens, starts
     ids = tokenizer.encode(text, add_special_tokens=False)
     tokens = [tokenizer.decode([i]) for i in ids]
@@ -172,6 +186,68 @@ def align_tokens(tokens: list[str], starts: list[int], think_end_char: int, n_de
     if N + 1 == n_decode:
         return list(tokens) + [EOS_TOKEN], kinds + [kinds[-1] if kinds else "answer"], False, None
     return list(tokens), kinds, True, f"re-tokenised {N} tokens, {n_decode} decode rows"
+
+
+def _project_residual(h: np.ndarray, directions: np.ndarray) -> tuple[np.ndarray, float]:
+    """``(proj (E,), norm)`` of one residual on the probe-layer directions; NaN when non-finite."""
+    h = np.asarray(h, dtype=np.float64)
+    if not np.isfinite(h).all():
+        return np.full(directions.shape[0], np.nan), np.nan
+    n = float(np.linalg.norm(h))
+    return directions @ h, n
+
+
+def arrays_from_npz(z, *, turn: int, capture_layers: list[int], probe_layer: int, n_emotions: int, vectors=None
+                    ) -> tuple[dict[str, np.ndarray], list[str]]:
+    """Dashboard-shaped arrays for one turn of a rollout npz (spec §3.2, §3.4)."""
+    L, files = len(capture_layers), set(z.files)
+    problems: list[str] = []
+    E = int(n_emotions)
+    per_layer: list[tuple[np.ndarray, np.ndarray, np.ndarray] | None] = []
+    for layer in capture_layers:
+        k = f"t{turn}_proj_L{layer}"
+        if k in files:
+            proj = np.asarray(z[k], dtype=np.float32); norm = np.asarray(z[f"t{turn}_norm_L{layer}"], dtype=np.float32)
+            kind = np.asarray(z[f"t{turn}_kind_L{layer}"]).reshape(-1)
+            if proj.shape[1] != E:
+                problems.append(f"{k}: proj has {proj.shape[1]} emotions, record lists {E}")
+            per_layer.append((proj, norm, kind))
+        else:
+            per_layer.append(None)
+    extra = sorted(k for k in files if k.startswith(f"t{turn}_proj_L") and int(k.rsplit("L", 1)[1]) not in capture_layers)
+    if extra:
+        problems.append("npz has layers the record does not list: " + ", ".join("L" + k.rsplit("L", 1)[1] for k in extra))
+    have = [p for p in per_layer if p is not None]
+    out: dict[str, np.ndarray] = {}
+    if have and not problems and len(have) == L:
+        T = int((have[0][2] == 0).sum())
+        if any(int((p[2] == 0).sum()) != T for p in have):
+            problems.append("decode-row count differs across layers")
+    if have and not problems and len(have) == L:
+        out["proj"] = np.stack([p[0][p[2] == 0] for p in have], axis=1)                # T x L x E
+        out["norm"] = np.stack([p[1][p[2] == 0] for p in have], axis=1)                # T x L
+        pre = [np.where(p[2] == 1)[0] for p in have]
+        out["proj_prefill"] = np.stack([p[0][i[-1]] if len(i) else np.full(E, np.nan) for p, i in zip(have, pre)])
+        out["norm_prefill"] = np.array([p[1][i[-1]] if len(i) else np.nan for p, i in zip(have, pre)], np.float32)
+    else:
+        if have and len(have) != L and not problems:
+            missing = [f"L{l}" for l, p in zip(capture_layers, per_layer) if p is None]
+            problems.append("npz lacks per-token arrays at " + ", ".join(missing))
+        out["proj"] = np.zeros((0, L, E), np.float32); out["norm"] = np.zeros((0, L), np.float32)
+        out["proj_prefill"] = np.full((L, E), np.nan, np.float32); out["norm_prefill"] = np.full(L, np.nan, np.float32)
+        rs, re_ = f"t{turn}_res_start_L{probe_layer}", f"t{turn}_res_end_L{probe_layer}"
+        if vectors is not None and probe_layer in capture_layers and (rs in files or re_ in files):
+            li = capture_layers.index(probe_layer)
+            D = np.asarray(vectors.probe_directions(), dtype=np.float64)
+            if rs in files:
+                p, n = _project_residual(z[rs], D); out["proj_prefill"][li] = p; out["norm_prefill"][li] = n
+            if re_ in files:
+                out["proj_end"] = np.full((L, E), np.nan, np.float32); out["norm_end"] = np.full(L, np.nan, np.float32)
+                p, n = _project_residual(z[re_], D); out["proj_end"][li] = p; out["norm_end"][li] = n
+    for k in (f"t{turn}_res_start_L{probe_layer}", f"t{turn}_res_end_L{probe_layer}"):
+        if k in files:
+            out[k.split("_", 1)[1]] = np.asarray(z[k])          # "res_start_L20"
+    return out, problems
 
 
 class RolloutStore:
@@ -223,6 +299,7 @@ class RolloutStore:
                 self._rows_by_file[f] = [(cell, r) for r in read_jsonl(f)]
                 changed = True
         if changed:
+            prev_light = dict(self._light)                # to spot rows a re-read rewrote
             self._light.clear(); self._order.clear(); self._duplicate_rows.clear()
             seen_rollouts: set[str] = set()
             for f in sorted(self._rows_by_file):
@@ -240,6 +317,9 @@ class RolloutStore:
                         if rid not in self._light:      # order holds each id once; the row read last wins
                             self._order.append(rid)
                         self._light[rid] = rec
+            # a rewritten (or vanished) row invalidates its tokenised record; the rest stay cached
+            for rid in [r for r in self._full if not _same_light(self._light.get(r), prev_light.get(r))]:
+                del self._full[rid]
             self._session = None
         return changed
 
@@ -249,16 +329,16 @@ class RolloutStore:
         return [self._full.get(rid) or self._light[rid] for rid in self._order]
 
     def record(self, record_id: str) -> dict:
+        self.refresh()                    # first: a re-read row drops its stale tokenised record
         full = self._full.get(record_id)
         if full is not None:
             return full
-        self.refresh()
         light = self._light.get(record_id)
         if light is None:
             raise KeyError(record_id)
         rec = dict(light)
         warnings = list(rec.get("warnings") or [])
-        n_decode = self._decode_rows(rec)
+        n_decode, problem = self._decode_rows(rec)
         rec["n_decode"] = n_decode
         rec["has_token_arrays"] = n_decode is not None
         tok = self._tokenizer_for(rec["model"])
@@ -271,6 +351,9 @@ class RolloutStore:
             toks, kinds, mis, err = align_tokens(toks, starts, think_end, n_decode)
             rec.update(tokens=toks, token_kind=kinds, n_think=sum(1 for k in kinds if k == "think"),
                        misaligned=mis, error=err)
+        if problem is not None and rec["error"] is None:
+            # the text and the turn readouts are still good; only the token strip is not
+            rec.update(misaligned=True, error=problem, has_token_arrays=False)
         # messages_in / feedback: Task 5
         rec["warnings"] = warnings
         rec["tokenised"] = True
@@ -279,7 +362,44 @@ class RolloutStore:
         return rec
 
     def arrays(self, record_id: str) -> dict[str, np.ndarray]:
-        raise NotImplementedError  # Task 4
+        rec = self.record(record_id)
+        L, E = len(rec["capture_layers"]), len(rec["emotions"])
+        empty = {"proj": np.zeros((0, L, E), np.float32), "norm": np.zeros((0, L), np.float32),
+                 "proj_prefill": np.full((L, E), np.nan, np.float32), "norm_prefill": np.full(L, np.nan, np.float32)}
+        path = self._npz_path(rec)
+        if path is None or not path.is_file():
+            self._mark(rec, f"npz missing: {path}")
+            return empty
+        vec = self._vectors_for(rec["model"])
+        try:
+            with np.load(path) as z:
+                out, problems = arrays_from_npz(z, turn=rec["turn_index"], capture_layers=rec["capture_layers"],
+                                                probe_layer=rec["probe_layer"], n_emotions=E, vectors=vec)
+        except (OSError, ValueError) as exc:
+            self._mark(rec, f"npz unreadable: {exc}")
+            return empty
+        if problems:
+            self._mark(rec, "; ".join(problems))
+            return empty
+        if out["proj"].shape[0] == 0 and rec["n_generated"] > 0 and vec is None and not rec["has_token_arrays"]:
+            if "vectors missing: start/end readouts unavailable for this cell" not in rec["warnings"]:
+                rec["warnings"].append("vectors missing: start/end readouts unavailable for this cell")
+        return out
+
+    def _mark(self, rec: dict, error: str) -> None:
+        """Flag a full record misaligned; the page hides the strip and readouts go None.
+
+        ``record()`` may already have reported the same problem (a missing npz is seen
+        by ``_decode_rows`` first), so an error string that is already there is not
+        appended a second time.
+        """
+        rec["misaligned"] = True
+        prev = rec.get("error")
+        if not prev:
+            rec["error"] = error
+        elif error not in prev:
+            rec["error"] = prev + "; " + error
+        self._session = None
 
     def conversations(self) -> list[dict]:
         out: dict[str, dict] = {}
@@ -305,7 +425,12 @@ class RolloutStore:
 
     # ---- session ---------------------------------------------------------
     def _has_token_arrays(self, rec: dict) -> bool:
-        """Does this rollout's npz carry per-token projections? Cached per npz path."""
+        """Does *any* turn of this rollout carry per-token projections (``t*_proj_L*``)?
+
+        Rollout-level, and cached per npz path: it answers the conversation and cell
+        tables. The record-level ``has_token_arrays`` is the stricter per-turn question
+        -- see ``_decode_rows``.
+        """
         cache = getattr(self, "_hta", None)
         if cache is None:
             cache = self._hta = {}
@@ -325,19 +450,36 @@ class RolloutStore:
         rel = rec.get("residuals")
         return (self._cell_of(rec).path / rel) if rel else None
 
-    def _decode_rows(self, rec: dict) -> int | None:
-        """Decode-row count at the probe layer, or None when the turn has no per-token arrays."""
+    def _decode_rows(self, rec: dict) -> tuple[int | None, str | None]:
+        """``(decode rows at the probe layer, problem)`` for this one turn.
+
+        A turn has per-token arrays when *both* ``t{t}_proj_L{probe}`` and
+        ``t{t}_kind_L{probe}`` are in the npz -- that pair is what the record-level
+        ``has_token_arrays`` means. ``(None, None)`` is the honest array-less turn
+        (a zero-token turn, or an old cell that only wrote the turn readouts): the
+        record stays aligned and the token strip simply has no per-token data.
+        Everything that should have worked and did not comes back as a problem
+        string, so it reaches the page instead of being swallowed.
+        """
         path = self._npz_path(rec)
         if path is None:
-            return None
-        key = f"t{rec['turn_index']}_kind_L{rec['probe_layer']}"
+            return None, None
+        proj = f"t{rec['turn_index']}_proj_L{rec['probe_layer']}"
+        kind = f"t{rec['turn_index']}_kind_L{rec['probe_layer']}"
         try:
             with np.load(path) as z:
-                if key not in z.files:
-                    return None
-                return int((np.asarray(z[key]).reshape(-1) == 0).sum())
-        except (OSError, ValueError):
-            return None
+                files = set(z.files)
+                if proj not in files and kind not in files:
+                    return None, None
+                if kind not in files:
+                    return None, f"npz has {proj} without {kind}"
+                if proj not in files:
+                    return None, f"npz has {kind} without {proj}"
+                return int((np.asarray(z[kind]).reshape(-1) == 0).sum()), None
+        except FileNotFoundError:
+            return None, f"npz missing: {path}"     # same wording as arrays() so the page dedupes
+        except (OSError, ValueError) as exc:
+            return None, f"npz unreadable: {exc}"
 
     def _cell_of(self, rec: dict) -> Cell:
         return next(c for c in self.cells if c.key == (rec["model"], rec["version"]))

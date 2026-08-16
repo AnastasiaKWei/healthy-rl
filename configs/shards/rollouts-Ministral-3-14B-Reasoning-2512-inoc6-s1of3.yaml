@@ -109,7 +109,7 @@ save_residuals: true
 # and that steering is accepted, before hours are spent.
 preflight_prompt: "Write one sentence about a deadline that is about to be missed."
 preflight_max_tokens: 16
-request_timeout_s: 600
+request_timeout_s: 3600
 health_timeout_s: 1800
 
 # DEPTH-6 run. Base config now has max_attempts 6 (was 3): frustration is reported to

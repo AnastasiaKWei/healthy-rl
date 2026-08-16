@@ -245,6 +245,23 @@ a six-times arm wearing a once-only label. **On the first run of any new mindset
 cell, spot-check turn 2's user message in one transcript**
 (`scripts/read_transcript.sh`): it must not contain the block.
 
+The block's **text** is pinned by a hash, not by `mindset_version`. On
+2026-08-16 the trigger sentence in all three blocks was rewritten in place
+(event-conditional "when a test fails, run this" scored 0/12 compliance, because
+by the time a test fails the block has been stripped from the context; the
+standing-rule "open every attempt after that with these two lines" scored 12/12)
+and the version number stayed at 2, so `mindset_version` cannot tell the two
+texts apart. `rollouts.mindset_hash(names)` is the first 12 hex characters of the
+SHA-256 of `mindset_section(names)` — the literal string the model was shown,
+header and join and block order included — and `""` for the base arm. It is
+written as `mindset_hash` on every rollout record, on `summary.json`, and on the
+dashboard's `condition` block. `check_resume_mindset` compares it before
+appending and refuses on a mismatch. It also refuses a mindset record that has
+**no** hash: the only hash-less mindset records in existence are the 18 cells run
+on the night of 2026-08-15, and every one of them used the pre-fix text, so a
+missing hash is evidence of the old wording rather than of agreement. Both
+refusals say to use a separate `out_dir`.
+
 ## Reading the tools
 
 ```bash

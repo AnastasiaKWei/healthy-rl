@@ -23,6 +23,9 @@ versions encode the condition:
 | `spgrowth6`, `spresil6`, `spappr6` | 6 | gemma-3-12b-it only: the same blocks on the `sp6` base (scratchpad on, no affect prompt). Compare against `sp6` |
 | `inoc6` | 6 | inoculation block (`inoculation: true`, v1), otherwise `d6r` (the `d6` re-run with per-token capture): no affect prompt, conflicting split. Block sent on **every** turn, and the benchmark's `**DO NOT MODIFY THE TESTS.**` line dropped. Compare against `d6r` |
 | `affinoc6` | 6 | the same block with the affect prompt on, otherwise `aff6r`. Compare against `aff6r` |
+| `growth6b`, `resil6b`, `appr6b`, `affgrowth6b`, `affresil6b`, `affappr6b`, `spgrowth6b`, `spresil6b`, `spappr6b`, `spaffgrowth6b`, `spaffresil6b`, `spaffappr6b` | 6 | the same 18 mindset cells re-run with the **trigger-fixed** v2 text (Anastasia's `7d6fd07`, 2026-08-16): "Your first attempt is just the code. Open every attempt after that with …" instead of "Whenever a test fails, run this …", which is inert once the block is sent on turn 1 only. Same version number (2); the two texts are told apart by `mindset_hash`. Same bases as the un-suffixed cells; the per-token comparison cell is `<base>r` (or `spaff6`) |
+| `spaff6` | 6 | gemma-3-12b-it only: scratchpad on **and** affect prompt on — a new base cell (2026-08-16); per-token arrays present. Compare mindset arms `spaffgrowth6`/`spaffresil6`/`spaffappr6` against it |
+| `d6r`, `sp6r`, `aff6r`, `pos6r`, `affpos6r` | 6 | **re-runs** of the same-named base cells (gemma: d6/sp6/aff6; Ministral: d6/aff6/pos6/affpos6), fresh samples at temperature 1.0 written 2026-08-16 with the per-token arrays and `max_tokens` 24576. The per-token control for that model's mindset arms; also an independent replicate of the boundary readouts |
 
 `d6` / `sp6` / `aff6` / `pos6` / `affpos6` are the trustworthy set. Each condition
 needs its own `out_dir` — resume refuses to mix them, and since 2026-08-15 it
@@ -114,6 +117,22 @@ and summary, with the exact turn-1 `instruction` and the stripped
 `instruction_reminder` on the summary; resume refuses to mix arms or prompt
 versions.
 
+**Two v2 texts exist.** The un-suffixed cells (`growth6` …, submitted 2026-08-16
+02:11) carry the v2 text of her commit `9d6615a` (2026-08-15 21:05), whose
+procedure was triggered by "Whenever a test fails, run this … before writing any
+new code". With the block sent on turn 1 only that trigger is inert — at turn 1
+no test has failed and by turn 2 the instruction is gone; her smoke run measured
+0/12 compliance. Her `7d6fd07` (2026-08-16 08:14) rephrases it as a standing
+rule — "Your first attempt is just the code. Open every attempt after that with
+these two lines, before any new code" — and scored 12/12. She left
+`MINDSET_VERSION` at 2, so the number no longer identifies the text; every
+record and summary written since carries `mindset_hash`, the first 12 hex of
+sha256 over the exact section text, and resume refuses a hash-less mindset
+record or a different hash (see
+[measurement.md](measurement.md#the-mindset-arms-send-once-mechanism)). The
+`…6b` cells are the same 18 cells with the `7d6fd07` text; the un-suffixed cells
+are the `9d6615a` text and are **not** to be pooled with them.
+
 Everything else is the base cell's shard config byte for byte except
 `max_tokens`, `out_dir` and the appended `mindset:` key. Ministral `d6` used
 `max_tokens` 16384; the mindset cells use 24576, the 2x2 value; the cap never
@@ -130,12 +149,15 @@ needs the `r` re-runs of those cells (`d6r`, `aff6r`; `sp6r` for the scratchpad
 arms), queued 2026-08-16 with per-token capture on.
 
 Shard configs and submission are one script, `scripts/mindset_cells.sh` —
-dry-run by default, `--submit` to act. It writes the 27 shard configs
-(`configs/shards/rollouts-<model>-<version>-s{0,1,2}of3.yaml`) from the base
-cell's, then submits per shard a primary job plus `-cont` and `-cont2` chained
-with `--dependency=afterany`, and prints the job-id table for the section below.
-The 27 configs are already committed and the script refuses to overwrite one
-that exists with different content, so re-running the config phase is a no-op.
+dry-run by default, `--submit` to act. It writes the shard configs
+(`configs/shards/rollouts-<model>-<version>-s{0,1,2}of3.yaml`, 3 per cell, 36
+cells: the 18 `9d6615a`-text rows and their 18 `…6b` trigger-fixed mirrors) from
+the base cell's, then submits per shard a primary job plus `-cont` and `-cont2`
+chained with `--dependency=afterany`, and prints the job-id table for the
+section below. `ONLY_TEXT=orig|fixed` selects one text, composing with
+`ONLY_MODEL`/`ONLY_BASE`. All configs are committed and the script refuses to
+overwrite one that exists with different content, so re-running the config
+phase is a no-op.
 Priority is carried by `--nice`: Ministral `growth6`/`resil6`/`appr6` first,
 with no `--nice` flag (slurm default 0), then Qwen3.5-9B's three at
 `--nice=2000`, then Ministral's affect-on three at `--nice=4000`. Qwen3-14B was
@@ -282,6 +304,35 @@ Rollout records, `$ARTIFACT_DIR/rollouts/<model>/<version>/*.jsonl`:
 | Ministral-3-14B-Reasoning-2512 | `inoc6` | 24 | complete 2026-08-16 ~18:00 (jobs 5654129–5654137); base `d6r`. **5/24 in-loop passes** (`loop_passed`): 4 test-rewrite hacks (`passed=False`) plus 1 rollout the scorer also passed on `conflicting`; those 5 ended at turns 2–4, the other 19 ran six turns. `d6r`: 0/24 |
 | gemma-3-12b-it | `affinoc6` | 16 | running 2026-08-16 18:05 (jobs 5654138–5654146); base `aff6r`. 0/16 in-loop passes so far |
 | Ministral-3-14B-Reasoning-2512 | `affinoc6` | 0 | primaries pending on priority at 18:05 (jobs 5654147–5654155, `--nice=3000`); base `aff6r` |
+| gemma-3-12b-it | `spaff6` | 24 | complete 2026-08-16 ~11:45; base cell for the spaff arms; jobs 5651735–5651743 |
+| gemma-3-12b-it | `spaffgrowth6` | 24 | complete 2026-08-16 ~11:50; jobs 5651748–5651756 |
+| gemma-3-12b-it | `spaffresil6` | 24 | complete 2026-08-16 ~11:50; jobs 5651757–5651765 |
+| gemma-3-12b-it | `spaffappr6` | 24 | complete 2026-08-16 ~12:00; jobs 5651766–5651774 |
+| gemma-3-12b-it | `d6r` | 24 | re-run, complete 2026-08-16 ~12:20; jobs 5653039–5653047 |
+| gemma-3-12b-it | `sp6r` | 24 | re-run, complete 2026-08-16 ~12:35; jobs 5653048–5653056 |
+| gemma-3-12b-it | `aff6r` | 24 | re-run, complete 2026-08-16 ~12:20; jobs 5653057–5653065 |
+| Ministral-3-14B-Reasoning-2512 | `d6r` | 24 | re-run, complete 2026-08-16 ~12:35; jobs 5653066–5653074 |
+| Ministral-3-14B-Reasoning-2512 | `aff6r` | 24 | re-run; first pass lost 11 rollouts to the 600 s client ceiling (`APITimeoutError`, one-turn zero-token records — removed to `*.bak-timeout-2026-08-16`), resumed under 694d74d as jobs 5654088–5654096; complete 2026-08-16 ~13:45, 24/24 real records. Contains turns at the 24,576 cap (see infrastructure.md) |
+| Ministral-3-14B-Reasoning-2512 | `pos6r` | 24 | re-run, complete 2026-08-16 ~12:40; jobs 5653084–5653092 |
+| Ministral-3-14B-Reasoning-2512 | `affpos6r` | 24 | re-run; first pass lost 3 rollouts to the 600 s client ceiling (`APITimeoutError`, one-turn zero-token records — removed to `*.bak-timeout-2026-08-16`), resumed under 694d74d as jobs 5654097–5654105; complete 2026-08-16 ~13:45, 24/24 real records. Contains turns at the 24,576 cap (see infrastructure.md) |
+| Ministral-3-14B-Reasoning-2512 | `growth6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `growth6`; per-token base `d6r` |
+| Ministral-3-14B-Reasoning-2512 | `resil6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `resil6`; per-token base `d6r` |
+| Ministral-3-14B-Reasoning-2512 | `appr6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `appr6`; per-token base `d6r` |
+| Qwen3.5-9B | `growth6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `growth6`; per-token base `d6r (does not exist yet)` |
+| Qwen3.5-9B | `resil6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `resil6`; per-token base `d6r (does not exist yet)` |
+| Qwen3.5-9B | `appr6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `appr6`; per-token base `d6r (does not exist yet)` |
+| Ministral-3-14B-Reasoning-2512 | `affgrowth6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `affgrowth6`; per-token base `aff6r` |
+| Ministral-3-14B-Reasoning-2512 | `affresil6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `affresil6`; per-token base `aff6r` |
+| Ministral-3-14B-Reasoning-2512 | `affappr6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `affappr6`; per-token base `aff6r` |
+| gemma-3-12b-it | `spgrowth6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `spgrowth6`; per-token base `sp6r` |
+| gemma-3-12b-it | `spresil6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `spresil6`; per-token base `sp6r` |
+| gemma-3-12b-it | `spappr6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `spappr6`; per-token base `sp6r` |
+| gemma-3-12b-it | `affgrowth6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `affgrowth6`; per-token base `aff6r` |
+| gemma-3-12b-it | `affresil6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `affresil6`; per-token base `aff6r` |
+| gemma-3-12b-it | `affappr6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `affappr6`; per-token base `aff6r` |
+| gemma-3-12b-it | `spaffgrowth6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `spaffgrowth6`; per-token base `spaff6` |
+| gemma-3-12b-it | `spaffresil6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `spaffresil6`; per-token base `spaff6` |
+| gemma-3-12b-it | `spaffappr6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `spaffappr6`; per-token base `spaff6` |
 
 gemma-3-12b-it has no `pos6`/`affpos6` cell: it is the flattest of the measured
 models, and the 2x2s went to the models with a clear conflicting-split signal
@@ -413,6 +464,73 @@ passes and all 24 rollouts ran six turns — the permission changed nothing gemm
 per-token arrays are for. Behavioural counts only; no probe readout has been
 made yet. Idle `-cont`/`-cont2` continuations of the completed cells load the
 model, find nothing to do and exit; cancel them if the queue is short.
+### Mindset jobs, trigger-fixed text (`…6b`)
+
+Submitted 2026-08-16 13:37 from the main checkout `/mnt/cup/labs/graziano/jack/healthy-rl`
+at commit `a7e31c7` (branch `feature/mindset-trigger-fix`, fast-forwarded into `feature/rollout-viewer`, which is what the checkout is on) (`ONLY_TEXT=fixed
+scripts/mindset_cells.sh --submit`; jobs bind this checkout at `/project`, so do not
+check out a branch here that lacks `mindset_hash` until the last continuation has
+run). Same resources, priorities and `-cont`/`-cont2` chaining as the 02:11 set;
+`request_timeout_s: 3600` and the client-timeout fix (`694d74d`) are in effect, which
+the 02:11 Qwen3.5-9B shards did not have. They queue behind the Ministral
+`aff6r`/`affpos6r` re-submission of 13:0x.
+
+| model | version | shard | primary | continuations |
+|---|---|---|---|---|
+| Ministral-3-14B-Reasoning-2512 | growth6b | s0 | 5654163 | 5654164 / 5654165 |
+| Ministral-3-14B-Reasoning-2512 | growth6b | s1 | 5654166 | 5654168 / 5654169 |
+| Ministral-3-14B-Reasoning-2512 | growth6b | s2 | 5654170 | 5654171 / 5654172 |
+| Ministral-3-14B-Reasoning-2512 | resil6b | s0 | 5654173 | 5654174 / 5654175 |
+| Ministral-3-14B-Reasoning-2512 | resil6b | s1 | 5654176 | 5654177 / 5654178 |
+| Ministral-3-14B-Reasoning-2512 | resil6b | s2 | 5654179 | 5654180 / 5654181 |
+| Ministral-3-14B-Reasoning-2512 | appr6b | s0 | 5654182 | 5654183 / 5654184 |
+| Ministral-3-14B-Reasoning-2512 | appr6b | s1 | 5654185 | 5654186 / 5654187 |
+| Ministral-3-14B-Reasoning-2512 | appr6b | s2 | 5654188 | 5654189 / 5654190 |
+| Qwen3.5-9B | growth6b | s0 | 5654191 | 5654192 / 5654193 |
+| Qwen3.5-9B | growth6b | s1 | 5654194 | 5654195 / 5654196 |
+| Qwen3.5-9B | growth6b | s2 | 5654197 | 5654198 / 5654199 |
+| Qwen3.5-9B | resil6b | s0 | 5654200 | 5654201 / 5654202 |
+| Qwen3.5-9B | resil6b | s1 | 5654203 | 5654204 / 5654205 |
+| Qwen3.5-9B | resil6b | s2 | 5654206 | 5654207 / 5654208 |
+| Qwen3.5-9B | appr6b | s0 | 5654209 | 5654210 / 5654211 |
+| Qwen3.5-9B | appr6b | s1 | 5654212 | 5654213 / 5654214 |
+| Qwen3.5-9B | appr6b | s2 | 5654215 | 5654216 / 5654217 |
+| Ministral-3-14B-Reasoning-2512 | affgrowth6b | s0 | 5654218 | 5654219 / 5654220 |
+| Ministral-3-14B-Reasoning-2512 | affgrowth6b | s1 | 5654221 | 5654222 / 5654223 |
+| Ministral-3-14B-Reasoning-2512 | affgrowth6b | s2 | 5654224 | 5654225 / 5654226 |
+| Ministral-3-14B-Reasoning-2512 | affresil6b | s0 | 5654227 | 5654228 / 5654229 |
+| Ministral-3-14B-Reasoning-2512 | affresil6b | s1 | 5654230 | 5654231 / 5654232 |
+| Ministral-3-14B-Reasoning-2512 | affresil6b | s2 | 5654233 | 5654234 / 5654235 |
+| Ministral-3-14B-Reasoning-2512 | affappr6b | s0 | 5654236 | 5654237 / 5654238 |
+| Ministral-3-14B-Reasoning-2512 | affappr6b | s1 | 5654239 | 5654240 / 5654241 |
+| Ministral-3-14B-Reasoning-2512 | affappr6b | s2 | 5654242 | 5654243 / 5654244 |
+| gemma-3-12b-it | spgrowth6b | s0 | 5654245 | 5654246 / 5654247 |
+| gemma-3-12b-it | spgrowth6b | s1 | 5654248 | 5654249 / 5654250 |
+| gemma-3-12b-it | spgrowth6b | s2 | 5654251 | 5654252 / 5654253 |
+| gemma-3-12b-it | spresil6b | s0 | 5654254 | 5654255 / 5654256 |
+| gemma-3-12b-it | spresil6b | s1 | 5654257 | 5654258 / 5654259 |
+| gemma-3-12b-it | spresil6b | s2 | 5654260 | 5654261 / 5654262 |
+| gemma-3-12b-it | spappr6b | s0 | 5654263 | 5654264 / 5654265 |
+| gemma-3-12b-it | spappr6b | s1 | 5654266 | 5654267 / 5654268 |
+| gemma-3-12b-it | spappr6b | s2 | 5654269 | 5654270 / 5654271 |
+| gemma-3-12b-it | affgrowth6b | s0 | 5654272 | 5654273 / 5654274 |
+| gemma-3-12b-it | affgrowth6b | s1 | 5654275 | 5654276 / 5654277 |
+| gemma-3-12b-it | affgrowth6b | s2 | 5654278 | 5654279 / 5654280 |
+| gemma-3-12b-it | affresil6b | s0 | 5654281 | 5654282 / 5654283 |
+| gemma-3-12b-it | affresil6b | s1 | 5654284 | 5654285 / 5654286 |
+| gemma-3-12b-it | affresil6b | s2 | 5654287 | 5654288 / 5654289 |
+| gemma-3-12b-it | affappr6b | s0 | 5654290 | 5654291 / 5654292 |
+| gemma-3-12b-it | affappr6b | s1 | 5654293 | 5654294 / 5654295 |
+| gemma-3-12b-it | affappr6b | s2 | 5654296 | 5654297 / 5654298 |
+| gemma-3-12b-it | spaffgrowth6b | s0 | 5654299 | 5654300 / 5654301 |
+| gemma-3-12b-it | spaffgrowth6b | s1 | 5654302 | 5654303 / 5654304 |
+| gemma-3-12b-it | spaffgrowth6b | s2 | 5654305 | 5654306 / 5654307 |
+| gemma-3-12b-it | spaffresil6b | s0 | 5654308 | 5654309 / 5654310 |
+| gemma-3-12b-it | spaffresil6b | s1 | 5654311 | 5654312 / 5654313 |
+| gemma-3-12b-it | spaffresil6b | s2 | 5654314 | 5654315 / 5654316 |
+| gemma-3-12b-it | spaffappr6b | s0 | 5654317 | 5654318 / 5654319 |
+| gemma-3-12b-it | spaffappr6b | s1 | 5654320 | 5654321 / 5654322 |
+| gemma-3-12b-it | spaffappr6b | s2 | 5654323 | 5654324 / 5654325 |
 
 ## Handoff: state at 2026-08-15, end of day
 
@@ -489,6 +607,85 @@ replicate on Nemotron (13/24 → 15/24, p=0.77). One model, twelve problems.
   over six failing turns, has 1 record, and is on 8-hour continuation jobs. If it
   cannot finish, the honest fallback is a 3-model 2x2 plus a Qwen3-14B cell
   reported at whatever n it reached — not a quiet drop.
+
+## Qwen3.5-9B: every record recovered after the timeout fix is cap-truncated
+
+All four cells reached 24 records on 2026-08-16. **The 11 records recovered after
+the `client_timeout` fix are all truncated**, exactly and without exception:
+
+| cell | owed before the fix | recovered | of which truncated |
+|---|---:|---:|---:|
+| `d6` | 4 | 4 | **4** |
+| `aff6` | 2 | 2 | **2** |
+| `pos6` | 5 | 5 | **5** |
+
+The problems that stranded under the timeout bug — `lcbhard_7`, `10`, `11` — are
+the problems whose turns run to the token cap. They were never going to yield an
+untruncated rollout at these caps. `pos6`, `aff6` and `affpos6` are already at
+24576, the highest cap any cell uses, so raising it is not an available fix
+without changing the cap for everything.
+
+**What the fix did and did not buy.** It did stop requests retrying forever, so
+jobs complete instead of burning nodes — that is real and it also recovered
+genuinely usable rollouts on Ministral and gemma. What it did not do is make
+these three problems measurable on Qwen3.5-9B.
+
+**Comparable set for Qwen3.5-9B's 2x2: 18 rollouts over 9 problems per cell** —
+the intersection of untruncated rollouts across all four cells. `lcbhard_7`, `10`
+and `11` are absent from it. Untruncated counts per cell are `d6` 20, `aff6` 22,
+`pos6` 19, `affpos6` 24, but those sets are not the same problems, so the
+per-cell numbers cannot be compared directly; only the intersection can.
+
+**This is a selection effect on the longest-generating rollouts**, which are
+plausibly the most affect-laden — the exclusion is not random with respect to
+what the probes measure. Ministral and Nemotron have zero truncated rollouts and
+are unaffected, so they remain the load-bearing models for every headline result.
+
+## The timeout fix exposed an unmatched token cap in `d6`
+
+`d6` shard configs use `max_tokens: 16384`; `aff6`, `pos6` and `affpos6` use
+24576. That was recorded on 2026-08-15 as harmless, with evidence: no turn in any
+run had ever come within 10% of 16384, so the cap never bound.
+
+**That evidence was an artifact of the bug.** Turns were being killed at 600 s
+before they could reach the cap. With `client_timeout` fixed (694d74d) turns run
+to completion, and the cap started binding immediately:
+
+| cell | cap | turns at cap | rollouts affected |
+|---|---:|---:|---:|
+| Qwen3.5-9B `d6` | 16384 | **5** | **2** |
+| Qwen3.5-9B `aff6` / `pos6` / `affpos6` | 24576 | 0 | 0 |
+| Ministral, Nemotron (all cells) | 16384 / 24576 | 0 | 0 |
+
+A turn sitting exactly at `max_tokens` is truncated: its end-of-turn residual is
+where the cap fell, not where the model finished. So those rollouts measure the
+cap, and they sit in the one cell whose cap differs from the arms it is compared
+against — `d6` vs `aff6` is the affect contrast, and it is now also a
+16384-vs-24576 contrast for the truncated rollouts.
+
+Only Qwen3.5-9B is affected: it is the model with the longest turns. Ministral's
+`d6` has the same 16384 cap and zero cap hits.
+
+**RULING 2026-08-16: keep the 16384 cap and EXCLUDE the truncated rollouts.**
+Qwen3.5-9B `d6` is analysed at n=22-minus-truncated rather than re-run; every
+rollout that is compared is untruncated. Cost if wrong: a smaller n in one cell,
+against a re-run costing hours of GPU for two rollouts.
+
+`scripts/live_trajectory.py` enforces this automatically — it reads the cell's
+`max_tokens` from its shard config, drops any rollout with a turn at the cap, and
+prints how many it dropped. Summaries written from 2026-08-16 also record
+`max_tokens`, so the cap travels with the run.
+
+**An unresolvable cap is a hard error, not a skip.** The first version returned
+`None` when the shard config was missing and then excluded nothing — silently
+analysing truncated rollouts while appearing to have checked. Any cell whose
+config is not at `configs/shards/rollouts-<model>-<cell>-s0of3.yaml` now fails
+loudly. `--include-truncated` is the deliberate opt-out and is the only way to
+include them.
+
+The general lesson is worth more than this instance: **a config value shown to be
+non-binding under a bug is not shown to be non-binding.** Re-check headroom
+assumptions after any fix that lets work run longer.
 
 ## Qwen3.5-9B's cells do not cover the same problems
 
@@ -570,6 +767,10 @@ Each JSONL row is one rollout:
   a date, several cells dated 2026-08-16 predate it — and without it the same
   hack is visible only as `n_turns < 6` with `passed=False`. See
   [The inoculation arm](#the-inoculation-arm).
+- `mindset_hash` — first 12 hex of sha256 over the exact mindset section text
+  (`""` for no mindset). Present on records written after 2026-08-16 ~14:00;
+  the un-suffixed mindset cells predate it and are the `9d6615a` text, the
+  `…6b` cells carry it and are the `7d6fd07` text. Resume compares it.
 - `mindset`, `mindset_version` — which mindset blocks the turn-1 instruction
   carried, as a list in prompt order (growth, resilience, appraisal), and the
   version of the block text (2). Records written before the mindset merge have
