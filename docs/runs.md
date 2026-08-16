@@ -139,10 +139,14 @@ infrastructure fault, not by queue time.
 **Why Qwen3.5-9B stalled 11 records short.** Every job hangs after ~85–95
 minutes having completed exactly 3 requests — see
 [infrastructure.md](infrastructure.md#a-rollout-job-can-hang-with-its-server-still-generating).
-Ten confirmed hangs overnight, all on Qwen models; Ministral and Nemotron did 192
-rollouts with none. Recycling hung jobs produced **0 records in the final 66
-minutes across 4 hangs**, so the loop stopped rather than burn GPU on a
-treadmill. The remaining records need the fault understood, not more attempts.
+**Fourteen** confirmed hangs overnight, all on Qwen models; Ministral and
+Nemotron did 192 rollouts with none. Recycling hung jobs produced **0 records in
+the final 94 minutes across 7 hangs**, so the run was stopped rather than burn
+GPU on a treadmill. The remaining records need the fault understood, not more
+attempts.
+
+All Qwen3.5-9B jobs were cancelled at 02:03 on 2026-08-16. Nothing of this
+experiment is queued or running.
 
 What the finished half already shows, on two models and two architectures:
 

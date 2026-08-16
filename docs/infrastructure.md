@@ -172,6 +172,7 @@ signals, since either alone gives false positives:
 | signal | meaning | default |
 |---|---|---|
 | `NO-ATTEMPTS` | running this long, never finished one attempt | `NOATTEMPT_MIN=75` |
+| | *(75 min is too slow — see below)* | |
 | `NO-PROGRESS` | job log gained no line since the previous run of the script | `STALL_MIN=45` |
 
 `NO-ATTEMPTS` is the one that fires earliest and caught both known cases.
@@ -179,6 +180,15 @@ signals, since either alone gives false positives:
 `$ARTIFACT_DIR/.grid_liveness.tsv` — because a single snapshot cannot tell
 "quiet" from "stopped". Thresholds are multiples of the ~30-minute attempt
 duration, so raise them for slower models rather than reading a flag as proof.
+
+**Detect the signature directly, not elapsed time.** The final four hangs all
+showed the full signature — 30 log lines, `Attempt 1/6`, exactly 3 POSTs, 1
+running request — at **51 minutes**, well inside the 75-minute `NO-ATTEMPTS`
+threshold. Elapsed time is a proxy; the state itself is unambiguous and visible
+much earlier. A better check fires as soon as a job has ≥1 completed POST, 0
+finished attempts, and a client log that has not grown in ~15 minutes. That
+would have caught each of the fourteen hangs roughly half an hour sooner, which
+across one night is several GPU-hours.
 
 It found a second hung job the moment it was written: a `Qwen3.5-9B d6` shard,
 199 minutes idle on "Attempt 1/6", server down to one request. That one had been
