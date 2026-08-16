@@ -1075,7 +1075,10 @@ function renderTrajWarnings() {
   const capped = turns.map((t, i) => t.at_cap ? i + 1 : null).filter(v => v !== null);
   const misaligned = turns.map((t, i) => t.misaligned ? i + 1 : null).filter(v => v !== null);
   const warned = turns.map((t, i) => (t.warnings || []).length ? i + 1 : null).filter(v => v !== null);
-  const skipped = turns.filter(t => (t.n_generated || 0) > 0 && !isNum(readoutOf(t, S.colourBy, S.readout)) && !t.misaligned).length;
+  // A misaligned turn is skipped, not exempt: at start it still has a readout, at
+  // the other three it does not, and either way it is counted (project convention:
+  // skipped AND counted, never quietly dropped from the denominator).
+  const skipped = turns.filter(t => (t.n_generated || 0) > 0 && !isNum(readoutOf(t, S.colourBy, S.readout))).length;
   if (capped.length) {
     const w = el("div", "warnbox");
     w.innerHTML = "<b>Turn" + (capped.length > 1 ? "s " : " ") + capped.join(", ") + " hit max_tokens.</b> Their end-readout is the cap, not the model. " +
@@ -1084,7 +1087,7 @@ function renderTrajWarnings() {
   }
   if (misaligned.length) {
     const w = el("div", "warnbox crit"); w.style.marginTop = "8px";
-    w.innerHTML = "<b>Turn" + (misaligned.length > 1 ? "s " : " ") + misaligned.join(", ") + " misaligned.</b> The hook rows do not line up with the tokens; those turns are unreadable and carry no readouts.";
+    w.innerHTML = "<b>Turn" + (misaligned.length > 1 ? "s " : " ") + misaligned.join(", ") + " misaligned.</b> The hook rows do not line up with the tokens, so their per-token readouts are unusable; the <code>start</code> readout is still valid because it is read at the prefill row, before any token.";
     host.appendChild(w);
   }
   if (warned.length) {
