@@ -58,8 +58,8 @@ def load_rows(base: Path) -> list[dict]:
     return [json.loads(line) for f in sorted(base.glob("*.jsonl")) for line in f.open()]
 
 
-def token_cap(model: str, version: str) -> int | None:
-    """The cell's `max_tokens`, from its shard config. None if not resolvable.
+def token_cap(model: str, version: str) -> int:
+    """The cell's `max_tokens`, from its shard config. Fatal if unresolvable.
 
     Read from the config rather than the records because summaries written before
     2026-08-16 do not carry it. A rollout with a turn AT this value was truncated:
@@ -70,14 +70,24 @@ def token_cap(model: str, version: str) -> int | None:
     path = (Path(__file__).resolve().parent.parent / "configs" / "shards"
             / f"rollouts-{model}-{version}-s0of3.yaml")
     if not path.is_file():
-        return None
+        raise SystemExit(
+            f"cannot resolve the token cap for {model}/{version}: no {path}.\n"
+            "Refusing to continue, because an unresolved cap would silently "
+            "include truncated rollouts -- a turn at the cap ends where the cap "
+            "fell, not where the model finished. Pass --include-truncated to "
+            "analyse without the exclusion, deliberately."
+        )
     try:
         return int(yaml.safe_load(path.read_text())["max_tokens"])
-    except Exception:  # noqa: BLE001 - a missing key must not stop the analysis
-        return None
+    except Exception as exc:  # noqa: BLE001
+        raise SystemExit(
+            f"cannot read max_tokens from {path}: {type(exc).__name__}: {exc}\n"
+            "Refusing to continue rather than skip the truncation check silently. "
+            "Pass --include-truncated to analyse without the exclusion."
+        ) from exc
 
 
-def drop_truncated(rows: list[dict], cap: int | None) -> tuple[list[dict], int]:
+def drop_truncated(rows: list[dict], cap: int) -> tuple[list[dict], int]:
     """Remove rollouts with any turn at the token cap.
 
     RULING 2026-08-16: excluded, not merely flagged. `d6` runs a 16384 cap where
@@ -88,8 +98,6 @@ def drop_truncated(rows: list[dict], cap: int | None) -> tuple[list[dict], int]:
     600 s and never reached the cap, which is why the cap was recorded as
     non-binding. See docs/runs.md.
     """
-    if not cap:
-        return rows, 0
     keep = [r for r in rows
             if not any(t >= cap - 1 for t in (r.get("turn_n_generated") or []))]
     return keep, len(rows) - len(keep)
@@ -175,10 +183,10 @@ def main() -> int:
         print(f"no records yet for {args.model}/{args.version}")
         return 0
 
-    cap = token_cap(args.model, args.version)
     if args.include_truncated:
-        dropped = 0
+        cap, dropped = None, 0
     else:
+        cap = token_cap(args.model, args.version)
         rows, dropped = drop_truncated(rows, cap)
     if not rows:
         print(f"every rollout in {args.model}/{args.version} hit the {cap}-token cap")

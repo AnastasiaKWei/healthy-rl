@@ -483,8 +483,15 @@ against a re-run costing hours of GPU for two rollouts.
 
 `scripts/live_trajectory.py` enforces this automatically — it reads the cell's
 `max_tokens` from its shard config, drops any rollout with a turn at the cap, and
-prints how many it dropped. `--include-truncated` overrides. Summaries written
-from 2026-08-16 also record `max_tokens`, so the cap travels with the run.
+prints how many it dropped. Summaries written from 2026-08-16 also record
+`max_tokens`, so the cap travels with the run.
+
+**An unresolvable cap is a hard error, not a skip.** The first version returned
+`None` when the shard config was missing and then excluded nothing — silently
+analysing truncated rollouts while appearing to have checked. Any cell whose
+config is not at `configs/shards/rollouts-<model>-<cell>-s0of3.yaml` now fails
+loudly. `--include-truncated` is the deliberate opt-out and is the only way to
+include them.
 
 The general lesson is worth more than this instance: **a config value shown to be
 non-binding under a bug is not shown to be non-binding.** Re-check headroom
