@@ -308,33 +308,33 @@ shard configs (ca7a4cd), and `tests/cpu/test_request_timeout.py` now asserts, pe
 config, that the timeout covers a full-length turn at that file's `max_tokens`.
 Running jobs read their config at start, so a change reaches only later jobs.
 
-One observation is left standing but downgraded to "not reproduced". After the
-wiring fix, the t3600 continuation of Qwen3.5-9B `resil6-s2` (5649568) ran two
-requests for ~60 min at an engine-reported ~44 tok/s aggregate with KV usage
-flat at 1.1%; `lcbhard_4 s0` completed genuinely (7 turns of 1.6k–8.5k tokens —
-the timeout was its whole story), while `lcbhard_10 s0` came back at ~62 min as
-a **zero-token record** (`n_turns` 2, `turn_n_generated [0, 0]`, `hook_data`
-false, no residuals) — a request that did not return inside 3600 s, which at
-16–22 tok/s would be more tokens than the 24,576 cap allows. `hook_data: false`
-is the discriminator: the request never returned hook results at all, as
-opposed to returning empty ones, so this is "server never finished", not
-"server finished with nothing". The flat 1.1% KV is the other observation a
-slow-but-progressing generation does not explain. The diagnostic
-could not reproduce a non-returning request; if this recurs at 3600 s treat it
-as a second fault, otherwise as noise. Whatever the cause, **a timed-out sample
-leaves a record that blocks resume**: to recollect `Qwen3.5-9B/resil6`
-`lcbhard_10 s0`, delete that line from `rollouts.shard2of3.jsonl` first.
-`scripts/live_trajectory.py` excludes such records ("with token data" is the
-count to read), but a raw `wc -l` does not. Ministral-3-14B's one hang was a
-different shape (engine log frozen at 0 tok/s mid-rollout, `appr6-s1`, 5648824;
-cancelled, continuation finished the shard).
+One fault, two knobs — and the one everyone reaches for is the wrong one. The
+first "fix" (`healthy_rl.rollouts.eval_generate_config` passing
+`timeout=request_timeout_s(cfg)` into `GenerateConfig`, plus `request_timeout_s:
+3600` in every shard config) was inert for the transport, as the paragraph above
+records: the effective per-request timeout stayed at the SDK's 600 s until
+`HealthyRLLensAPI.__init__` set `client_timeout` (694d74d). Everything run before
+that commit — the whole 2x2, all mindset cells, the base re-runs — ran under an
+effective 600 s, which is harmless for Ministral and gemma (~1k-token turns) and
+is why the Qwen3.5-9B cells are the only short ones. The post-wiring-fix t3600
+continuation (5649568) that looked like "a request that never returns" was the
+same sawtooth: its `lcbhard_10 s0` came back at ~62 min as a zero-token,
+`hook_data: false` record — the request never returned hook results because it
+was restarted every 600 s until Inspect gave up — while `lcbhard_4 s0`, whose
+turns fit in 600 s, completed genuinely. Signature to remember: **KV usage that
+resets every 600 s** with a client parked on `Attempt 1/6` means `client_timeout`
+is not set. Whatever the cause, **a timed-out sample leaves a record that blocks
+resume**: to recollect `Qwen3.5-9B/resil6` `lcbhard_10 s0`, delete that line
+from `rollouts.shard2of3.jsonl` first. `scripts/live_trajectory.py` excludes such
+records ("with token data" is the count to read), but a raw `wc -l` does not.
+Ministral-3-14B's one hang was a different shape (engine log frozen at 0 tok/s
+mid-rollout, `appr6-s1`, 5648824; cancelled, continuation finished the shard).
 
-The fix is `healthy_rl.rollouts.eval_generate_config`, one helper that builds
-that config with `timeout=request_timeout_s(cfg)`; the same value now also goes
-to `preflight_provider`. The default stays 600 so existing shards are unchanged,
-which means **a cell whose turns can exceed 600 s must raise
-`request_timeout_s` in its own config** — the fix makes the knob work, it does
-not pick a value for you. `tests/cpu/test_request_timeout.py` pins the wiring.
+`request_timeout_s` still feeds `eval_generate_config` and the preflight
+`LensClient`; `client_timeout` is what the rollout transport obeys, and
+`tests/cpu/test_request_timeout.py` now pins both — the earlier test passed while
+the bug was live, which is the trap: `config.timeout` is settable, testable and
+inert.
 
 Note the fix only helps jobs that *start* after it lands: a running job has
 already imported the module.
