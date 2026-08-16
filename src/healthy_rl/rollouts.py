@@ -2278,10 +2278,14 @@ def request_timeout_s(cfg: Mapping[str, Any]) -> int:
 
     **This must exceed the time a full-length turn takes**, or the client
     abandons a request the server is still serving and retries it from scratch,
-    forever -- the Qwen-only hang in docs/infrastructure.md. Wiring the value
-    through to the eval was necessary but not sufficient: the value itself was
-    still 600, and at 16.1 tok/s (8 concurrent, hooked) that is exceeded by any
-    turn over ~9700 tokens.
+    forever -- the rollout hang in docs/infrastructure.md. At 16.1 tok/s
+    (8 concurrent, hooked) a 600 s timeout is exceeded by any turn over ~9700
+    tokens.
+
+    Note this value only bites where it is actually applied. It reaches the
+    transport through ``HealthyRLLensAPI.__init__``'s ``client_timeout``; passing
+    it to ``GenerateConfig.timeout`` alone does nothing, which is how the first
+    two attempts at this fix both failed while testing green.
     """
     return int(float(cfg.get("request_timeout_s", DEFAULT_REQUEST_TIMEOUT_S)))
 
@@ -2291,12 +2295,21 @@ def eval_generate_config(
 ) -> "GenerateConfig":
     """The sampling config every rollout generation runs under.
 
-    Extracted from ``run_rollouts`` so the timeout is testable without a server.
-    ``timeout`` is the one that bites: leaving it unset gives the OpenAI SDK
-    default of 600 s, which is shorter than a full-length turn on the models
-    that generate the longest outputs, and the client then abandons and retries
-    a request the server is still happily serving -- forever. That is the
-    Qwen-only "hang" in docs/infrastructure.md.
+    Extracted from ``run_rollouts`` so it is testable without a server.
+
+    **``timeout`` here does NOT control the HTTP transport.** Inspect's
+    OpenAI-compatible provider builds its httpx client from a ``client_timeout``
+    *constructor* argument and never reads ``GenerateConfig.timeout``. Setting it
+    here is inert as far as request abandonment is concerned, and it is kept only
+    because Inspect uses it in its own retry accounting.
+
+    This is not a hypothetical distinction. Setting ``timeout`` here *was* shipped
+    as the fix for the rollout hang, with a passing test, and the hang continued:
+    the server's KV usage went on sawtoothing with resets exactly 600 s apart, the
+    OpenAI SDK's own default. The knob that actually works is set in
+    ``HealthyRLLensAPI.__init__`` -- see that class and
+    docs/infrastructure.md. **If you are here because rollouts are hanging, this
+    line is not the fix; check ``client_timeout``.**
     """
     from inspect_ai.model import GenerateConfig
 
