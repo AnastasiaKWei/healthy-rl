@@ -12,6 +12,9 @@
 #   priority 2  Ministral-3-14B-Reasoning-2512 d6r-base   inoc6      nice 1000
 #   priority 3  gemma-3-12b-it                aff6r-base  affinoc6   nice 2000
 #   priority 4  Ministral-3-14B-Reasoning-2512 aff6r-base affinoc6   nice 3000
+#   added 2026-08-16 18:10 (requested after the first four were submitted):
+#   priority 1b gemma-3-12b-it                sp6r-base   spinoc6    nice 0
+#               (scratchpad on, affect off -- the base of gemma's sp* mindset cells)
 # Each shard: primary (4h) -> -cont -> -cont2, chained afterany. Resume appends;
 # an idle continuation exits after model load. Priority is honoured because the
 # cluster runs PriorityType=priority/multifactor.
@@ -50,6 +53,7 @@ CELLS=(
   "Ministral-3-14B-Reasoning-2512|inoc6|d6r|1000"
   "gemma-3-12b-it|affinoc6|aff6r|2000"
   "Ministral-3-14B-Reasoning-2512|affinoc6|aff6r|3000"
+  "gemma-3-12b-it|spinoc6|sp6r|0"
 )
 
 # Empty means every model / every base. A row has to match every filter that is
