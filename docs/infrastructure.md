@@ -216,6 +216,14 @@ Two more:
   falls back to `<bench_dir>/conflicting.parquet`, so pointing `bench_dir` at the
   `original` split's directory alone sends the run hunting for a conflicting
   parquet that is not there. Both keys appear in every `pos6`/`affpos6` config.
+- **`bench_dir` means two different directories.** In `configs/rollouts.yaml`
+  (read by `scripts/run_rollouts.py`) it is one split's *fetch* directory,
+  `$ARTIFACT_DIR/bench/v1`. In `configs/dashboard.yaml` it is the bench *root*,
+  `$ARTIFACT_DIR/bench`, and `split_parquets` maps each split to its parquet below
+  it — the dashboard offers both splits in one session, so it cannot be pinned to
+  one fetch directory. Each is right for its stage and neither validates the
+  other's value, so a key copied between the two configs points the run one level
+  off, at a directory with no parquet where it looks.
 - **`serve.max_model_len` must fit the checkpoint, and a copied serve block
   will not.** Qwen3-14B caps `max_position_embeddings` at 40960; vLLM rejects a
   larger `max_model_len` at engine construction rather than clamping it. All
@@ -249,3 +257,105 @@ rollouts at more turns is the better trade for this question.
 
 Check `turn_n_generated` in the rollout records before trusting any trajectory. A
 run where most turns sit exactly at the cap is measuring the cap.
+
+## Affect Scope dashboard
+
+The interactive readout (`src/healthy_rl/dashboard/`, spec in
+`docs/superpowers/specs/2026-08-15-affect-dashboard-design.md`). It runs as a
+`serve.slurm` stage, so everything above about the cluster holds for it too: no
+DNS on the compute node, two GPUs, apptainer for anything that executes model
+code.
+
+```bash
+sbatch --time=4:00:00 slurm/serve.slurm --model Ministral-3-14B-Reasoning-2512 \
+    --config configs/dashboard.yaml --stage scripts/dashboard.py
+```
+
+`scripts/dashboard.py` loads the vectors, runs the startup checks, binds uvicorn
+on a free port of `0.0.0.0`, and writes `host:port` to
+`$ARTIFACT_DIR/serve/<model>/<jobid>/dashboard-endpoint`, beside vLLM's own
+`endpoint` file. It deletes that file on the way out. A job killed outright
+(SIGKILL, node failure) leaves one behind, and an ssh tunnel to a dead node's
+port fails in a way that looks like a broken dashboard — so
+`scripts/dashboard_tunnel.sh` checks `squeue` for the job the endpoint belongs to
+and warns when it is not there.
+
+The helper reads `.env`, but an `ARTIFACT_DIR` or `HEALTHY_RL_LOGIN_HOST` already
+in the environment wins over the file (`set -a; . .env` would otherwise overwrite
+both, so each is saved and put back). `HEALTHY_RL_ENV_FILE` chooses which `.env`
+is sourced — the tests pin it at `/dev/null`. `HEALTHY_RL_LOGIN_HOST` is also
+what the stage itself prints in the tunnel line it logs; without it the line says
+`<login-host>`.
+
+There is no auth. The port is reachable from anything that can reach the compute
+node; the tunnel is the only intended route.
+
+### No new dependencies
+
+`fastapi`, `uvicorn` and `httpx` are already installed as vLLM's own
+dependencies, so the dashboard adds nothing to `pyproject.toml`. Convenient, and
+fragile in exactly one direction: `uv sync` still reverts
+`patches/vllm_lens_zstd_threadsafe.py`, the same as for rollouts.
+
+### The zstd patch is recorded, not required
+
+The stage does **not** refuse to start when the file patch is missing. Instead
+`startup_checks` reads whether `vllm_lens._helpers._serialize`'s compressor is the
+patch's `_PerCallZstd`, calls `make_zstd_threadsafe()` to install the in-memory
+shim either way, prints `WARNING: vllm-lens zstd file patch is NOT applied ...` to
+stderr if it was not, and records `zstd_file_patch_present` and
+`zstd_inmemory_shim` in `session.json` (both are shown in the Settings tab). The
+shim makes this process safe, and this process is the only one issuing capture
+requests, so refusing would have cost a session and bought no correctness. The
+flag is what keeps it honest: a session recorded without the file patch says so,
+permanently.
+
+### Sandbox binds
+
+Model-generated code runs only through `Sandbox.run`, which is
+`apptainer exec --contain --cleanenv --writable-tmpfs` around
+`healthy_rl.dashboard.sandbox_cli`:
+
+| bind | mode | why |
+|---|---|---|
+| `PROJECT_DIR` → `/project` | ro | the helper's own code (`PYTHONPATH=/project/src`) |
+| `$ARTIFACT_DIR/bench` → `/bench` | ro | the split parquets |
+| `$ARTIFACT_DIR/dashboard/.scratch/<jobid>` → `/scratch` | rw | the code file, cwd, `TMPDIR` |
+
+Nothing else under `$ARTIFACT_DIR` is visible, so the sandbox cannot reach the
+records it is generating. Two things that look like omissions and are not:
+
+- **`--env HOME=...` is not passed.** The image sets `HOME=/work`, and apptainer
+  answers every override with `Overriding HOME environment variable with
+  APPTAINERENV_HOME is not permitted` — one WARNING line on stderr of every single
+  call. Under `--contain --writable-tmpfs` the in-image `/work` is a throwaway
+  tmpfs, so HOME is already contained.
+- **No `--pid` namespace.** The primary guard on runaway code is the in-container
+  wall-clock timeout (`sandbox_timeout_s`, default 30).
+
+**Each `Sandbox.run` costs ~5.6 s before any test executes**, all of it apptainer
+start-up. That is why the host-side timeout is `sandbox_timeout_s +
+STARTUP_GRACE_S` (30 s) rather than the container limit alone, and why a six-attempt
+task loop feels slower than the generation times add up to.
+
+### `SessionStore.append` needs a lock, but not the obvious one
+
+A task run and a chat send are in flight on different threads, both appending. The
+tempting test — hammer `append` from N threads, assert no line is torn — passes
+**without any lock**, because one record is a single buffered write to a handle
+opened `O_APPEND` and does not tear. The real race is the lazy `JsonlWriter`
+construction: unsynchronised, N threads each see `self._writer is None` and open
+their own handle; the losers are dropped without being closed (a leaked fd apiece)
+and the rows they wrote go uncounted by the survivor. `append` and `close` take a
+`threading.Lock`, which also covers the `np.savez`, so a row is never visible
+before the arrays it points at.
+
+### `.msg{flex:none}` — the transcript clipping trap
+
+Message bubbles in a scrolling flex column need `flex:none`. Without it the
+default `flex-shrink:1` lets a long turn be squeezed to fit the column: the
+transcript renders with its text cut off and no scrollbar to reveal it. This is
+the bug the published mockup shipped with, and it is why the spec says the mockup
+is a reference rather than a drop-in. Every fixed-size flex child in
+`src/healthy_rl/dashboard/static/index.html` carries the same declaration — status
+dots, rail markers, legend swatches.
