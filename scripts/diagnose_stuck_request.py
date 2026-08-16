@@ -62,7 +62,13 @@ def check_instruction_matches(artifact_root: str) -> None:
     import glob
 
     for path in glob.glob(f"{artifact_root}/rollouts/*/*/summary*.json"):
-        recorded = json.load(open(path)).get("instruction")
+        summary = json.load(open(path))
+        # Affect-prompt runs append the AFFECT request to the instruction, so
+        # their `instruction` legitimately differs. Compare against the neutral
+        # runs only -- this diagnostic sends the neutral first turn.
+        if summary.get("affect_prompt"):
+            continue
+        recorded = summary.get("instruction")
         if recorded and recorded != INSTRUCTION:
             raise SystemExit(
                 f"INSTRUCTION drifted from what the runs used ({path}).\n"
