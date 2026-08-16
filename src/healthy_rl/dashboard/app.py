@@ -262,9 +262,8 @@ def create_app(state: AppState) -> FastAPI:
         models = st.store.session.get("models", {})
         m = models.get(rec["model"], {}) if rec else {}
         emotions = m.get("emotions") or (rec or {}).get("emotions") or []
-        layers = (rec or {}).get("capture_layers", m.get("capture_layers", []))
-        return VectorsMeta(tuple(emotions), tuple(int(l) for l in layers),
-                           (rec or {}).get("probe_layer", m.get("probe_layer")))
+        layers = (rec or {}).get("capture_layers", [])
+        return VectorsMeta(tuple(emotions), tuple(int(l) for l in layers), (rec or {}).get("probe_layer"))
 
     def _first_meta() -> Vectors | VectorsMeta:
         """Session-level emotions/layers for the page's boot: the first model's in rollouts mode."""
@@ -291,7 +290,7 @@ def create_app(state: AppState) -> FastAPI:
 
     def _writable() -> None:
         if st.read_only or ROLL:
-            raise HTTPException(409, "replay session is read-only")
+            raise HTTPException(409, "session is read-only")
 
     def _split(split: str) -> str:
         """Reject an unknown split here rather than let the sandbox 500 on it."""
@@ -471,6 +470,7 @@ def create_app(state: AppState) -> FastAPI:
 
     @app.post("/api/task/{cid}/continue")
     async def task_continue(cid: str, request: Request):
+        _writable()
         run = st.tasks.get(cid)
         if run is None:
             raise HTTPException(404, f"no live task {cid}")
@@ -483,6 +483,7 @@ def create_app(state: AppState) -> FastAPI:
 
     @app.post("/api/task/{cid}/stop")
     def task_stop(cid: str):
+        _writable()
         run = st.tasks.get(cid)
         if run is None:
             raise HTTPException(404, f"no live task {cid}")
@@ -509,10 +510,81 @@ def create_app(state: AppState) -> FastAPI:
                        "markers": {"think_end": think[-1] if think else None,
                                    "answer_start": answer[0] if answer else None}})
 
+    def _aggregate_group(recs: list[dict], *, meta: Vectors | VectorsMeta, layer: int, position: str,
+                         stat: str, segment: str, drop_cap: bool) -> dict:
+        """One cell's by-turn series and paired delta, read at ``layer`` in its own emotion order."""
+        li = meta.layer_index(layer)
+        by_conv: dict[str, list] = {}
+        for r in recs:
+            by_conv.setdefault(r["conversation_id"], []).append(r)
+        seqs, excluded = [], 0
+        for rows in by_conv.values():
+            rows.sort(key=lambda r: r["turn_index"])
+            seq = []
+            for r in rows:
+                if r.get("n_generated", 0) == 0:
+                    continue  # an empty turn holds no position among non-empty turns
+                if drop_cap and r.get("at_cap"):
+                    excluded += 1
+                    seq.append(None)
+                    continue
+                if _emotion_order_mismatch(r, meta):
+                    seq.append(None)  # unreadable columns; skipped and counted, never relabelled
+                    continue
+                a = st.store.arrays(r["record_id"])
+                if stat == "token":
+                    v = _readout_or_none(stats.turn_readout, proj=a["proj"], norm=a["norm"],
+                                         proj_prefill=a["proj_prefill"], norm_prefill=a["norm_prefill"],
+                                         proj_end=a.get("proj_end"), norm_end=a.get("norm_end"),
+                                         token_kind=r.get("token_kind", []), layer_index=li, readout=position)
+                else:
+                    v = _readout_or_none(stats.turn_mean, proj=a["proj"], norm=a["norm"],
+                                         token_kind=r.get("token_kind", []), layer_index=li, segment=segment)
+                seq.append(v)
+            if seq:
+                seqs.append(seq)
+        E = len(meta.emotions)
+        bt = stats.by_turn_index(seqs, n_emotions=E)
+        return {"emotions": list(meta.emotions), "layer": layer, "n_conversations": len(seqs),
+                "n_records": len(recs), "excluded_cap": excluded,
+                "skipped": int(np.asarray(bt["skipped"]).sum()),
+                "by_turn": bt, "delta": stats.paired_delta(seqs, n_emotions=E)}
+
+    def _widen(group: dict, emotions: list[str]) -> dict:
+        """Re-index a group's per-emotion columns onto the union order; NaN where the model lacks one.
+
+        Two models need not carry the same directions, and column ``k`` of one is
+        not column ``k`` of the other. The page draws every group against one
+        legend, so the columns are moved onto the union order here rather than
+        lined up by position downstream.
+        """
+        idx = [group["emotions"].index(e) if e in group["emotions"] else None for e in emotions]
+
+        def cols(a):
+            a = np.asarray(a, dtype=np.float64)
+            out = np.full(a.shape[:-1] + (len(emotions),), np.nan)
+            for j, i in enumerate(idx):
+                if i is not None:
+                    out[..., j] = a[..., i]
+            return out
+
+        bt, de = group["by_turn"], group["delta"]
+        group["by_turn"] = {**bt, "mean": cols(bt["mean"]), "sem": cols(bt["sem"])}
+        group["delta"] = {**de, "mean": cols(de["mean"]), "sem": cols(de["sem"]), "p": cols(de["p"])}
+        return group
+
     @app.get("/api/aggregate")
     def aggregate(source: str = "task", split: str | None = None, position: str = "start", stat: str = "token",
-                  segment: str = "all", include_cap: bool = False, layer: int | None = None):
-        """By-turn series and paired last-minus-first delta over one source.
+                  segment: str = "all", include_cap: bool = False, layer: str | None = None,
+                  model: list[str] = Query(default=[]), version: list[str] = Query(default=[])):
+        """By-turn series and paired last-minus-first delta over one source, by group.
+
+        In rollouts mode the groups are ``(model, version)`` cells and ``layer``
+        is either ``probe`` -- each group read at its own model's probe layer --
+        or an integer that every selected model must have captured. A live or
+        replay session is one group of one model. Each group carries its own
+        emotion order; ``emotions`` at the top level is the union the page draws
+        against, and every group's columns are widened onto it.
 
         ``position`` names the readout when ``stat="token"``; ``segment`` names
         the span when ``stat="mean"``. Each is inert under the other stat.
@@ -530,58 +602,65 @@ def create_app(state: AppState) -> FastAPI:
         recovers is one flagged ``at_cap`` that finished on ``stop`` exactly at
         the cap, which still has its last row.
         """
-        if source not in ("task", "chat"):
-            raise HTTPException(400, "source must be 'task' or 'chat'")
+        if source not in ("task", "chat", "rollout"):
+            raise HTTPException(400, "source must be 'task', 'chat' or 'rollout'")
         if position not in stats.READOUTS or stat not in ("token", "mean") or segment not in stats.SEGMENTS:
             raise HTTPException(400, "bad position/stat/segment")
-        if split is not None:
+        if split is not None and source != "rollout":
             _split(split)
-        layer = _layer(layer)
-        li = V.layer_index(layer)
+        want_layer: int | None = None
+        if layer not in (None, "", "probe"):
+            try:
+                want_layer = int(layer)
+            except ValueError:
+                raise HTTPException(400, "layer must be 'probe' or an integer") from None
         recs = [r for r in st.store.records() if r.get("source") == source]
-        if source == "task":
+        if source == "rollout":
+            if model:
+                recs = [r for r in recs if r["model"] in model]
+            if version:
+                recs = [r for r in recs if r["version"] in version]
+            # Only now, once the selection is narrowed: a full record tokenises its turn.
+            recs = [st.store.record(r["record_id"]) for r in recs]
+        if source in ("task", "rollout"):
             splits = {r.get("bench_split") for r in recs}
             if split is None and len(splits) > 1:
                 raise HTTPException(400, "choose a split; conflicting and original cannot be pooled")
             if split is not None:
                 recs = [r for r in recs if r.get("bench_split") == split]
-        by_conv: dict[str, list] = {}
-        for r in recs:
-            by_conv.setdefault(r["conversation_id"], []).append(r)
         # The cap only contaminates the end readout: it is the position that moves to
         # wherever the budget ran out. A segment mean over the same turn is still fine.
         drop_cap = stat == "token" and position == "end" and not include_cap
-        seqs, excluded = [], 0
-        for rows in by_conv.values():
-            rows.sort(key=lambda r: r["turn_index"])
-            seq = []
-            for r in rows:
-                if r.get("n_generated", 0) == 0:
-                    continue  # an empty turn holds no position among non-empty turns
-                if drop_cap and r.get("at_cap"):
-                    excluded += 1
-                    seq.append(None)
-                    continue
-                if _emotion_order_mismatch(r, V):
-                    seq.append(None)  # unreadable columns; skipped and counted, never relabelled
-                    continue
-                a = st.store.arrays(r["record_id"])
-                if stat == "token":
-                    v = _readout_or_none(stats.turn_readout, proj=a["proj"], norm=a["norm"],
-                                         proj_prefill=a["proj_prefill"], norm_prefill=a["norm_prefill"],
-                                         token_kind=r.get("token_kind", []), layer_index=li, readout=position)
-                else:
-                    v = _readout_or_none(stats.turn_mean, proj=a["proj"], norm=a["norm"],
-                                         token_kind=r.get("token_kind", []), layer_index=li, segment=segment)
-                seq.append(v)
-            if seq:
-                seqs.append(seq)
-        E = len(V.emotions)
-        return _clean({"emotions": V.emotions,
-                       "by_turn": stats.by_turn_index(seqs, n_emotions=E),
-                       "delta": stats.paired_delta(seqs, n_emotions=E),
-                       "n_conversations": len(seqs), "n_records": len(recs), "excluded_cap": excluded,
+        groups_in: dict[tuple, list[dict]] = {}
+        for r in recs:
+            key = (r["model"], r["version"]) if source == "rollout" else (st.store.session.get("model"), None)
+            groups_in.setdefault(key, []).append(r)
+        if not groups_in and source != "rollout":
+            # A live session with nothing recorded yet is still one group, so the page's
+            # single-group consumers get an empty table rather than an undefined one.
+            groups_in[(st.store.session.get("model"), None)] = []
+        groups = []
+        for (m, v), rs in sorted(groups_in.items(), key=lambda kv: (str(kv[0][0]), str(kv[0][1]))):
+            meta = _meta(rs[0]) if rs else _first_meta()
+            lyr = meta.probe_layer if want_layer is None else want_layer
+            if lyr not in meta.capture_layers:
+                raise HTTPException(400, f"layer L{lyr} is not a capture layer of {m} "
+                                         f"(has {list(meta.capture_layers)})")
+            g = _aggregate_group(rs, meta=meta, layer=lyr, position=position, stat=stat, segment=segment,
+                                 drop_cap=drop_cap)
+            g.update(model=m, version=v, bench_split=(rs[0].get("bench_split") if rs else split),
+                     mindset=(rs[0].get("mindset") if rs else None))
+            groups.append(g)
+        emotions: list[str] = []
+        for g in groups:
+            for e in g["emotions"]:
+                if e not in emotions:
+                    emotions.append(e)
+        groups = [_widen(g, emotions) for g in groups]
+        return _clean({"groups": groups, "emotions": emotions,
                        "params": {"source": source, "split": split, "position": position, "stat": stat,
-                                  "segment": segment, "include_cap": include_cap, "layer": layer}})
+                                  "segment": segment, "include_cap": include_cap,
+                                  "layer": "probe" if want_layer is None else want_layer,
+                                  "model": model, "version": version}})
 
     return app

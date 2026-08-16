@@ -973,7 +973,7 @@ async function renderTrajectory() {
   try {
     const data = await aggregateData(aggParams(conv.source || "task", conv.bench_split || null,
                                                 {stat: "token", segment: "all", layer: S.probeLayer}));
-    S.trajSess = data;
+    S.trajSess = (data.groups && data.groups[0]) || null;
   } catch (e) {
     S.trajSess = null;
   }
@@ -1285,7 +1285,11 @@ async function renderAggregate() {
     return;
   }
   msg.innerHTML = "";
-  const emos = data.emotions || [], bt = data.by_turn || {}, del = data.delta || {};
+  // One group here: live and replay always have exactly one, and rollouts mode's
+  // multi-cell rendering is the grid tab's, not this table's.
+  const g = (data.groups && data.groups[0]) ||
+            {by_turn: {}, delta: {}, emotions: [], n_conversations: 0, n_records: 0, excluded_cap: 0};
+  const emos = g.emotions || [], bt = g.by_turn || {}, del = g.delta || {};
   const rows0 = bt.mean || [], K = rows0.length;
   const skippedTotal = (bt.skipped || []).reduce((a, b) => a + (b || 0), 0);
   const rows = emos.map((e, k) => ({
@@ -1310,14 +1314,14 @@ async function renderAggregate() {
       '<td class="n">' + (del.n || 0) + '</td><td class="n">' + skippedTotal + "</td></tr>";
   });
   table.innerHTML = html;
-  $("#aggChartSub").textContent = data.n_conversations + " conversation" + (data.n_conversations === 1 ? "" : "s") + " · " +
-    data.n_records + " records · " + (data.excluded_cap ? data.excluded_cap + " capped turns excluded · " : "") + "band = ±1 SEM";
-  aggDraw(data);
+  $("#aggChartSub").textContent = g.n_conversations + " conversation" + (g.n_conversations === 1 ? "" : "s") + " · " +
+    g.n_records + " records · " + (g.excluded_cap ? g.excluded_cap + " capped turns excluded · " : "") + "band = ±1 SEM";
+  aggDraw(g);
 }
 
-function aggDraw(data) {
+function aggDraw(group) {
   const host = $("#aggChart"); host.innerHTML = "";
-  const bt = data.by_turn || {}, ae = data.emotions || [], rows = bt.mean || [], sems = bt.sem || [];
+  const bt = group.by_turn || {}, ae = group.emotions || [], rows = bt.mean || [], sems = bt.sem || [];
   const K = rows.length;
   const emos = S.head.filter(e => ae.indexOf(e) >= 0 && S.shown.has(e));
   if (!K || !emos.length) { host.innerHTML = '<p class="hint">No by-turn series for this filter.</p>'; return; }

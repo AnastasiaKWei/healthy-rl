@@ -104,10 +104,11 @@ def test_aggregate_shapes_and_split_guard(client):
         with client.stream("POST", "/api/task/start", json={"split": "original", "task_id": tid, "attempts": 2, "auto_continue": True}) as r:
             _sse(r)
     a = client.get("/api/aggregate", params={"source": "task", "split": "original", "position": "start", "stat": "token", "segment": "all"}).json()
-    assert a["emotions"] == ["desperate", "frustrated", "joyful"] and a["n_conversations"] == 2
-    assert len(a["by_turn"]["mean"]) >= 1 and len(a["by_turn"]["mean"][0]) == 3 and a["delta"]["n"] == 2
+    g = a["groups"][0]
+    assert a["emotions"] == ["desperate", "frustrated", "joyful"] and g["n_conversations"] == 2
+    assert len(g["by_turn"]["mean"]) >= 1 and len(g["by_turn"]["mean"][0]) == 3 and g["delta"]["n"] == 2
     m = client.get("/api/aggregate", params={"source": "task", "split": "original", "position": "end", "stat": "mean", "segment": "answer"}).json()
-    assert m["delta"]["n"] == 2
+    assert m["groups"][0]["delta"]["n"] == 2
     with client.stream("POST", "/api/task/start", json={"split": "conflicting", "task_id": "lcbhard_0", "attempts": 1, "auto_continue": True}) as r:
         _sse(r)
     assert client.get("/api/aggregate", params={"source": "task"}).status_code == 400
@@ -126,15 +127,15 @@ def test_at_cap_turns_are_excluded_from_the_end_readout_unless_asked(client):
     with client.stream("POST", "/api/task/start", json={"split": "original", "task_id": "lcbhard_0", "attempts": 2, "auto_continue": True}) as r:
         _sse(r)
     p = {"source": "task", "split": "original", "position": "end", "stat": "token"}
-    excluded = client.get("/api/aggregate", params=p).json()
+    excluded = client.get("/api/aggregate", params=p).json()["groups"][0]
     assert excluded["excluded_cap"] == 2 and excluded["delta"]["n"] == 0
     assert len(excluded["delta"]["mean"]) == 3  # width held even with nothing to average
-    kept = client.get("/api/aggregate", params={**p, "include_cap": "true"}).json()
+    kept = client.get("/api/aggregate", params={**p, "include_cap": "true"}).json()["groups"][0]
     # Asking for them back stops the exclusion, but a capped turn's last token was
     # never fed back through the model, so "end" has no residual row to read either.
     assert kept["excluded_cap"] == 0 and kept["delta"]["n"] == 0
     # The same turns are readable at a position the cap did not eat.
-    start = client.get("/api/aggregate", params={**p, "position": "start"}).json()
+    start = client.get("/api/aggregate", params={**p, "position": "start"}).json()["groups"][0]
     assert start["excluded_cap"] == 0 and start["delta"]["n"] == 1
 
 
@@ -194,7 +195,7 @@ def test_a_misaligned_record_is_unreadable_not_a_500(tmp_path):
     assert isinstance(conv["turns"][1]["readouts"]["desperate"]["start"], float)  # prefill needs no kinds
     a = client.get("/api/aggregate", params={"source": "chat", "position": "end", "stat": "token",
                                              "include_cap": "true"}).json()
-    assert a["by_turn"]["skipped"] == [0, 1]
+    assert a["groups"][0]["by_turn"]["skipped"] == [0, 1]
 
 
 def test_health_monitor_reports_the_failure_it_saw():
@@ -315,7 +316,7 @@ def test_a_record_written_under_a_different_emotion_order_is_refused_not_relabel
     assert all(v is None for v in turns[1]["readouts"]["desperate"].values())
     # And it is skipped-and-counted in the aggregate, never quietly relabelled.
     a = client.get("/api/aggregate", params={"source": "chat", "position": "start"}).json()
-    assert a["by_turn"]["skipped"] == [0, 1]
+    assert a["groups"][0]["by_turn"]["skipped"] == [0, 1]
 
 
 def test_rehydrated_chat_replays_the_answer_when_the_server_parsed_the_reasoning(client, state):
@@ -432,3 +433,41 @@ def test_rollouts_mode_refuses_generation(tmp_path):
     assert c.post("/api/chat/new/send", json={"text": "x"}).status_code == 409
     assert c.post("/api/task/start", json={"split": "original", "task_id": "lcbhard_0"}).status_code == 409
     assert c.get("/api/problems").status_code == 409
+
+
+def test_aggregate_live_is_a_single_group(client):
+    # Even with nothing recorded yet: the page reads groups[0] unconditionally.
+    empty = client.get("/api/aggregate", params={"source": "chat"}).json()
+    assert len(empty["groups"]) == 1 and empty["groups"][0]["n_records"] == 0
+    with client.stream("POST", "/api/chat/new/send", json={"text": "hello"}) as r:
+        r.read()
+    a = client.get("/api/aggregate", params={"source": "chat"}).json()
+    assert len(a["groups"]) == 1 and a["groups"][0]["n_conversations"] == 1
+    g = a["groups"][0]
+    assert g["model"] == "fake" and g["version"] is None and g["layer"] == 20
+    assert "mean" in g["by_turn"] and "mean" in g["delta"] and a["emotions"] == ["desperate", "frustrated", "joyful"]
+
+
+def test_aggregate_rollout_groups(tmp_path):
+    c = _rollout_client(tmp_path)
+    a = c.get("/api/aggregate", params={"source": "rollout", "split": "conflicting"}).json()
+    keys = {(g["model"], g["version"]) for g in a["groups"]}
+    assert keys == {("m-a", "appr6"), ("m-a", "d6"), ("m-b", "appr6")}
+    gb = next(g for g in a["groups"] if g["model"] == "m-b")
+    assert gb["layer"] == 15 and gb["n_conversations"] == 1 and gb["bench_split"] == "conflicting"
+    ga = next(g for g in a["groups"] if (g["model"], g["version"]) == ("m-a", "appr6"))
+    assert ga["layer"] == 20 and len(ga["by_turn"]["mean"]) == 2 and ga["skipped"] == 0
+    old = next(g for g in a["groups"] if g["version"] == "d6")
+    assert old["skipped"] == 2                                     # no vectors: both turns None, counted
+    # filters
+    a = c.get("/api/aggregate", params={"source": "rollout", "split": "conflicting", "model": ["m-b"]}).json()
+    assert [(g["model"], g["version"]) for g in a["groups"]] == [("m-b", "appr6")]
+    a = c.get("/api/aggregate", params={"source": "rollout", "split": "conflicting", "model": ["m-a"], "version": ["d6"]}).json()
+    assert [(g["model"], g["version"]) for g in a["groups"]] == [("m-a", "d6")]
+    # layer must exist for every selected model
+    assert c.get("/api/aggregate", params={"source": "rollout", "split": "conflicting", "layer": 20}).status_code == 400
+    assert "m-b" in c.get("/api/aggregate", params={"source": "rollout", "split": "conflicting", "layer": 20}).json()["detail"]
+    assert c.get("/api/aggregate", params={"source": "rollout", "split": "conflicting", "model": ["m-a"], "layer": 10}).status_code == 200
+    # splits are never pooled
+    assert c.get("/api/aggregate", params={"source": "rollout"}).status_code == 400
+    assert c.get("/api/aggregate", params={"source": "rollout", "split": "original"}).json()["groups"][0]["model"] == "m-b"
