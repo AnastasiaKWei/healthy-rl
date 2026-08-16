@@ -25,6 +25,23 @@ class WhitespaceTokenizer:
         return out
 
 
+class GappedTokenizer:
+    """Fast tokenizer whose spans skip leading whitespace, the way SentencePiece does.
+
+    ``"ab  cd"`` -> offsets ``[(0, 2), (4, 6)]``: the gap belongs to no span, and a
+    trailing gap is dropped entirely (``"ab "`` -> ``[(0, 2)]``). Text reconstructed
+    from the spans alone would lose those characters.
+    """
+    is_fast = True
+
+    def __call__(self, text, add_special_tokens=False, return_offsets_mapping=False):
+        spans = [(m.start(), m.end()) for m in re.finditer(r"\S+", text)]
+        out = {"input_ids": list(range(len(spans)))}
+        if return_offsets_mapping:
+            out["offset_mapping"] = spans
+        return out
+
+
 class FakeEvalSamples:
     """eval_loader stand-in: path -> samples. Missing path -> FileNotFoundError like the real one."""
     def __init__(self, mapping: dict[str, list[dict]]):

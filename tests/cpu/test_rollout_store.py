@@ -6,7 +6,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from rollout_cell import EMOTIONS, FakeEvalSamples, WhitespaceTokenizer, make_cell
+from rollout_cell import EMOTIONS, FakeEvalSamples, GappedTokenizer, WhitespaceTokenizer, make_cell
+from healthy_rl.dashboard.generation import split_reasoning
 from healthy_rl.dashboard.rollout_store import RolloutStore, align_tokens, discover_cells, records_from_row, tokenise
 
 ROWS = [
@@ -123,10 +124,16 @@ def test_duplicate_row_is_collapsed_and_counted(tmp_path):
     f = cell / "rollouts.shard0of2.jsonl"
     row = json.loads(f.read_text().splitlines()[0])       # lcbhard_0/s0 again: a re-run after a crash
     row["passed"] = True                                  # the later row is the one that should win
+    stale = st.record("fake-model/appr6/lcbhard_0/s0/t0")  # tokenised from the row about to be replaced
+    untouched = st.record("fake-model/d6/lcbhard_0/s0/t0")   # a different shard file: not rewritten
+    assert stale["passed"] is False
     with f.open("a") as fh:
         fh.write(json.dumps(row) + "\n")
     import os, time
     os.utime(f, (time.time() + 5, time.time() + 5))
+    fresh = st.record("fake-model/appr6/lcbhard_0/s0/t0")
+    assert fresh is not stale and fresh["passed"] is True and fresh["tokenised"] is True
+    assert st.record("fake-model/d6/lcbhard_0/s0/t0") is untouched
     recs = st.records()
     assert len(recs) == 8 and len({r["record_id"] for r in recs}) == 8
     assert next(r for r in recs if r["record_id"] == "fake-model/appr6/lcbhard_0/s0/t0")["passed"] is True
@@ -143,6 +150,40 @@ def test_tokenise_tiles_text_and_keeps_true_starts():
     assert toks == ["ab", "  cd", " e"] and "".join(toks) == "ab  cd e"
     assert starts == [0, 2, 6]
     assert tokenise("", WhitespaceTokenizer()) == ([], [])
+
+
+class _SpecialSpanTokenizer:
+    """Fast tokenizer that emits a zero-width span, the way HF does for a special token."""
+    is_fast = True
+
+    def __call__(self, text, add_special_tokens=False, return_offsets_mapping=False):
+        spans = [(0, 2), (0, 0), (2, 6)]
+        out = {"input_ids": list(range(len(spans)))}
+        if return_offsets_mapping:
+            out["offset_mapping"] = spans
+        return out
+
+
+def test_tokenise_keeps_span_starts_when_offsets_have_gaps():
+    # the gap goes into the token's text, but the start stays the span's own start
+    assert tokenise("ab  cd", GappedTokenizer()) == (["ab", "  cd"], [0, 4])
+    toks, starts = tokenise("ab ", GappedTokenizer())          # trailing gap: no span covers it
+    assert "".join(toks) == "ab " and starts == [0]
+    # a whitespace-only completion has no spans at all
+    assert tokenise("  ", GappedTokenizer()) == (["  "], [0])
+    # a zero-width span keeps its slot in the strip instead of jumping back to 0
+    toks, starts = tokenise("ab  cd", _SpecialSpanTokenizer())
+    assert toks == ["ab", "", "  cd"] and starts == [0, 2, 2] and "".join(toks) == "ab  cd"
+
+
+def test_tokenise_start_offsets_decide_the_think_boundary():
+    text = "[THINK]x[/THINK]  z"
+    _, _, think_end = split_reasoning(text)
+    toks, starts = tokenise(text, GappedTokenizer())
+    assert toks == ["[THINK]x[/THINK]", "  z"] and starts == [0, 18]   # cumulative offsets would say 16
+    assert think_end == 16
+    _, kinds, _, _ = align_tokens(toks, starts, think_end, None)
+    assert kinds == ["think", "answer"]
 
 
 def test_align_tokens_eos_rule():
@@ -178,6 +219,7 @@ def test_record_is_tokenised_and_cached(tmp_path):
     # old cell: tokens exist (text is there) but there are no arrays to align against
     o = st.record("fake-model/d6/lcbhard_0/s0/t0")
     assert o["tokens"] == ["a", " b", " c"] and o["has_token_arrays"] is False and o["misaligned"] is False and o["n_decode"] is None
+    assert z["error"] is None and o["error"] is None       # neither is a problem, just no arrays
 
 
 def test_record_misaligned_when_counts_disagree(tmp_path):
@@ -189,6 +231,21 @@ def test_record_misaligned_when_counts_disagree(tmp_path):
     assert r["misaligned"] is True and "3 tokens" in r["error"] and "7 decode rows" in r["error"]
     assert st.session["cells"][0]["n_tokenised"] == 1 and st.session["cells"][0]["n_misaligned"] == 1
     assert st.conversations()[0]["n_misaligned"] == 1
+
+
+def test_record_reports_npz_problems(tmp_path):
+    st = _store(tmp_path)
+    res = tmp_path / "rollouts" / "fake-model" / "appr6" / "residuals"
+    (res / "lcbhard_0_s0.npz").unlink()
+    r = st.record("fake-model/appr6/lcbhard_0/s0/t1")
+    assert r["misaligned"] is True and "npz missing" in r["error"] and str(res / "lcbhard_0_s0.npz") in r["error"]
+    assert r["has_token_arrays"] is False and r["n_decode"] is None
+    assert r["tokens"] == ["[THINK]x", " y[/THINK]", " z"]        # the text is still fine
+    # half a pair is a problem too -- it is not the honest array-less turn
+    np.savez(res / "lcbhard_0_s1.npz", **{"t1_kind_L20": np.zeros(5, np.int8)})
+    h = st.record("fake-model/appr6/lcbhard_0/s1/t1")
+    assert h["misaligned"] is True and "without" in h["error"] and "t1_proj_L20" in h["error"]
+    assert h["has_token_arrays"] is False and h["n_decode"] is None
 
 
 def test_record_without_tokenizer(tmp_path):

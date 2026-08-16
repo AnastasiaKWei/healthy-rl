@@ -147,11 +147,16 @@ def tokenise(text: str, tokenizer) -> tuple[list[str], list[int]]:
         spans = list(enc["offset_mapping"])
         tokens, starts, prev = [], [], 0
         for i, (s, e) in enumerate(spans):
-            e = max(int(e), prev)
+            s, e = int(s), int(e)
+            if e <= prev:            # a special token's (0, 0) span keeps its place in the strip
+                s = max(s, prev)
+                e = prev
             if i == len(spans) - 1:
                 e = max(e, len(text))
-            tokens.append(text[prev:e]); starts.append(int(s))
+            tokens.append(text[prev:e]); starts.append(s)
             prev = e
+        if prev < len(text):         # no spans at all (whitespace-only text): keep the tiling
+            tokens.append(text[prev:]); starts.append(prev)
         return tokens, starts
     ids = tokenizer.encode(text, add_special_tokens=False)
     tokens = [tokenizer.decode([i]) for i in ids]
@@ -223,6 +228,7 @@ class RolloutStore:
                 self._rows_by_file[f] = [(cell, r) for r in read_jsonl(f)]
                 changed = True
         if changed:
+            prev_light = dict(self._light)                # to spot rows a re-read rewrote
             self._light.clear(); self._order.clear(); self._duplicate_rows.clear()
             seen_rollouts: set[str] = set()
             for f in sorted(self._rows_by_file):
@@ -240,6 +246,9 @@ class RolloutStore:
                         if rid not in self._light:      # order holds each id once; the row read last wins
                             self._order.append(rid)
                         self._light[rid] = rec
+            # a rewritten (or vanished) row invalidates its tokenised record; the rest stay cached
+            for rid in [r for r in self._full if self._light.get(r) != prev_light.get(r)]:
+                del self._full[rid]
             self._session = None
         return changed
 
@@ -249,16 +258,16 @@ class RolloutStore:
         return [self._full.get(rid) or self._light[rid] for rid in self._order]
 
     def record(self, record_id: str) -> dict:
+        self.refresh()                    # first: a re-read row drops its stale tokenised record
         full = self._full.get(record_id)
         if full is not None:
             return full
-        self.refresh()
         light = self._light.get(record_id)
         if light is None:
             raise KeyError(record_id)
         rec = dict(light)
         warnings = list(rec.get("warnings") or [])
-        n_decode = self._decode_rows(rec)
+        n_decode, problem = self._decode_rows(rec)
         rec["n_decode"] = n_decode
         rec["has_token_arrays"] = n_decode is not None
         tok = self._tokenizer_for(rec["model"])
@@ -271,6 +280,9 @@ class RolloutStore:
             toks, kinds, mis, err = align_tokens(toks, starts, think_end, n_decode)
             rec.update(tokens=toks, token_kind=kinds, n_think=sum(1 for k in kinds if k == "think"),
                        misaligned=mis, error=err)
+        if problem is not None and rec["error"] is None:
+            # the text and the turn readouts are still good; only the token strip is not
+            rec.update(misaligned=True, error=problem, has_token_arrays=False)
         # messages_in / feedback: Task 5
         rec["warnings"] = warnings
         rec["tokenised"] = True
@@ -305,7 +317,12 @@ class RolloutStore:
 
     # ---- session ---------------------------------------------------------
     def _has_token_arrays(self, rec: dict) -> bool:
-        """Does this rollout's npz carry per-token projections? Cached per npz path."""
+        """Does *any* turn of this rollout carry per-token projections (``t*_proj_L*``)?
+
+        Rollout-level, and cached per npz path: it answers the conversation and cell
+        tables. The record-level ``has_token_arrays`` is the stricter per-turn question
+        -- see ``_decode_rows``.
+        """
         cache = getattr(self, "_hta", None)
         if cache is None:
             cache = self._hta = {}
@@ -325,19 +342,36 @@ class RolloutStore:
         rel = rec.get("residuals")
         return (self._cell_of(rec).path / rel) if rel else None
 
-    def _decode_rows(self, rec: dict) -> int | None:
-        """Decode-row count at the probe layer, or None when the turn has no per-token arrays."""
+    def _decode_rows(self, rec: dict) -> tuple[int | None, str | None]:
+        """``(decode rows at the probe layer, problem)`` for this one turn.
+
+        A turn has per-token arrays when *both* ``t{t}_proj_L{probe}`` and
+        ``t{t}_kind_L{probe}`` are in the npz -- that pair is what the record-level
+        ``has_token_arrays`` means. ``(None, None)`` is the honest array-less turn
+        (a zero-token turn, or an old cell that only wrote the turn readouts): the
+        record stays aligned and the token strip simply has no per-token data.
+        Everything that should have worked and did not comes back as a problem
+        string, so it reaches the page instead of being swallowed.
+        """
         path = self._npz_path(rec)
         if path is None:
-            return None
-        key = f"t{rec['turn_index']}_kind_L{rec['probe_layer']}"
+            return None, None
+        proj = f"t{rec['turn_index']}_proj_L{rec['probe_layer']}"
+        kind = f"t{rec['turn_index']}_kind_L{rec['probe_layer']}"
         try:
             with np.load(path) as z:
-                if key not in z.files:
-                    return None
-                return int((np.asarray(z[key]).reshape(-1) == 0).sum())
-        except (OSError, ValueError):
-            return None
+                files = set(z.files)
+                if proj not in files and kind not in files:
+                    return None, None
+                if kind not in files:
+                    return None, f"npz has {proj} without {kind}"
+                if proj not in files:
+                    return None, f"npz has {kind} without {proj}"
+                return int((np.asarray(z[kind]).reshape(-1) == 0).sum()), None
+        except FileNotFoundError:
+            return None, f"npz missing: {path}"     # same wording as arrays() so the page dedupes
+        except (OSError, ValueError) as exc:
+            return None, f"npz unreadable: {exc}"
 
     def _cell_of(self, rec: dict) -> Cell:
         return next(c for c in self.cells if c.key == (rec["model"], rec["version"]))
