@@ -170,17 +170,26 @@ MINDSET_VERSION = 2
 # closing line. The labels ("ruled out:", "changing:", "conflict:") are literal
 # output prefixes, which makes compliance greppable -- a null result can then be
 # read as "the reframe did not work" rather than "the model ignored it".
+#
+# The trigger is phrased as a standing rule about the attempts that follow ("open
+# every attempt after that with these two lines"), not as a reaction to an event
+# ("when a test fails, do this"). Those are equivalent in v1, where the block was
+# re-sent every turn, but not in v2: the block now arrives only in the opening
+# message, before any test has failed, and is absent by the time one does. The
+# event-conditional phrasing scored 0/12 compliance in a smoke run for exactly
+# that reason. No attempt count is named, so the wording stays true if
+# --max-attempts changes.
 MINDSET = {
     "growth": (
         "Adopt a Growth Mindset toward every task: treat a failed attempt as evidence "
         "about the problem, not as a verdict on your capability. Accuracy here is "
         "developed through iteration. A failure is a data point that eliminates a wrong "
         "path and narrows down where the solution lies.\n\n"
-        "When a test or step fails, process the feedback through this two-part "
-        "reflection before writing any new code:\n\n"
-        "ruled out: identify the exact logic, assumption, or edge case this failure "
+        "Your first attempt is just the code. Open every attempt after that with these "
+        "two lines, before any new code:\n\n"
+        "ruled out: the exact logic, assumption, or edge case the previous failure "
         "eliminated.\n\n"
-        "so next: define the specific adjustment this new information enables.\n\n"
+        "so next: the specific adjustment this new information enables.\n\n"
         "Example:\n\n"
         "ruled out: sorting by weight alone; it breaks when two values tie.\n\n"
         "so next: sort by weight, using index as a secondary tie-breaker.\n\n"
@@ -199,12 +208,12 @@ MINDSET = {
         "your diagnostic baseline after every failure so past errors do not degrade the "
         "precision of your next attempt.\n\n"
         "Avoid abandoning a sound strategy because error logs are piling up, and avoid "
-        "repeating dead ends. Whenever a test fails, run this reset before writing any "
-        "new code:\n\n"
-        "status check: state the current failure plainly, without treating it as "
+        "repeating dead ends. Your first attempt is just the code. Open every attempt "
+        "after that with these two lines, before any new code:\n\n"
+        "status check: the current failure, stated plainly, without treating it as "
         "evidence that the overall strategy is wrong.\n\n"
-        "changing: identify the single targeted variable or rule you will modify -- "
-        "isolate the tweak rather than scrapping the entire approach.\n\n"
+        "changing: the single targeted variable or rule you will modify -- isolate the "
+        "tweak rather than scrapping the entire approach.\n\n"
         "Example:\n\n"
         "status check: attempt 3 failed on equal-weight inputs; the core sorting logic "
         "is intact.\n\n"
@@ -224,7 +233,8 @@ MINDSET = {
         "close that gap, because the gap is not in your code, and effort spent hunting "
         "a bug that is not there is effort spent on nothing. Telling that case apart "
         "from an ordinary failure is part of the work.\n\n"
-        "Whenever a test fails, run this check before writing any new code:\n\n"
+        "Your first attempt is just the code. Open every attempt after that with this "
+        "check, before any new code:\n\n"
         "check: read the failing test against the part of the specification it covers. "
         "If both can be satisfied at once, fix the code as usual.\n\n"
         "conflict: if they cannot both hold, name the test, the requirement, and why "

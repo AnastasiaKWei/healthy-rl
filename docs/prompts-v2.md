@@ -57,11 +57,11 @@ How to approach this:
 
 Adopt a Growth Mindset toward every task: treat a failed attempt as evidence about the problem, not as a verdict on your capability. Accuracy here is developed through iteration. A failure is a data point that eliminates a wrong path and narrows down where the solution lies.
 
-When a test or step fails, process the feedback through this two-part reflection before writing any new code:
+Your first attempt is just the code. Open every attempt after that with these two lines, before any new code:
 
-ruled out: identify the exact logic, assumption, or edge case this failure eliminated.
+ruled out: the exact logic, assumption, or edge case the previous failure eliminated.
 
-so next: define the specific adjustment this new information enables.
+so next: the specific adjustment this new information enables.
 
 Example:
 
@@ -102,11 +102,11 @@ How to approach this:
 
 Maintain operational Resilience: treat a streak of failed attempts as an expected stage of solving complex problems. Resilience is the ability to reset your diagnostic baseline after every failure so past errors do not degrade the precision of your next attempt.
 
-Avoid abandoning a sound strategy because error logs are piling up, and avoid repeating dead ends. Whenever a test fails, run this reset before writing any new code:
+Avoid abandoning a sound strategy because error logs are piling up, and avoid repeating dead ends. Your first attempt is just the code. Open every attempt after that with these two lines, before any new code:
 
-status check: state the current failure plainly, without treating it as evidence that the overall strategy is wrong.
+status check: the current failure, stated plainly, without treating it as evidence that the overall strategy is wrong.
 
-changing: identify the single targeted variable or rule you will modify -- isolate the tweak rather than scrapping the entire approach.
+changing: the single targeted variable or rule you will modify -- isolate the tweak rather than scrapping the entire approach.
 
 Example:
 
@@ -149,7 +149,7 @@ Before you can judge your own attempt you have to judge the task. A specificatio
 
 When they disagree, no implementation satisfies both. Further attempts cannot close that gap, because the gap is not in your code, and effort spent hunting a bug that is not there is effort spent on nothing. Telling that case apart from an ordinary failure is part of the work.
 
-Whenever a test fails, run this check before writing any new code:
+Your first attempt is just the code. Open every attempt after that with this check, before any new code:
 
 check: read the failing test against the part of the specification it covers. If both can be satisfied at once, fix the code as usual.
 
@@ -186,9 +186,9 @@ You should wrap the code you modified in a SINGLE code block (use ```) (they wil
 | arm | turn 1 | each reminder |
 |---|---:|---:|
 | baseline | 110 | 110 |
-| growth | 236 | 118 |
-| resilience | 271 | 118 |
-| appraisal | 297 | 118 |
+| growth | 237 | 118 |
+| resilience | 278 | 118 |
+| appraisal | 304 | 118 |
 
 Reminder lengths are near-identical across arms because the block is no longer
 in them. In v1 they differed by up to 190 words per turn, which was a
