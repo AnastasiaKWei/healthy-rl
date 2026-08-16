@@ -352,7 +352,7 @@ sequence. 5643496 served the model, generated, and wrote 3 records;
 It returned `smoke_ok: false` because both task attempts hit the 512-token cap and
 came back one decode row short —
 `"512 logprob tokens but 511 decode rows in hook results"` — which
-`assemble_generation` was reporting as `misaligned`. The chat turn (16 tokens,
+`assemble_generation` was reporting as `misaligned`. The chat turn (3 tokens,
 `finish=stop`) aligned fine. Cause and fix are in
 [measurement.md](measurement.md#the-dashboards-readouts) (commit c41c5af): a
 capped generation never feeds its last token back, so that token has no residual
