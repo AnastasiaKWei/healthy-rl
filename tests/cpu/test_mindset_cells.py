@@ -20,6 +20,13 @@ import yaml
 REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts" / "mindset_cells.sh"
 
+# The script sbatch-es slurm/serve.slurm et al. `slurm/` is environment-specific
+# and untracked, so a fresh clone has no way to run these; skip rather than fail.
+pytestmark = pytest.mark.skipif(
+    not (REPO / "slurm" / "serve.slurm").exists(),
+    reason="slurm/ is environment-specific and untracked",
+)
+
 CELLS = {
     ("Ministral-3-14B-Reasoning-2512", "growth6"): ("d6", ["growth"], 0),
     ("Ministral-3-14B-Reasoning-2512", "resil6"): ("d6", ["resilience"], 0),

@@ -52,7 +52,11 @@ def test_per_token_arrays_are_stashed_for_every_capture_layer():
         assert norm.shape == (5,) and norm.dtype == np.float32
         assert kind.shape == (5,) and kind.dtype == np.int8
         assert kind.tolist() == [1, 0, 0, 0, 0]
-        np.testing.assert_allclose(proj.astype(np.float32)[1, 0], layer + 0.14, rtol=1e-2)
+        # the whole row, not one element: a transposed or mis-sliced proj would
+        # still match column 0 by itself.
+        np.testing.assert_allclose(
+            proj[1].astype(np.float32), layer + np.arange(14, 28) / 100, rtol=1e-3
+        )
     # the boundary residuals are still there, only at the residual layer
     assert "res_start_L5" in arrays and "res_end_L5" in arrays
     assert "res_start_L3" not in arrays
