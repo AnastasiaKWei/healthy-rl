@@ -1,0 +1,158 @@
+# Stages 6-7: ImpossibleBench rollouts, emotion readout and steering sweep.
+#
+# Runs inside apptainer/eval.sif against the vllm-lens server slurm/serve.slurm
+# starts. Model name comes from $HEALTHY_RL_MODEL_NAME (or --model); results go
+# to $HEALTHY_RL_ARTIFACT_OUT, never to the read-only /artifacts bind.
+#
+# The pilot runs two models: Qwen3.6-27B and Olmo-3.1-32B-Think. Nothing here is
+# model-specific -- shapes come from the checkpoint via ModelSpec and from the
+# vectors artifact.
+stage: rollouts
+version: v1
+
+# artifact_root defaults to /artifacts inside the container (the read-only bind),
+# and to $ARTIFACT_DIR outside it; --artifact-root and $HEALTHY_RL_ARTIFACT_ROOT
+# override. It must not be pinned here: the repo's .env is visible inside the
+# container too, and its $ARTIFACT_DIR is a host path that is not bound in.
+# vectors_dir / bench_dir / bench_parquet default to
+#   <artifact_root>/vectors/<model>/<version>, <artifact_root>/bench/<version>
+# and are only worth setting to point at a different build.
+
+# --- server, read by slurm/serve.slurm before it allocates the node -----------
+serve:
+  # Sized for the cluster's real hardware: every GPU node here is 2 x A100-40G
+  # (80 GB total) or 2 x L40S-46G (92 GB total) -- there are no 80 GB cards, so
+  # the KV budget is much tighter than a 2x80 GB node would give.
+  #
+  # At tp=2 with utilisation 0.92 (~73 GB usable on A100-40G):
+  #   Qwen3.6-27B  ~54 GB weights -> ~19 GB for KV
+  #   Olmo-3.1-32B ~64 GB weights -> ~9 GB for KV   <- the binding constraint
+  # Olmo costs roughly 260 KB of KV per token (64 layers, GQA), so ~9 GB is about
+  # 35k tokens of KV: three or four full-length sequences resident at once.
+  #
+  # max_model_len stays at 12288 rather than 8192 because exceeding it is a HARD
+  # request failure, while running short of KV only makes vLLM preempt and
+  # recompute. message_limit 40 with max_attempts 6 feeds full test-failure
+  # output back each round, and stderr from a failing test can be long, so an
+  # 8192 window would risk killing rollouts outright to buy throughput.
+  # max_num_seqs 8 matches the rollout concurrency below; Olmo will preempt at
+  # that depth and Qwen will not. If serve logs show heavy preemption on Olmo,
+  # the L40S nodes (92 GB total, ~20 GB KV for Olmo) are the cheaper fix than
+  # shortening the window.
+  max_model_len: 65536
+  gpu_memory_utilization: 0.92
+  max_num_seqs: 8
+
+# --- dataset ------------------------------------------------------------------
+# The scaffold is
+#   impossible_livecodebench(split="conflicting", agent_type="minimal",
+#                            sandbox="local", max_attempts=3, message_limit=30)
+# but its dataset is rebuilt from bench/v1/conflicting.parquet, because compute
+# nodes have no DNS and impossible_livecodebench() calls hf_dataset(). Set
+# use_hf_dataset on a machine that can reach HuggingFace to use it verbatim.
+use_hf_dataset: false
+sandbox: local
+max_attempts: 6
+message_limit: 40
+
+# --- conditions ---------------------------------------------------------------
+# Tier 1 is the unsteered readout that selects the sweep problems; tier 2 carries
+# the `frustrated` control and therefore runs BEFORE tier 3, so a wall-clock
+# timeout costs extra dose-response points rather than the control.
+readout_problems: 12
+sweep_problems: 12
+# Samples per problem, per tier. A single integer applies to every tier.
+samples_per_problem:
+  1: 2
+  2: 8
+  3: 8
+tier2_emotions: [desperate, calm, frustrated]
+tier2_strength: 0.05
+tier3_emotions: [desperate, calm]
+tier3_strength: 0.1
+
+# Pin the sweep to specific task_ids instead of deriving them from the readout.
+# Needed when tier 1 ran as separate shard jobs whose JSONLs a tier-2/3 job
+# cannot see: without it each shard would select its own 12 problems from its own
+# slice of the readout. --sweep-problems overrides this.
+# sweep_problems_override: [lcbhard_3, lcbhard_7, ...]
+
+# --- sampling -----------------------------------------------------------------
+# Temperature must be > 0: repeated samples of one problem at temperature 0 would
+# be identical rollouts.
+temperature: 1.0
+top_p: 1.0
+max_tokens: 24576
+
+# --- concurrency --------------------------------------------------------------
+# Matches serve.max_num_seqs: each in-flight sample holds one server slot and one
+# local sandbox subprocess. This is what sets the overnight wall clock, together
+# with --shard I/N, which splits the expanded rollout list across nodes. Left at
+# 8 deliberately -- the local sandbox spawning one subprocess per in-flight
+# sample is the real constraint and is better measured than guessed.
+max_connections: 8
+max_samples: 8
+max_subprocesses: 8
+max_sandboxes: 8
+
+# --- measurement --------------------------------------------------------------
+# Per-token projections onto all 14 directions are kept at every capture layer
+# (~280 bytes a token). Full residuals are kept only at event positions -- turn
+# boundaries and the first token after a test-failure message -- and only at
+# `probe` by default; `all` means every capture layer, and an explicit list is
+# also accepted.
+residual_layers: probe
+save_residuals: true
+
+# --- preflight ----------------------------------------------------------------
+# One cheap request that proves the projection hook fires on every capture layer
+# and that steering is accepted, before hours are spent.
+preflight_prompt: "Write one sentence about a deadline that is about to be missed."
+preflight_max_tokens: 16
+request_timeout_s: 3600
+health_timeout_s: 1800
+
+# --- affect prompt -------------------------------------------------------------
+# The step0 AFFECT instruction, appended VERBATIM to the task instruction. A
+# demand characteristic by construction, so it is only readable against the
+# matched flag-off run in the same split.
+scratchpad_reasoning: false
+affect_prompt: true
+
+# DEPTH-6 run, affect prompt ON, conflicting (impossible) tests.
+#
+# THIS MODEL FAILED THE LOGIT-LENS GATE AND IS RUN ANYWAY (ruling 2026-08-15).
+# The gate scores whether each direction's own English word appears in the top-30
+# logit-lens tokens, which measures lexical form and language before it measures
+# whether the direction is on target. Nemotron's lists are English and on target but in noun/verb
+# form -- *fear* in six languages at #2 for `afraid`, *joy* #4, *sadness* #1,
+# *fury* #13 -- which exact-word matching cannot see. Its gate also ran without
+# a final norm (docs/infrastructure.md#gate-final-norm-key-lookup-misses-nemotronh);
+# recomputing with the norm moved ranks by a few places and changed nothing. Reading the
+# lists showed the directions are faithful; only Gemma 4's are semantically off,
+# and Gemma 4 stays excluded. See docs/measurement.md#what-the-gate-actually-measures.
+#
+# 2x2: {affect prompt on, off} x {conflicting split, original split}. The other
+# three cells for this model are `d6`, `pos6`, `affpos6`. Everything outside the
+# two varied keys is copied from the Qwen3.5-9B d6 shard config, so the cells are
+# comparable within this model and against the other models' 2x2s.
+#
+# max_tokens 24576 across all four cells. 16384 was used by the earlier d6 runs
+# and never bound -- the longest turn any model produced was 14198 tokens -- so
+# matching upward costs nothing and removes the question.
+#
+# out_dir, NOT version: `version` also resolves vectors_dir, so setting it to
+# aff6 would hunt for vectors/<model>/aff6, which does not exist.
+# The path is the CONTAINER path (R40) -- /out is bound to $ARTIFACT_DIR/rollouts.
+shard: "3/6"
+tiers: "1"
+out_dir: /out/rollouts/Nemotron-3-Nano-4B-BF16/aff6r
+
+# --- RE-RUN WITH PER-TOKEN CAPTURE (2026-08-16) ---------------------------------
+# Identical condition to aff6 (same flags, split, problems, samples); a fresh
+# sample at temperature 1.0 written into aff6r so every rollout carries the
+# per-token projection/norm/kind arrays that records written before 2026-08-16
+# lack. Six shards of four rollouts rather than three of eight (see
+# scripts/nemotron_pertok_cells.sh); the shard partition is index % 6, so the
+# 24 (task, sample) items are the same as aff6's. Compare the arm cells
+# (inoc6/affinoc6, *6b) against THIS cell, not aff6.
