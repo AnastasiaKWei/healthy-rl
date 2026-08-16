@@ -30,9 +30,12 @@ def test_replay_state_is_read_only_and_reads_old_records(tmp_path):
     assert rc.post("/api/chat/new/send", json={"text": "x"}).status_code == 409
 
 
-def test_rollouts_state_opens_cells_read_only(tmp_path, capsys):
+def test_rollouts_state_opens_cells_read_only(tmp_path, capsys, monkeypatch):
     from rollout_cell import make_cell
     from healthy_rl.dashboard.__main__ import startup_report
+    # build_state uses the default loaders, which stat $MODEL_DIR/$ARTIFACT_DIR: no login-node
+    # test may read the real ones (Global Constraint), so they point at the tmp tree here.
+    monkeypatch.setenv("MODEL_DIR", str(tmp_path)); monkeypatch.setenv("ARTIFACT_DIR", str(tmp_path))
     make_cell(tmp_path / "r", "m-a", "appr6", rows=[{"task_id": "lcbhard_0", "sample": 0, "completions": ["a b"], "passed": False}])
     st = build_state(fake=False, replay=None, session_dir=None, vectors_dir=None, cfg={}, rollouts=[str(tmp_path / "r")])
     assert st.mode == "rollouts" and st.read_only and st.vectors is None
@@ -46,8 +49,9 @@ def test_rollouts_state_opens_cells_read_only(tmp_path, capsys):
 def test_rollouts_state_with_no_cells_exits(tmp_path):
     import pytest
     (tmp_path / "empty").mkdir()
-    with pytest.raises(SystemExit):
+    with pytest.raises(SystemExit) as e:
         build_state(fake=False, replay=None, session_dir=None, vectors_dir=None, cfg={}, rollouts=[str(tmp_path / "empty")])
+    assert e.value.code == 2
 
 
 def test_startup_report_summarises_a_long_ignored_list(tmp_path):

@@ -41,8 +41,45 @@ def test_discover_cells_from_root_model_and_cell(tmp_path):
 
 def test_discover_cells_dedupes_and_reads_missing_manifest(tmp_path):
     c = make_cell(tmp_path / "r", "m1", "d6", rows=ROWS[:1], max_tokens=None)
-    cells, _ = discover_cells([tmp_path / "r", c])
+    cells, ignored = discover_cells([tmp_path / "r", c])
     assert len(cells) == 1 and cells[0].max_tokens is None
+    assert ignored == []                       # the same directory twice is not a second cell
+
+
+def test_discover_cells_keeps_one_path_per_model_version(tmp_path):
+    """Two roots holding the same cell: the key is what every record resolves its npz through,
+    so keeping both would serve root A's arrays under root B's label."""
+    a = make_cell(tmp_path / "A", "m", "v1", rows=ROWS[:1])
+    b = make_cell(tmp_path / "B", "m", "v1", rows=ROWS[:1])
+    cells, ignored = discover_cells([tmp_path / "A", tmp_path / "B"])
+    assert len(cells) == 1 and cells[0].path == a.resolve()
+    assert ignored == [b.resolve()]
+
+
+def test_discover_cells_names_a_relative_cell_path(tmp_path, monkeypatch):
+    """``--rollouts .`` from inside a cell: model/version come off the path, so resolve first."""
+    c = make_cell(tmp_path / "r", "m1", "d6", rows=ROWS[:1])
+    monkeypatch.chdir(c)
+    cells, _ = discover_cells(["."])
+    assert [(x.model, x.version) for x in cells] == [("m1", "d6")]
+    assert cells[0].path == c.resolve()
+
+
+def test_a_truncated_npz_does_not_break_the_store(tmp_path):
+    """A half-written npz raises zipfile.BadZipFile, whose only base is Exception: every np.load
+    site has to survive it, or one partial file under the root takes the whole dashboard down."""
+    st = _store(tmp_path)
+    npz = tmp_path / "rollouts" / "fake-model" / "appr6" / "residuals" / "lcbhard_0_s0.npz"
+    npz.write_bytes(npz.read_bytes()[:100])
+    st = RolloutStore.open([tmp_path / "rollouts"], tokenizer_loader=lambda m: WhitespaceTokenizer(),
+                           vectors_loader=lambda m: None, eval_loader=FakeEvalSamples({}))
+    assert st.session["cells"] and len(st.records()) == 8      # session reads every rollout's npz
+    assert len(st.conversations()) == 4
+    r = st.record("fake-model/appr6/lcbhard_0/s0/t0")
+    assert r["misaligned"] is True and "npz unreadable" in r["error"]
+    assert st.arrays("fake-model/appr6/lcbhard_0/s0/t0")["proj"].shape[0] == 0
+    ok = st.record("fake-model/appr6/lcbhard_0/s1/t0")         # the neighbouring rollout is untouched
+    assert ok["misaligned"] is False and ok["error"] is None
 
 
 def test_records_from_row_shape(tmp_path):

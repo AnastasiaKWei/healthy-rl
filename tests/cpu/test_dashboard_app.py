@@ -428,6 +428,25 @@ def test_rollouts_tokens_route_validates_record_layers(tmp_path):
     assert c.get("/api/records/nope/tokens").status_code == 404
 
 
+def test_rollouts_routes_survive_a_truncated_npz(tmp_path):
+    """One half-written npz under the opened root used to 500 /api/session, so the page never
+    booted and nothing said which file did it."""
+    make_cell(tmp_path / "r", "m-a", "appr6", rows=RROWS)
+    npz = tmp_path / "r" / "m-a" / "appr6" / "residuals" / "lcbhard_0_s0.npz"
+    npz.write_bytes(npz.read_bytes()[:100])
+    store = RolloutStore.open([tmp_path / "r"], tokenizer_loader=lambda m: WhitespaceTokenizer(),
+                              vectors_loader=lambda m: None, eval_loader=FakeEvalSamples({}))
+    st = AppState(engine=None, sandbox=None, store=store, vectors=None, cfg={}, read_only=True, mode="rollouts")
+    c = TestClient(create_app(st), raise_server_exceptions=False)
+    assert c.get("/api/session").status_code == 200
+    assert c.get("/api/conversations").status_code == 200
+    conv = c.get("/api/conversations/m-a/appr6/lcbhard_0/s0")
+    assert conv.status_code == 200
+    t = conv.json()["turns"][0]
+    assert t["misaligned"] is True and "npz unreadable" in t["error"]
+    assert c.get("/api/aggregate", params={"source": "rollout", "split": "conflicting"}).status_code == 200
+
+
 def test_rollouts_mode_refuses_generation(tmp_path):
     c = _rollout_client(tmp_path)
     assert c.post("/api/chat/new/send", json={"text": "x"}).status_code == 409

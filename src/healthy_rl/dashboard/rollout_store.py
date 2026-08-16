@@ -49,6 +49,7 @@ def _is_cell(p: Path) -> bool:
 
 
 def _cell_at(p: Path) -> Cell:
+    p = Path(p).resolve()          # model/version are read off the path, so "." must be named first
     manifest: dict = {}
     mp = p / "manifest.json"
     if mp.is_file():
@@ -63,15 +64,29 @@ def _cell_at(p: Path) -> Cell:
 def discover_cells(paths: Sequence[str | os.PathLike[str]]) -> tuple[list[Cell], list[Path]]:
     """Cells under each path (a cell, a model, or a root), and the directories skipped.
 
-    Deduped by path, ordered by (model, version). A directory is a cell when it
-    holds ``rollouts*.jsonl``; a model is walked one level, a root two.
+    Deduped by ``(model, version)``, ordered by it. A directory is a cell when it
+    holds ``rollouts*.jsonl``; a model is walked one level, a root two. Two
+    directories that resolve to the same ``(model, version)`` -- the same cell
+    staged under two roots -- cannot both be kept: the key is what every record
+    resolves its npz and its ``.eval`` through, so the second would read the
+    first's arrays under its own label. The first wins; the later path is
+    ignored, and the startup line names it.
     """
-    found: dict[Path, Cell] = {}
+    found: dict[tuple[str, str], Cell] = {}
+    seen: set[Path] = set()
     ignored: list[Path] = []
 
     def visit(p: Path, depth: int) -> None:
         if _is_cell(p):
-            found.setdefault(p.resolve(), _cell_at(p))
+            rp = p.resolve()
+            if rp in seen:              # the same directory reached twice (a root and the cell itself)
+                return
+            seen.add(rp)
+            cell = _cell_at(p)
+            if cell.key in found:
+                ignored.append(rp)
+            else:
+                found[cell.key] = cell
             return
         if depth == 0 or not p.is_dir():
             ignored.append(p)
@@ -331,6 +346,7 @@ class RolloutStore:
         self._tokenizers: dict[str, Any] = {}                    # model -> tokenizer | None
         self._vectors: dict[str, Any] = {}                       # model -> Vectors | None
         self._evals: dict[Path, list[dict] | Exception] = {}     # .eval path -> samples, or why not
+        self._hta: dict[Path, bool] = {}                         # npz path -> any per-token arrays
         self._session: dict | None = None
         self._lock = threading.RLock()           # before refresh(): refresh() takes it
         self.refresh()
@@ -381,6 +397,7 @@ class RolloutStore:
             # a rewritten (or vanished) row invalidates its tokenised record; the rest stay cached
             for rid in [r for r in list(self._full) if not _same_light(self._light.get(r), prev_light.get(r))]:
                 del self._full[rid]
+            self._hta.clear()         # a growing npz can gain per-token arrays between reads
             self._session = None
         return changed
 
@@ -468,7 +485,7 @@ class RolloutStore:
                 out, problems = arrays_from_npz(z, turn=rec["turn_index"], capture_layers=rec["capture_layers"],
                                                 probe_layer=rec["probe_layer"], n_emotions=E,
                                                 emotions=rec["emotions"], vectors=vec)
-        except (OSError, ValueError) as exc:
+        except Exception as exc:          # BadZipFile from a half-written npz has no narrower base
             self._mark(rec, f"npz unreadable: {exc}")
             return empty
         if problems:
@@ -528,9 +545,7 @@ class RolloutStore:
         tables. The record-level ``has_token_arrays`` is the stricter per-turn question
         -- see ``_decode_rows``.
         """
-        cache = getattr(self, "_hta", None)
-        if cache is None:
-            cache = self._hta = {}
+        cache = self._hta
         rel = rec.get("residuals")
         if not rel:
             return False
@@ -539,8 +554,8 @@ class RolloutStore:
             try:
                 with np.load(path) as z:
                     cache[path] = any(k.startswith("t") and "_proj_L" in k for k in z.files)
-            except (OSError, ValueError):
-                cache[path] = False
+            except Exception:                 # a truncated npz is not "no arrays" to the page, but
+                cache[path] = False           # it must not take /api/session down either
         return cache[path]
 
     def _npz_path(self, rec: dict) -> Path | None:
@@ -575,7 +590,7 @@ class RolloutStore:
                 return int((np.asarray(z[kind]).reshape(-1) == 0).sum()), None
         except FileNotFoundError:
             return None, f"npz missing: {path}"     # same wording as arrays() so the page dedupes
-        except (OSError, ValueError) as exc:
+        except Exception as exc:              # BadZipFile, EOFError, UnpicklingError, ...
             return None, f"npz unreadable: {exc}"
 
     def _eval_files(self, rec: dict) -> list[Path]:
