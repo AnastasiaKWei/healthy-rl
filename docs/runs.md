@@ -208,6 +208,24 @@ Rollout records, `$ARTIFACT_DIR/rollouts/<model>/<version>/*.jsonl`:
 | Ministral-3-14B-Reasoning-2512 | `aff6r` | 24 | re-run, complete 2026-08-16 ~12:45; jobs 5653075–5653083 |
 | Ministral-3-14B-Reasoning-2512 | `pos6r` | 24 | re-run, complete 2026-08-16 ~12:40; jobs 5653084–5653092 |
 | Ministral-3-14B-Reasoning-2512 | `affpos6r` | 24 | re-run, complete 2026-08-16 ~12:45; jobs 5653093–5653101 |
+| Ministral-3-14B-Reasoning-2512 | `growth6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `growth6`; per-token base `d6r` |
+| Ministral-3-14B-Reasoning-2512 | `resil6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `resil6`; per-token base `d6r` |
+| Ministral-3-14B-Reasoning-2512 | `appr6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `appr6`; per-token base `d6r` |
+| Qwen3.5-9B | `growth6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `growth6`; per-token base `d6r (does not exist yet)` |
+| Qwen3.5-9B | `resil6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `resil6`; per-token base `d6r (does not exist yet)` |
+| Qwen3.5-9B | `appr6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `appr6`; per-token base `d6r (does not exist yet)` |
+| Ministral-3-14B-Reasoning-2512 | `affgrowth6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `affgrowth6`; per-token base `aff6r` |
+| Ministral-3-14B-Reasoning-2512 | `affresil6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `affresil6`; per-token base `aff6r` |
+| Ministral-3-14B-Reasoning-2512 | `affappr6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `affappr6`; per-token base `aff6r` |
+| gemma-3-12b-it | `spgrowth6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `spgrowth6`; per-token base `sp6r` |
+| gemma-3-12b-it | `spresil6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `spresil6`; per-token base `sp6r` |
+| gemma-3-12b-it | `spappr6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `spappr6`; per-token base `sp6r` |
+| gemma-3-12b-it | `affgrowth6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `affgrowth6`; per-token base `aff6r` |
+| gemma-3-12b-it | `affresil6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `affresil6`; per-token base `aff6r` |
+| gemma-3-12b-it | `affappr6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `affappr6`; per-token base `aff6r` |
+| gemma-3-12b-it | `spaffgrowth6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `spaffgrowth6`; per-token base `spaff6` |
+| gemma-3-12b-it | `spaffresil6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `spaffresil6`; per-token base `spaff6` |
+| gemma-3-12b-it | `spaffappr6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `spaffappr6`; per-token base `spaff6` |
 
 gemma-3-12b-it has no `pos6`/`affpos6` cell: it is the flattest of the measured
 models, and the 2x2s went to the models with a clear conflicting-split signal
@@ -288,6 +306,74 @@ rollouts for eight hours. Idle continuations of completed cells were cancelled a
 each cell reached 24.
 
 Submitted 2026-08-16 02:11 from the worktree `.claude/worktrees/mindset` (jobs bind it at `/project`; do not remove that worktree until the last continuation has run). Continuations are `afterany`, so a 4-hour wall (`FAILED 143:0`) releases them; a continuation whose shard is already complete loads the model, finds nothing to do, and exits.
+
+### Mindset jobs, trigger-fixed text (`…6b`)
+
+Submitted 2026-08-16 13:37 from the main checkout `/mnt/cup/labs/graziano/jack/healthy-rl`
+on branch `feature/mindset-trigger-fix` at commit `a7e31c7` (`ONLY_TEXT=fixed
+scripts/mindset_cells.sh --submit`; jobs bind this checkout at `/project`, so do not
+check out a branch here that lacks `mindset_hash` until the last continuation has
+run). Same resources, priorities and `-cont`/`-cont2` chaining as the 02:11 set;
+`request_timeout_s: 3600` and the client-timeout fix (`694d74d`) are in effect, which
+the 02:11 Qwen3.5-9B shards did not have. They queue behind the Ministral
+`aff6r`/`affpos6r` re-submission of 13:0x.
+
+| model | version | shard | primary | continuations |
+|---|---|---|---|---|
+| Ministral-3-14B-Reasoning-2512 | growth6b | s0 | 5654163 | 5654164 / 5654165 |
+| Ministral-3-14B-Reasoning-2512 | growth6b | s1 | 5654166 | 5654168 / 5654169 |
+| Ministral-3-14B-Reasoning-2512 | growth6b | s2 | 5654170 | 5654171 / 5654172 |
+| Ministral-3-14B-Reasoning-2512 | resil6b | s0 | 5654173 | 5654174 / 5654175 |
+| Ministral-3-14B-Reasoning-2512 | resil6b | s1 | 5654176 | 5654177 / 5654178 |
+| Ministral-3-14B-Reasoning-2512 | resil6b | s2 | 5654179 | 5654180 / 5654181 |
+| Ministral-3-14B-Reasoning-2512 | appr6b | s0 | 5654182 | 5654183 / 5654184 |
+| Ministral-3-14B-Reasoning-2512 | appr6b | s1 | 5654185 | 5654186 / 5654187 |
+| Ministral-3-14B-Reasoning-2512 | appr6b | s2 | 5654188 | 5654189 / 5654190 |
+| Qwen3.5-9B | growth6b | s0 | 5654191 | 5654192 / 5654193 |
+| Qwen3.5-9B | growth6b | s1 | 5654194 | 5654195 / 5654196 |
+| Qwen3.5-9B | growth6b | s2 | 5654197 | 5654198 / 5654199 |
+| Qwen3.5-9B | resil6b | s0 | 5654200 | 5654201 / 5654202 |
+| Qwen3.5-9B | resil6b | s1 | 5654203 | 5654204 / 5654205 |
+| Qwen3.5-9B | resil6b | s2 | 5654206 | 5654207 / 5654208 |
+| Qwen3.5-9B | appr6b | s0 | 5654209 | 5654210 / 5654211 |
+| Qwen3.5-9B | appr6b | s1 | 5654212 | 5654213 / 5654214 |
+| Qwen3.5-9B | appr6b | s2 | 5654215 | 5654216 / 5654217 |
+| Ministral-3-14B-Reasoning-2512 | affgrowth6b | s0 | 5654218 | 5654219 / 5654220 |
+| Ministral-3-14B-Reasoning-2512 | affgrowth6b | s1 | 5654221 | 5654222 / 5654223 |
+| Ministral-3-14B-Reasoning-2512 | affgrowth6b | s2 | 5654224 | 5654225 / 5654226 |
+| Ministral-3-14B-Reasoning-2512 | affresil6b | s0 | 5654227 | 5654228 / 5654229 |
+| Ministral-3-14B-Reasoning-2512 | affresil6b | s1 | 5654230 | 5654231 / 5654232 |
+| Ministral-3-14B-Reasoning-2512 | affresil6b | s2 | 5654233 | 5654234 / 5654235 |
+| Ministral-3-14B-Reasoning-2512 | affappr6b | s0 | 5654236 | 5654237 / 5654238 |
+| Ministral-3-14B-Reasoning-2512 | affappr6b | s1 | 5654239 | 5654240 / 5654241 |
+| Ministral-3-14B-Reasoning-2512 | affappr6b | s2 | 5654242 | 5654243 / 5654244 |
+| gemma-3-12b-it | spgrowth6b | s0 | 5654245 | 5654246 / 5654247 |
+| gemma-3-12b-it | spgrowth6b | s1 | 5654248 | 5654249 / 5654250 |
+| gemma-3-12b-it | spgrowth6b | s2 | 5654251 | 5654252 / 5654253 |
+| gemma-3-12b-it | spresil6b | s0 | 5654254 | 5654255 / 5654256 |
+| gemma-3-12b-it | spresil6b | s1 | 5654257 | 5654258 / 5654259 |
+| gemma-3-12b-it | spresil6b | s2 | 5654260 | 5654261 / 5654262 |
+| gemma-3-12b-it | spappr6b | s0 | 5654263 | 5654264 / 5654265 |
+| gemma-3-12b-it | spappr6b | s1 | 5654266 | 5654267 / 5654268 |
+| gemma-3-12b-it | spappr6b | s2 | 5654269 | 5654270 / 5654271 |
+| gemma-3-12b-it | affgrowth6b | s0 | 5654272 | 5654273 / 5654274 |
+| gemma-3-12b-it | affgrowth6b | s1 | 5654275 | 5654276 / 5654277 |
+| gemma-3-12b-it | affgrowth6b | s2 | 5654278 | 5654279 / 5654280 |
+| gemma-3-12b-it | affresil6b | s0 | 5654281 | 5654282 / 5654283 |
+| gemma-3-12b-it | affresil6b | s1 | 5654284 | 5654285 / 5654286 |
+| gemma-3-12b-it | affresil6b | s2 | 5654287 | 5654288 / 5654289 |
+| gemma-3-12b-it | affappr6b | s0 | 5654290 | 5654291 / 5654292 |
+| gemma-3-12b-it | affappr6b | s1 | 5654293 | 5654294 / 5654295 |
+| gemma-3-12b-it | affappr6b | s2 | 5654296 | 5654297 / 5654298 |
+| gemma-3-12b-it | spaffgrowth6b | s0 | 5654299 | 5654300 / 5654301 |
+| gemma-3-12b-it | spaffgrowth6b | s1 | 5654302 | 5654303 / 5654304 |
+| gemma-3-12b-it | spaffgrowth6b | s2 | 5654305 | 5654306 / 5654307 |
+| gemma-3-12b-it | spaffresil6b | s0 | 5654308 | 5654309 / 5654310 |
+| gemma-3-12b-it | spaffresil6b | s1 | 5654311 | 5654312 / 5654313 |
+| gemma-3-12b-it | spaffresil6b | s2 | 5654314 | 5654315 / 5654316 |
+| gemma-3-12b-it | spaffappr6b | s0 | 5654317 | 5654318 / 5654319 |
+| gemma-3-12b-it | spaffappr6b | s1 | 5654320 | 5654321 / 5654322 |
+| gemma-3-12b-it | spaffappr6b | s2 | 5654323 | 5654324 / 5654325 |
 
 ## Handoff: state at 2026-08-15, end of day
 
