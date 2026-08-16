@@ -48,17 +48,29 @@ anyway — the failures are lexical, not semantic; see the ruling in
   **Trajectory depth in the solvable arm is model-specific — check it per model
   before comparing at late turn indices.** Rollouts reaching t5, out of 24:
 
-  | model | `d6` | `pos6` | `aff6` | `affpos6` |
-  |---|---:|---:|---:|---:|
-  | Ministral-3-14B | 23 | 20 | 23 | 20 |
-  | Nemotron-3-Nano-4B | 23 | **11** | 23 | **8** |
+  | model | `d6` | `pos6` | `aff6` | `affpos6` | solve rate on `pos6` |
+  |---|---:|---:|---:|---:|---:|
+  | Ministral-3-14B | 23 | 20 | 23 | 20 | 5/24 |
+  | Nemotron-3-Nano-4B | 23 | 11 | 23 | 8 | 13/24 |
+  | Qwen3-14B | — | **≈0** | — | **≈0** | **17/17 so far** |
 
-  Ministral barely notices: lcbhard is hard enough that it keeps failing for six
-  turns whether or not the tests can be satisfied, so its columns compare over
-  nearly equal depth. Nemotron solves early far more often, so its solvable cells
-  thin out to 11 and 8 rollouts by t5. An earlier note here generalised
-  Ministral's result to the design as a whole; that was wrong. For Nemotron, read
-  t0–t2 and treat t5 as underpowered.
+  Depth in the solvable arm is set by how good the model is at the problems, and
+  it varies from "barely matters" to "the arm does not exist":
+
+  - **Ministral** keeps failing for six turns whether or not the tests can be
+    satisfied, so its columns compare over nearly equal depth.
+  - **Nemotron** solves early more often and thins to 11 and 8 rollouts by t5.
+  - **Qwen3-14B solves the original split almost perfectly** — 17 of 17 and 18 of
+    20 in the records so far — in 1–4 turns and ~11k tokens, against ~42–45k
+    tokens over six failing turns on `conflicting`. Its solvable cells have
+    essentially no trajectory past t1. For this model the split contrast is
+    "six turns of failure" versus "solved immediately", which is a far larger
+    difference than the same contrast on Ministral.
+
+  Read the split comparison at **t0**, where every cell has all 24 rollouts, and
+  check this table before quoting anything at a later turn index. An earlier note
+  here generalised Ministral's near-equal depth to the design as a whole; that was
+  wrong.
 - The affect row asks whether being asked to *verbalise* affect changes what is
   *represented*, or only what is said.
 
