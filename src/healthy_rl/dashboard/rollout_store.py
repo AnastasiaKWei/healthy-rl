@@ -263,6 +263,24 @@ def arrays_from_npz(z, *, turn: int, capture_layers: list[int], probe_layer: int
     return out, problems
 
 
+def sample_messages(samples: list[dict], task_id: str, completions: list[str]) -> list[dict] | None:
+    """The messages of the sample that produced these completions.
+
+    Several samples share a task id at Inspect epoch 1 (resumed shards restart the
+    numbering), so the id alone is ambiguous; the completion text is not -- the
+    ``.eval``'s assistant messages equal ``turn_completion`` verbatim. Turns that
+    generated nothing wrote no assistant message, so both sides drop the empties.
+    """
+    want = [c for c in completions if c]
+    for s in samples:
+        if str(s.get("id")) != str(task_id):
+            continue
+        got = [m["content"] for m in s.get("messages", []) if m.get("role") == "assistant" and m["content"]]
+        if want and got[:len(want)] == want:
+            return list(s["messages"])
+    return None
+
+
 class RolloutStore:
     """Read-only, ``SessionStore``-shaped view over rollout cells."""
 
@@ -285,6 +303,7 @@ class RolloutStore:
         self._full: dict[str, dict] = {}                         # record_id -> tokenised record (Task 3)
         self._tokenizers: dict[str, Any] = {}                    # model -> tokenizer | None
         self._vectors: dict[str, Any] = {}                       # model -> Vectors | None
+        self._evals: dict[Path, list[dict] | Exception] = {}     # .eval path -> samples, or why not
         self._session: dict | None = None
         self.refresh()
 
@@ -367,7 +386,23 @@ class RolloutStore:
         if problem is not None and rec["error"] is None:
             # the text and the turn readouts are still good; only the token strip is not
             rec.update(misaligned=True, error=problem, has_token_arrays=False)
-        # messages_in / feedback: Task 5
+        msgs, why = self._messages_for(rec)
+        t = rec["turn_index"]
+        rec["messages_in"], rec["feedback"] = [], None
+        if msgs is None:
+            warnings.append(f"transcript context unavailable: {why}")
+        else:
+            idx = [i for i, m in enumerate(msgs) if m.get("role") == "assistant"]
+            if len(idx) != rec["n_turns_total"]:
+                warnings.append(f".eval has {len(idx)} assistant messages, record has {rec['n_turns_total']} turns")
+            if t < len(idx):
+                i = idx[t]
+                rec["messages_in"] = [dict(m) for m in msgs[:i]]
+                nxt = msgs[i + 1] if i + 1 < len(msgs) else None
+                rec["feedback"] = nxt["content"] if nxt is not None and nxt.get("role") == "user" else None
+        last = t == rec["n_turns_total"] - 1
+        # a turn that drew feedback failed the tests; only the last turn's verdict is the rollout's
+        rec["passed"] = False if rec["feedback"] else (rec["passed"] if last else None)
         rec["warnings"] = warnings
         rec["tokenised"] = True
         self._full[record_id] = rec
@@ -425,7 +460,8 @@ class RolloutStore:
             if c is None:
                 c = out[cid] = {"conversation_id": cid, "source": SOURCE, "model": r["model"], "version": r["version"],
                                 "bench_split": r["bench_split"], "task_id": r["task_id"], "sample": r["sample"],
-                                "epoch": r["epoch"], "mindset": r["mindset"], "passed": r["passed"], "title": None,
+                                "epoch": r["epoch"], "mindset": r["mindset"], "title": None,
+                                "passed": self._light[r["record_id"]]["passed"],  # per-turn on a full record
                                 "n_turns": 0, "has_token_arrays": self._has_token_arrays(r), "n_misaligned": 0,
                                 "last_created_at": r["created_at"]}
             c["n_turns"] += 1
@@ -496,6 +532,55 @@ class RolloutStore:
             return None, f"npz missing: {path}"     # same wording as arrays() so the page dedupes
         except (OSError, ValueError) as exc:
             return None, f"npz unreadable: {exc}"
+
+    def _eval_files(self, rec: dict) -> list[Path]:
+        """The cell's ``.eval`` logs for this rollout's shard, newest name first."""
+        cell = self._cell_of(rec)
+        shard = str(rec.get("shard") or "")
+        sub = None
+        if "/" in shard:
+            a, b = shard.split("/", 1)
+            if a.isdigit() and b.isdigit():
+                sub = cell.path / "inspect-logs" / f"shard{a}of{b}"
+        base = sub if sub is not None and sub.is_dir() else cell.path / "inspect-logs"
+        return sorted(base.rglob("*.eval"), reverse=True) if base.is_dir() else []
+
+    def _eval_samples(self, path: Path) -> list[dict]:
+        """One parse per ``.eval``; an unreadable log is cached as its exception, not retried."""
+        if path not in self._evals:
+            try:
+                self._evals[path] = self._eval_loader(path)
+            except Exception as exc:          # unreadable log: no messages, and say so
+                self._evals[path] = exc
+        v = self._evals[path]
+        if isinstance(v, Exception):
+            raise v
+        return v
+
+    def _messages_for(self, rec: dict) -> tuple[list[dict] | None, str | None]:
+        """(messages, warning) -- the sample's whole message list, or None + why."""
+        files = self._eval_files(rec)
+        if not files:
+            return None, "no .eval log under inspect-logs for this shard"
+        comps = self._completions_of(rec)
+        errors = 0
+        for f in files:
+            try:
+                samples = self._eval_samples(f)
+            except Exception:
+                errors += 1
+                continue
+            m = sample_messages(samples, rec["task_id"], comps)
+            if m is not None:
+                return m, None
+        if errors == len(files):
+            return None, "the .eval log(s) could not be read"
+        return None, "no .eval sample matches this rollout's completions"
+
+    def _completions_of(self, rec: dict) -> list[str]:
+        """This rollout's ``turn_completion``, in turn order, from the light records."""
+        cid = rec["conversation_id"]
+        return [self._light[rid]["text"] for rid in self._order if self._light[rid]["conversation_id"] == cid]
 
     def _cell_of(self, rec: dict) -> Cell:
         return next(c for c in self.cells if c.key == (rec["model"], rec["version"]))

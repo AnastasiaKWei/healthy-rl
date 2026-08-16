@@ -8,7 +8,8 @@ import pytest
 
 from rollout_cell import EMOTIONS, FakeEvalSamples, GappedTokenizer, WhitespaceTokenizer, make_cell
 from healthy_rl.dashboard.generation import split_reasoning
-from healthy_rl.dashboard.rollout_store import RolloutStore, align_tokens, discover_cells, records_from_row, tokenise
+from healthy_rl.dashboard.rollout_store import (RolloutStore, align_tokens, discover_cells, records_from_row,
+                                                sample_messages, tokenise)
 from healthy_rl.rollouts import Vectors
 
 ROWS = [
@@ -125,19 +126,20 @@ def test_duplicate_row_is_collapsed_and_counted(tmp_path):
     f = cell / "rollouts.shard0of2.jsonl"
     row = json.loads(f.read_text().splitlines()[0])       # lcbhard_0/s0 again: a re-run after a crash
     row["passed"] = True                                  # the later row is the one that should win
-    stale = st.record("fake-model/appr6/lcbhard_0/s0/t0")  # tokenised from the row about to be replaced
+    # the last turn is the one whose `passed` is the rollout's verdict, so it shows which row was read
+    stale = st.record("fake-model/appr6/lcbhard_0/s0/t1")  # tokenised from the row about to be replaced
     untouched = st.record("fake-model/appr6/lcbhard_0/s1/t0")  # same shard file, a rollout nobody rewrote
     assert stale["passed"] is False
     with f.open("a") as fh:
         fh.write(json.dumps(row) + "\n")
     import os, time
     os.utime(f, (time.time() + 5, time.time() + 5))
-    fresh = st.record("fake-model/appr6/lcbhard_0/s0/t0")
+    fresh = st.record("fake-model/appr6/lcbhard_0/s0/t1")
     assert fresh is not stale and fresh["passed"] is True and fresh["tokenised"] is True
     assert st.record("fake-model/appr6/lcbhard_0/s1/t0") is untouched   # the file's new mtime alone is not a change
     recs = st.records()
     assert len(recs) == 8 and len({r["record_id"] for r in recs}) == 8
-    assert next(r for r in recs if r["record_id"] == "fake-model/appr6/lcbhard_0/s0/t0")["passed"] is True
+    assert next(r for r in recs if r["record_id"] == "fake-model/appr6/lcbhard_0/s0/t1")["passed"] is True
     convs = {c["conversation_id"]: c for c in st.conversations()}
     assert len(convs) == 4 and convs["fake-model/appr6/lcbhard_0/s0"]["n_turns"] == 2
     cells = {(c["model"], c["version"]): c for c in st.session["cells"]}
@@ -393,3 +395,50 @@ def test_arrays_rejects_vectors_whose_emotion_order_differs(tmp_path):
     assert a["proj"].shape == (0, 2, 3) and np.isnan(a["proj_prefill"]).all() and "proj_end" not in a
     r = st.record("fake-model/d6/lcbhard_0/s0/t0")
     assert r["misaligned"] is True and "vectors emotion order differs from the record's" in r["error"]
+
+
+SAMPLES = [
+    {"id": "lcbhard_0", "epoch": 1, "messages": [
+        {"role": "user", "content": "PROBLEM"}, {"role": "assistant", "content": "a b c"},
+        {"role": "user", "content": "Your previous attempt failed the tests. FAIL1"},
+        {"role": "assistant", "content": "[THINK]x y[/THINK] z"},
+        {"role": "user", "content": "Your previous attempt failed the tests. FAIL2"}]},
+    {"id": "lcbhard_0", "epoch": 1, "messages": [
+        {"role": "user", "content": "PROBLEM"}, {"role": "assistant", "content": "p q"},
+        {"role": "user", "content": "FAILP"}, {"role": "assistant", "content": "r s t u"}]},
+]
+
+
+def test_sample_messages_matches_by_completion():
+    m = sample_messages(SAMPLES, "lcbhard_0", ["p q", "r s t u"])
+    assert m[1]["content"] == "p q"
+    assert sample_messages(SAMPLES, "lcbhard_0", ["a b c", "[THINK]x y[/THINK] z"])[3]["content"].endswith(" z")
+    assert sample_messages(SAMPLES, "lcbhard_0", ["nope"]) is None
+    assert sample_messages(SAMPLES, "lcbhard_7", ["a b c"]) is None
+    # a rollout whose first turn generated nothing matches on its first non-empty completion
+    assert sample_messages(SAMPLES, "lcbhard_0", ["", "p q"]) is not None
+
+
+def test_record_messages_in_and_feedback(tmp_path):
+    make_cell(tmp_path / "rollouts", "fake-model", "appr6", rows=ROWS)
+    evals = FakeEvalSamples({str(tmp_path / "rollouts" / "fake-model" / "appr6" / "inspect-logs" / "shard0of2" / "x.eval"): SAMPLES})
+    st = RolloutStore.open([tmp_path / "rollouts"], tokenizer_loader=lambda m: WhitespaceTokenizer(),
+                           vectors_loader=lambda m: None, eval_loader=evals)
+    r0 = st.record("fake-model/appr6/lcbhard_0/s0/t0"); r1 = st.record("fake-model/appr6/lcbhard_0/s0/t1")
+    assert r0["messages_in"] == [{"role": "user", "content": "PROBLEM"}]
+    assert r0["feedback"].endswith("FAIL1") and r0["passed"] is False
+    assert [m["role"] for m in r1["messages_in"]] == ["user", "assistant", "user"]
+    assert r1["feedback"].endswith("FAIL2") and r1["passed"] is False           # last turn, rollout failed
+    s1 = st.record("fake-model/appr6/lcbhard_0/s1/t1")
+    assert s1["feedback"] is None and s1["passed"] is True                       # last turn, rollout passed
+    assert st.record("fake-model/appr6/lcbhard_0/s1/t0")["passed"] is False
+    assert evals.calls == 1                                                      # one parse per file
+    # a rollout the eval does not know: empty messages, a warning, not misaligned
+    r = st.record("fake-model/appr6/lcbhard_1/s0/t1")
+    assert r["messages_in"] == [] and r["feedback"] is None and any(".eval" in w for w in r["warnings"]) and r["misaligned"] is False
+
+
+def test_record_without_eval_file(tmp_path):
+    st = _store(tmp_path)              # FakeEvalSamples({}) raises FileNotFoundError
+    r = st.record("fake-model/appr6/lcbhard_0/s0/t0")
+    assert r["messages_in"] == [] and any(".eval" in w for w in r["warnings"])
