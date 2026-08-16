@@ -219,11 +219,27 @@ Evidence from the night of 2026-08-15/16, both on Qwen3.5-9B:
 - a *finished* shard's eval log, which showed the same fault surviving: 52 model
   events, 17 retries, 4 `Request timed out.`
 
-That is the whole loop. A turn longer than 600 s is abandoned client-side; the
-server never hears about it and keeps generating; Inspect retries the request
-from scratch; the retry is also longer than 600 s. Nothing errors out, so the
-job sits there. Ministral-3-14B never trips it because its turns run ~1k tokens
-and finish in well under 600 s — which is why the hang looked Qwen-specific.
+That is the retry loop, and it is real — but it is **not the whole hang**. The
+same night, after the fix, a Qwen3.5-9B shard resumed with
+`request_timeout_s: 3600` (job 5649568, config
+`configs/shards/rollouts-Qwen3.5-9B-resil6-s2of3-t3600.yaml`) showed the peer
+signature anyway: exactly 3 completed POSTs, the client frozen at `Attempt 1/6`,
+the engine reporting ~44 tok/s over 2 running requests **for 40+ minutes with
+GPU KV cache usage flat at 1.1%**, and no completion. So certain requests never
+finish server-side; a shorter client timeout only adds the retry churn on top.
+The two are separate faults: the timeout bug made every long Qwen turn look
+hung, and some Qwen requests genuinely never return.
+
+**The genuinely-stuck requests are problem-specific.** Across every short
+Qwen3.5-9B cell of the night — the peer's `d6`/`aff6`/`pos6` and this session's
+`resil6`/`appr6` — the missing (task, sample) pairs are `lcbhard_10` (in 5 of 5
+short cells), `lcbhard_11` (4 of 5), `lcbhard_7` (2 of 5) and `lcbhard_4` once;
+`growth6` and `affpos6` completed 24/24. Ministral-3-14B finished 192 + 144
+rollouts with one hang of a different shape (engine log frozen at 0 tok/s
+mid-rollout, `appr6-s1`, 5648824). The next step is to run `lcbhard_10` alone on
+Qwen3.5-9B with a small `max_tokens` and watch whether the engine ever returns
+— it is a narrow, reproducible target now, not a random hang. Ministral-3-14B
+never trips the timeout because its turns run ~1k tokens.
 
 The fix is `healthy_rl.rollouts.eval_generate_config`, one helper that builds
 that config with `timeout=request_timeout_s(cfg)`; the same value now also goes

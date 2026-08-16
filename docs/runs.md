@@ -159,15 +159,15 @@ Rollout records, `$ARTIFACT_DIR/rollouts/<model>/<version>/*.jsonl`:
 | Nemotron-3-Nano-4B-BF16 | `aff6` | 24 | complete |
 | Nemotron-3-Nano-4B-BF16 | `pos6` | 22 | running |
 | Nemotron-3-Nano-4B-BF16 | `affpos6` | 23 | last shard running |
-| Ministral-3-14B-Reasoning-2512 | `growth6` | 0 | submitted 2026-08-16 02:11, see Mindset jobs table; priority 1 |
-| Ministral-3-14B-Reasoning-2512 | `resil6` | 0 | submitted 2026-08-16 02:11, see Mindset jobs table; priority 1 |
-| Ministral-3-14B-Reasoning-2512 | `appr6` | 0 | submitted 2026-08-16 02:11, see Mindset jobs table; priority 1 |
-| Qwen3.5-9B | `growth6` | 0 | submitted 2026-08-16 02:11, see Mindset jobs table; priority 2 (`--nice=2000`) |
-| Qwen3.5-9B | `resil6` | 0 | submitted 2026-08-16 02:11, see Mindset jobs table; priority 2 (`--nice=2000`) |
-| Qwen3.5-9B | `appr6` | 0 | submitted 2026-08-16 02:11, see Mindset jobs table; priority 2 (`--nice=2000`) |
-| Ministral-3-14B-Reasoning-2512 | `affgrowth6` | 0 | submitted 2026-08-16 02:11, see Mindset jobs table; priority 3 (`--nice=4000`) |
-| Ministral-3-14B-Reasoning-2512 | `affresil6` | 0 | submitted 2026-08-16 02:11, see Mindset jobs table; priority 3 (`--nice=4000`) |
-| Ministral-3-14B-Reasoning-2512 | `affappr6` | 0 | submitted 2026-08-16 02:11, see Mindset jobs table; priority 3 (`--nice=4000`) |
+| Ministral-3-14B-Reasoning-2512 | `growth6` | 24 | complete 2026-08-16 02:45; priority 1 |
+| Ministral-3-14B-Reasoning-2512 | `resil6` | 24 | complete 2026-08-16 02:55; priority 1 |
+| Ministral-3-14B-Reasoning-2512 | `appr6` | 24 | complete 2026-08-16 03:44 (shard 1 hung mid-rollout, cancelled, resumed by its `-cont`); priority 1. **1/24 `passed` on conflicting** — a genuine call-count hack (`lcbhard_5` s0) |
+| Qwen3.5-9B | `growth6` | 24 | complete 2026-08-16 04:50; priority 2 |
+| Qwen3.5-9B | `resil6` | 22 | short — shard 2 stuck on never-completing requests; resumed as `-t3600` (5649567/5649568), see infrastructure.md |
+| Qwen3.5-9B | `appr6` | 21 | short — the three primaries stuck on the same problems (`lcbhard_10`/`11`); continuations cancelled rather than replay them |
+| Ministral-3-14B-Reasoning-2512 | `affgrowth6` | 24 | complete 2026-08-16 04:40; priority 3 |
+| Ministral-3-14B-Reasoning-2512 | `affresil6` | 24 | complete 2026-08-16 04:50; priority 3 |
+| Ministral-3-14B-Reasoning-2512 | `affappr6` | 24 | complete 2026-08-16 05:55; priority 3 |
 
 gemma-3-12b-it has no `pos6`/`affpos6` cell: it is the flattest of the measured
 models, and the 2x2s went to the models with a clear conflicting-split signal
@@ -211,6 +211,16 @@ question.
 | Ministral-3-14B-Reasoning-2512 | affappr6 | s0 | 5648875 | 5648876 / 5648877 |
 | Ministral-3-14B-Reasoning-2512 | affappr6 | s1 | 5648878 | 5648879 / 5648880 |
 | Ministral-3-14B-Reasoning-2512 | affappr6 | s2 | 5648881 | 5648882 / 5648883 |
+
+Overnight events (2026-08-16): `appr6-s1` (5648824) hung mid-rollout at 03:27
+(engine log frozen, 0 tok/s) — cancelled, `-cont` 5648825 finished the shard.
+Qwen3.5-9B `resil6-s2` (5648845) sat 62 min in a client-timeout retry loop; its
+chain (5648845/46/47) was replaced by `Qwen3.5-9B-resil6-s2-t3600` 5649567 (pre-fix,
+null) and 5649568 (post-fix, `request_timeout_s: 3600`), the latter left to its wall
+as the observation described in infrastructure.md. Qwen3.5-9B `appr6` continuations
+(5648849/50/52/53/55/56) were cancelled at 06:05 rather than replay the same stuck
+rollouts for eight hours. Idle continuations of completed cells were cancelled as
+each cell reached 24.
 
 Submitted 2026-08-16 02:11 from the worktree `.claude/worktrees/mindset` (jobs bind it at `/project`; do not remove that worktree until the last continuation has run). Continuations are `afterany`, so a 4-hour wall (`FAILED 143:0`) releases them; a continuation whose shard is already complete loads the model, finds nothing to do, and exits.
 
