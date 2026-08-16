@@ -99,8 +99,14 @@ def one_request(base_url: str, model: str, text: str, max_tokens: int,
         if ok:
             data = r.json()
             n = (data.get("usage") or {}).get("completion_tokens", 0)
-        return {"outcome": "ok" if ok else f"http{r.status_code}",
-                "seconds": round(elapsed, 1), "tokens": n}
+        if not ok:
+            # Not a data point. A transport error counted as "did not hang"
+            # turns a broken experiment into a clean-looking result.
+            raise SystemExit(
+                f"request failed with HTTP {r.status_code} -- the experiment is "
+                f"invalid, not negative. Body: {r.text[:300]}"
+            )
+        return {"outcome": "ok", "seconds": round(elapsed, 1), "tokens": n}
     except requests.exceptions.Timeout:
         return {"outcome": "TIMEOUT", "seconds": round(time.monotonic() - started, 1),
                 "tokens": 0}
@@ -128,7 +134,12 @@ def main() -> int:
     root = os.environ.get("HEALTHY_RL_ARTIFACT_ROOT") or os.environ.get("ARTIFACT_DIR")
     if not root:
         raise SystemExit("set ARTIFACT_DIR or HEALTHY_RL_ARTIFACT_ROOT")
-    base_url = args.base_url or base_url_from_env()
+    # MUST carry /v1: without it every request 404s with no useful message
+    # (docs/infrastructure.md). The first run of this diagnostic 404'd ten times
+    # and still printed "NO HANG REPRODUCED".
+    from healthy_rl.rollouts import provider_base_url
+
+    base_url = provider_base_url(args.base_url or base_url_from_env())
     frame = pd.read_parquet(f"{root}/bench/v1/conflicting.parquet").set_index("task_id")
     instruction = instruction_for(root, args.model)
 
