@@ -270,10 +270,10 @@ Rollout records, `$ARTIFACT_DIR/rollouts/<model>/<version>/*.jsonl`:
 | gemma-3-12b-it | `affgrowth6` | 24 | complete 2026-08-16 ~11:20; `--nice=2000`. Affect on, NO scratchpad (matches gemma's `aff6`); read at turn end |
 | gemma-3-12b-it | `affresil6` | 24 | complete 2026-08-16 ~11:45; `--nice=2000` |
 | gemma-3-12b-it | `affappr6` | 24 | complete 2026-08-16 ~11:45; `--nice=2000` |
-| gemma-3-12b-it | `inoc6` | 0 | queued 2026-08-16 (see [The inoculation arm](#the-inoculation-arm)); base `d6r`, no `--nice` flag (slurm default 0) |
-| Ministral-3-14B-Reasoning-2512 | `inoc6` | 0 | queued 2026-08-16 (see [The inoculation arm](#the-inoculation-arm)); base `d6r`, `--nice=1000` |
-| gemma-3-12b-it | `affinoc6` | 0 | queued 2026-08-16 (see [The inoculation arm](#the-inoculation-arm)); base `aff6r`, `--nice=2000` |
-| Ministral-3-14B-Reasoning-2512 | `affinoc6` | 0 | queued 2026-08-16 (see [The inoculation arm](#the-inoculation-arm)); base `aff6r`, `--nice=3000` |
+| gemma-3-12b-it | `inoc6` | 0 | submitted 2026-08-16 17:12, jobs 5654120–5654155 (see [Inoculation jobs](#inoculation-jobs)); base `d6r`, no `--nice` flag (slurm default 0) |
+| Ministral-3-14B-Reasoning-2512 | `inoc6` | 0 | submitted 2026-08-16 17:12, jobs 5654120–5654155 (see [Inoculation jobs](#inoculation-jobs)); base `d6r`, `--nice=1000` |
+| gemma-3-12b-it | `affinoc6` | 0 | submitted 2026-08-16 17:12, jobs 5654120–5654155 (see [Inoculation jobs](#inoculation-jobs)); base `aff6r`, `--nice=2000` |
+| Ministral-3-14B-Reasoning-2512 | `affinoc6` | 0 | submitted 2026-08-16 17:12, jobs 5654120–5654155 (see [Inoculation jobs](#inoculation-jobs)); base `aff6r`, `--nice=3000` |
 
 gemma-3-12b-it has no `pos6`/`affpos6` cell: it is the flattest of the measured
 models, and the 2x2s went to the models with a clear conflicting-split signal
@@ -354,6 +354,29 @@ rollouts for eight hours. Idle continuations of completed cells were cancelled a
 each cell reached 24.
 
 Submitted 2026-08-16 02:11 from the worktree `.claude/worktrees/mindset` (jobs bind it at `/project`; do not remove that worktree until the last continuation has run). Continuations are `afterany`, so a 4-hour wall (`FAILED 143:0`) releases them; a continuation whose shard is already complete loads the model, finds nothing to do, and exits.
+
+### Inoculation jobs
+
+Submitted 2026-08-16 17:12 from the worktree `.claude/worktrees/inoculation`
+(branch `feature/inoculation`, commit 0e185a1) with
+`scripts/inoculation_cells.sh --submit` (36 jobs). Jobs bind that worktree at
+`/project` — do not remove it until the last continuation has run. Same
+`afterany` chaining and 4-hour wall as the mindset cells.
+
+| model | version | shard | primary | continuations |
+|---|---|---|---|---|
+| gemma-3-12b-it | inoc6 | s0 | 5654120 | 5654121 / 5654122 |
+| gemma-3-12b-it | inoc6 | s1 | 5654123 | 5654124 / 5654125 |
+| gemma-3-12b-it | inoc6 | s2 | 5654126 | 5654127 / 5654128 |
+| Ministral-3-14B-Reasoning-2512 | inoc6 | s0 | 5654129 | 5654130 / 5654131 |
+| Ministral-3-14B-Reasoning-2512 | inoc6 | s1 | 5654132 | 5654133 / 5654134 |
+| Ministral-3-14B-Reasoning-2512 | inoc6 | s2 | 5654135 | 5654136 / 5654137 |
+| gemma-3-12b-it | affinoc6 | s0 | 5654138 | 5654139 / 5654140 |
+| gemma-3-12b-it | affinoc6 | s1 | 5654141 | 5654142 / 5654143 |
+| gemma-3-12b-it | affinoc6 | s2 | 5654144 | 5654145 / 5654146 |
+| Ministral-3-14B-Reasoning-2512 | affinoc6 | s0 | 5654147 | 5654148 / 5654149 |
+| Ministral-3-14B-Reasoning-2512 | affinoc6 | s1 | 5654150 | 5654151 / 5654152 |
+| Ministral-3-14B-Reasoning-2512 | affinoc6 | s2 | 5654153 | 5654154 / 5654155 |
 
 ## Handoff: state at 2026-08-15, end of day
 
