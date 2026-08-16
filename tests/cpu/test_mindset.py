@@ -1,6 +1,6 @@
 """CPU-only tests for the mindset-prompt arm.
 
-The three blocks are Anastasia's v2 text (experiments/step0_elicitation.py). Her
+The five blocks are Anastasia's v3 text (experiments/step0_elicitation.py). Her
 runs measure verbalised affect through a judge; ours measure the represented
 affect through the probes. The comparison is only valid while the stimulus is
 identical, so ``test_mindset_text_matches_step0`` parses her file with ``ast``
@@ -27,13 +27,16 @@ from healthy_rl.rollouts import (
     AFFECT_INSTRUCTION,
     MINDSET,
     MINDSET_HASH_KEY,
-    MINDSET_HEADER,
     MINDSET_KEY,
+    MINDSET_REMIND,
+    MINDSET_SECTION_TAIL,
+    MINDSET_TASK_HEADING,
     MINDSET_VERSION,
     bench_instruction,
     compose_instruction,
     mindset_for,
     mindset_hash,
+    mindset_reminder,
     mindset_section,
     reminder_instruction,
     strip_mindset_from_reminders,
@@ -69,22 +72,40 @@ def _step0_mindset_section_source() -> str:
 # ---------------------------------------------------------------------------
 
 
+V3_NAMES = ["growth", "resilience", "control", "compassion", "appraisal"]
+
+
 def test_mindset_text_matches_step0():
     theirs = _step0_assignment("MINDSET")
-    assert list(MINDSET) == list(theirs) == ["growth", "resilience", "appraisal"]
-    for name in MINDSET:
-        assert MINDSET[name] == theirs[name], f"{name} block drifted from step0_elicitation.py"
+    assert list(MINDSET) == list(MINDSET_REMIND) == list(theirs) == V3_NAMES
+    for name in V3_NAMES:
+        assert set(theirs[name]) == {"block", "remind"}, f"{name}: her entry shape changed"
+        assert MINDSET[name] == theirs[name]["block"], f"{name} block drifted from step0_elicitation.py"
+        assert MINDSET_REMIND[name] == theirs[name]["remind"], f"{name} remind drifted from step0_elicitation.py"
 
 
 def test_mindset_version_matches_step0():
-    assert MINDSET_VERSION == _step0_assignment("MINDSET_VERSION") == 2
+    assert MINDSET_VERSION == _step0_assignment("MINDSET_VERSION") == 3
 
 
-def test_header_and_join_match_step0():
-    # Her mindset_section: "\n\nHow to approach this:\n\n" + "\n\n".join(chosen) + "\n\n"
+def test_section_join_and_task_heading_match_step0():
+    # Her mindset_section: "\n\n".join(chosen) + "\n\n---\n"; her build_instruction:
+    # f"{section}## Task\n\n{task}". Both are pinned here so the composition cannot
+    # drift from the stimulus her judge-scored runs received.
     src = _step0_mindset_section_source()
-    assert MINDSET_HEADER == "\n\nHow to approach this:\n\n"
-    assert 'return "\\n\\nHow to approach this:\\n\\n" + "\\n\\n".join(chosen) + "\\n\\n"' in src
+    assert MINDSET_SECTION_TAIL == "\n\n---\n"
+    assert MINDSET_TASK_HEADING == "## Task\n\n"
+    assert 'return "\\n\\n".join(chosen) + "\\n\\n---\\n"' in src
+    assert 'f"{section}## Task\\n\\n{task}"' in STEP0.read_text()
+
+
+def test_only_appraisal_has_no_reminder_line():
+    assert MINDSET_REMIND["appraisal"] == ""
+    for name in ("growth", "resilience", "control", "compassion"):
+        assert MINDSET_REMIND[name].startswith("Remember you are"), name
+    # The v4.md doc still says "the problem is still solvable"; her CODE cut it,
+    # because on the conflicting split it is false. The code is the source.
+    assert "still solvable" not in MINDSET_REMIND["resilience"]
 
 
 # ---------------------------------------------------------------------------
@@ -110,7 +131,7 @@ def test_hash_is_empty_without_mindset():
 
 def test_hash_differs_between_arms():
     hashes = [mindset_hash([n]) for n in MINDSET]
-    hashes.append(mindset_hash(["growth", "appraisal"]))
+    hashes.append(mindset_hash(["growth", "compassion"]))
     assert len(set(hashes)) == len(hashes)
 
 
@@ -129,6 +150,20 @@ def test_hash_changes_when_a_block_text_changes(monkeypatch):
     assert mindset_hash(["resilience"]) != before
 
 
+def test_hash_covers_the_reminder_line(monkeypatch):
+    before = mindset_hash(["growth"])
+    edited = dict(MINDSET_REMIND)
+    edited["growth"] = MINDSET_REMIND["growth"] + " Really."
+    monkeypatch.setattr(rollouts, "MINDSET_REMIND", edited)
+    assert mindset_hash(["growth"]) != before
+
+
+def test_hash_of_appraisal_is_stable_with_an_empty_reminder():
+    assert mindset_reminder(["appraisal"]) == ""
+    assert mindset_hash(["appraisal"]) == mindset_hash(["appraisal"])
+    assert len(mindset_hash(["appraisal"])) == 12
+
+
 def test_hash_key_name():
     assert MINDSET_HASH_KEY == "mindset_hash"
 
@@ -143,15 +178,26 @@ def test_empty_selection_contributes_nothing():
     assert mindset_section([]) == ""
 
 
-def test_one_block_is_header_plus_block_plus_blank_line():
-    assert mindset_section(["growth"]) == MINDSET_HEADER + MINDSET["growth"] + "\n\n"
+def test_one_block_is_block_plus_rule():
+    assert mindset_section(["growth"]) == MINDSET["growth"] + MINDSET_SECTION_TAIL
+    assert "How to approach this:" not in mindset_section(["growth"])
 
 
-def test_two_blocks_share_one_header_in_dict_order():
-    # Order comes from MINDSET, not from the caller, and the header appears once.
+def test_two_blocks_join_in_dict_order_with_one_rule():
     section = mindset_section(["appraisal", "growth"])
-    assert section == MINDSET_HEADER + MINDSET["growth"] + "\n\n" + MINDSET["appraisal"] + "\n\n"
-    assert section.count("How to approach this:") == 1
+    assert section == MINDSET["growth"] + "\n\n" + MINDSET["appraisal"] + MINDSET_SECTION_TAIL
+    assert section.count("\n---\n") == 1
+
+
+def test_reminder_line_follows_dict_order_and_skips_empty():
+    assert mindset_reminder(()) == ""
+    assert mindset_reminder(["growth"]) == MINDSET_REMIND["growth"]
+    assert mindset_reminder(["appraisal", "growth"]) == MINDSET_REMIND["growth"]
+    assert mindset_reminder(["compassion", "control"]) == (
+        MINDSET_REMIND["control"] + "\n\n" + MINDSET_REMIND["compassion"]
+    )
+    with pytest.raises(KeyError, match="mindset"):
+        mindset_reminder(["grit"])
 
 
 def test_unknown_name_is_an_error():
@@ -176,6 +222,7 @@ def test_list_and_comma_string_both_work_and_are_ordered():
     assert mindset_for({MINDSET_KEY: "resilience"}) == ("resilience",)
     assert mindset_for({MINDSET_KEY: "appraisal, growth"}) == ("growth", "appraisal")
     assert mindset_for({MINDSET_KEY: ["appraisal", "growth"]}) == ("growth", "appraisal")
+    assert mindset_for({MINDSET_KEY: "compassion control"}) == ("control", "compassion")
 
 
 def test_unknown_config_name_raises_at_startup():
