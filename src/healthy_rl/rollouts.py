@@ -94,6 +94,7 @@ __all__ = [
     "mindset_section",
     "mindset_for",
     "strip_mindset_from_reminders",
+    "check_resume_mindset",
 ]
 
 # The feedback message ImpossibleBench's minimal scaffold prepends to a retry
@@ -388,9 +389,11 @@ def strip_mindset_from_reminders(samples: Iterable[Any], mindset: Sequence[str])
         meta = dict(getattr(sample, "metadata", None) or {})
         before = str(meta.get("instruction_prompt", ""))
         if section not in before:
+            task_id = meta.get("task_id") or getattr(sample, "id", None)
             raise RuntimeError(
-                "mindset section not found in instruction_prompt; the benchmark may have "
-                "reformatted it, and the reminder would still repeat the block"
+                f"mindset section not found in instruction_prompt of sample {task_id!r}; "
+                "the benchmark may have reformatted it, and the reminder would still "
+                "repeat the block"
             )
         meta["instruction_prompt"] = before.replace(section, "\n\n")
         sample.metadata = meta
@@ -872,6 +875,33 @@ def check_resume_split(
         )
 
 
+def check_resume_mindset(
+    existing: Iterable[Mapping[str, Any]], mindset: Sequence[str], path: str | os.PathLike[str]
+) -> None:
+    """Refuse to resume a JSONL whose records were made under a different mindset arm.
+
+    Same hazard as :func:`check_resume_affect`: resume inherits records, so a
+    growth run pointed at the baseline directory would count baseline rollouts
+    as its own. Records predating the key carry none. The prompt version is
+    checked too, so an edited block never appends to a directory of the old one.
+    """
+    wanted = sorted(mindset)
+    for record in existing:
+        have = sorted(record.get(MINDSET_KEY) or [])
+        if have != wanted:
+            raise RuntimeError(
+                f"{path} holds record(s) made with mindset {have} but this run is "
+                f"{wanted}. Use a separate out_dir per arm (or --no-resume to discard the file)."
+            )
+        if have:
+            version = int(record.get("mindset_version") or 0)
+            if version != MINDSET_VERSION:
+                raise RuntimeError(
+                    f"{path} holds record(s) made with mindset prompt version {version}, "
+                    f"but this code is version {MINDSET_VERSION}. Use a separate out_dir."
+                )
+
+
 # ---------------------------------------------------------------------------
 # Work items and sharding -- pure logic, unit-tested
 # ---------------------------------------------------------------------------
@@ -1346,6 +1376,8 @@ class RunState:
     """Whether the task instruction carried the affect request (see ``AFFECT_KEY``)."""
     bench_split: str = ""
     """ImpossibleBench split these rollouts ran on (see :func:`split_of_bench`)."""
+    mindset: tuple[str, ...] = ()
+    """Mindset blocks the turn-1 instruction carried (see ``MINDSET_KEY``); () for none."""
     sample_map: dict[tuple[str, str], list[int]] = field(default_factory=dict)
     """``(condition, task_id) -> global sample index per Inspect epoch``.
 
@@ -1759,6 +1791,7 @@ def _record_sample(sample: Any) -> None:
     observed_norms: list[dict[str, float]] = []
     residual_keys: list[tuple[int, str]] = []
     turn_errors: list[str] = []
+    completions: list[str] = []
 
     scratchpad_turns: list[dict[str, Any]] = []
 
@@ -1770,6 +1803,7 @@ def _record_sample(sample: Any) -> None:
         n_generated.append(int(payload.get("n_generated") or 0))
         observed_norms.append(payload.get("observed_norm") or {})
         after_failure.append(is_retry)
+        completions.append(completion)
         key = payload.get("residual_key")
         if key:
             residual_keys.append((index, key))
@@ -1837,6 +1871,15 @@ def _record_sample(sample: Any) -> None:
         # characteristic, so this record is only comparable with records that
         # carry the same value.
         AFFECT_KEY: state.affect_prompt,
+        # Which mindset blocks the opening instruction carried, and which text
+        # version. Read against the matching base cell only (d6 or aff6).
+        MINDSET_KEY: list(state.mindset),
+        "mindset_version": MINDSET_VERSION,
+        # Each turn's completion text, so per-token arrays in the npz can be
+        # aligned offline (re-tokenise, compare against the decode-row count).
+        # For reasoning models this may omit reasoning tokens -- a count
+        # mismatch is expected there and must be reported, not hidden.
+        "turn_completion": completions,
     }
     state.writer.write(record)
 
@@ -2416,6 +2459,8 @@ def run_rollouts(
     check_resume_affect(existing, affect, jsonl_path)
     split = split_of_bench(bench_parquet)
     check_resume_split(existing, split, jsonl_path)
+    mindset = mindset_for(cfg)
+    check_resume_mindset(existing, mindset, jsonl_path)
 
     summary: dict[str, Any] = {
         "stage": "rollouts",
@@ -2443,7 +2488,14 @@ def run_rollouts(
         # function build_task hands to ImpossibleBench's converter. Recorded in
         # full so that whoever reads these results months from now can see the
         # exact stimulus rather than having to reconstruct it from a flag.
-        "instruction": bench_instruction(affect),
+        "instruction": bench_instruction(affect, mindset),
+        # What the scaffold re-sends after each failed attempt: the same text
+        # with the mindset section removed (see strip_mindset_from_reminders).
+        "instruction_reminder": bench_instruction(affect, mindset).replace(
+            mindset_section(mindset), "\n\n"
+        ) if mindset else bench_instruction(affect),
+        MINDSET_KEY: list(mindset),
+        "mindset_version": MINDSET_VERSION,
         "disqualified": False,
         "sweep": None,
         "sweep_source": None,
@@ -2485,6 +2537,7 @@ def run_rollouts(
         system_prompt=system_prompt,
         affect_prompt=affect,
         bench_split=split,
+        mindset=mindset,
     )
     _STATE = state
 
@@ -2646,6 +2699,7 @@ def run_rollouts(
                                 use_hf=bool(cfg.get("use_hf_dataset", False)),
                                 system_prompt=system_prompt,
                                 affect_prompt=affect,
+                                mindset=mindset,
                             ),
                             model=model,
                             epochs=n_epochs,

@@ -36,6 +36,9 @@ from healthy_rl.config import load_config, load_env, repo_root
 from healthy_rl.rollouts import (
     AFFECT_KEY,
     affect_prompt_for,
+    MINDSET_KEY,
+    MINDSET_VERSION,
+    mindset_for,
     output_dir,
     parse_shard,
     run_rollouts,
@@ -526,6 +529,10 @@ def main(argv: list[str] | None = None) -> int:
         SCRATCHPAD_KEY: resolve_scratchpad(args.scratchpad_reasoning, cfg),
         AFFECT_KEY: resolve_affect(args.affect_prompt, cfg),
     }
+    # Resolve the mindset arm here, before the upstream checks and the server
+    # connect: an unknown block name is a config typo and must fail in the first
+    # second of the job, not after a model has loaded.
+    mindset = mindset_for(cfg)
 
     out_setting = _setting(args.out_dir, "HEALTHY_RL_OUT_DIR", cfg, "out_dir")
     out_dir = Path(out_setting) if out_setting else output_dir("rollouts", model, version)
@@ -547,7 +554,8 @@ def main(argv: list[str] | None = None) -> int:
         f"  bench    {bench_parquet}\n"
         f"  out      {out_dir}\n"
         f"  scratchpad_reasoning={cfg[SCRATCHPAD_KEY]}\n"
-        f"  affect_prompt={cfg[AFFECT_KEY]}",
+        f"  affect_prompt={cfg[AFFECT_KEY]}\n"
+        f"  {MINDSET_KEY}={list(mindset)} v{MINDSET_VERSION}",
         flush=True,
     )
 

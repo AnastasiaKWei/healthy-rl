@@ -304,3 +304,133 @@ def test_build_task_without_mindset_leaves_reminders_alone(fake_impossiblebench,
 def test_build_task_refuses_the_hf_path_with_mindset(fake_impossiblebench, bench_parquet):
     with pytest.raises(ValueError, match="mindset"):
         rollouts.build_task(["lcbhard_0"], bench_parquet, use_hf=True, mindset=["growth"])
+
+
+# ---------------------------------------------------------------------------
+# resume guard, the record, and the summary
+# ---------------------------------------------------------------------------
+
+from types import SimpleNamespace  # noqa: E402
+
+import numpy as np  # noqa: E402
+
+from healthy_rl.rollouts import (  # noqa: E402
+    Condition,
+    JsonlWriter,
+    RunState,
+    Vectors,
+    check_resume_mindset,
+    read_jsonl,
+)
+
+
+def _condition() -> Condition:
+    return Condition(
+        tier=1,
+        name="readout",
+        emotion=None,
+        strength=None,
+        n_samples=1,
+        problem_set="readout",
+    )
+
+
+def test_resume_refuses_to_mix_mindset_arms(tmp_path):
+    p = tmp_path / "rollouts.jsonl"
+    plain = [{}, {MINDSET_KEY: [], "mindset_version": MINDSET_VERSION}]  # keyless = none
+    check_resume_mindset(plain, (), p)
+    with pytest.raises(RuntimeError, match="mindset"):
+        check_resume_mindset(plain, ("growth",), p)
+    growth = [{MINDSET_KEY: ["growth"], "mindset_version": MINDSET_VERSION}]
+    check_resume_mindset(growth, ("growth",), p)
+    with pytest.raises(RuntimeError, match="mindset"):
+        check_resume_mindset(growth, ("resilience",), p)
+    with pytest.raises(RuntimeError, match="mindset"):
+        check_resume_mindset(growth, (), p)
+
+
+def test_resume_refuses_a_different_prompt_version(tmp_path):
+    p = tmp_path / "rollouts.jsonl"
+    old = [{MINDSET_KEY: ["growth"], "mindset_version": 1}]
+    with pytest.raises(RuntimeError, match="version"):
+        check_resume_mindset(old, ("growth",), p)
+
+
+def _fake_vectors() -> Vectors:
+    rng = np.random.default_rng(0)
+    d = rng.normal(size=(14, 2, 8)).astype(np.float32)
+    d /= np.linalg.norm(d, axis=-1, keepdims=True)
+    return Vectors(
+        directions=d,
+        emotions=[f"e{i}" for i in range(14)],
+        capture_layers=[3, 5],
+        probe_layer=5,
+        mean_residual_norm={3: 10.0, 5: 12.0},
+        path=Path("/nonexistent"),
+    )
+
+
+def _fake_sample(n_turns: int = 2):
+    events = []
+    for i in range(n_turns):
+        user_text = (
+            "solve"
+            if i == 0
+            else "Your previous attempt failed the tests. Here's the error:\nboom"
+        )
+        events.append(
+            SimpleNamespace(
+                event="model",
+                input=[SimpleNamespace(role="user", content=user_text)],
+                output=SimpleNamespace(
+                    metadata={
+                        "healthy_rl": {
+                            "stats": {"5": [0.0] * 14, "3": [0.0] * 14},
+                            "n_generated": 3,
+                            "observed_norm": {},
+                        }
+                    },
+                    completion=f"```python\nreturn {i}\n```",
+                ),
+            )
+        )
+    return SimpleNamespace(id="lcbhard_0", epoch=1, events=events, scores={}, error=None)
+
+
+def test_record_carries_mindset_and_completions(tmp_path, monkeypatch):
+    state = RunState(
+        vectors=_fake_vectors(),
+        writer=JsonlWriter(tmp_path / "r.jsonl"),
+        condition=_condition(),
+        model_name="m",
+        run_id="rid",
+        residual_dir=tmp_path / "residuals",
+        save_residuals=False,
+        mindset=("growth",),
+    )
+    monkeypatch.setattr(rollouts, "_STATE", state)
+    rollouts._record_sample(_fake_sample())
+    state.writer.close()
+    [rec] = read_jsonl(tmp_path / "r.jsonl")
+    assert rec[MINDSET_KEY] == ["growth"]
+    assert rec["mindset_version"] == MINDSET_VERSION
+    assert rec["turn_completion"] == ["```python\nreturn 0\n```", "```python\nreturn 1\n```"]
+    assert rec["turn_after_test_failure"] == [False, True]
+
+
+def test_record_without_mindset_says_so(tmp_path, monkeypatch):
+    state = RunState(
+        vectors=_fake_vectors(),
+        writer=JsonlWriter(tmp_path / "r.jsonl"),
+        condition=_condition(),
+        model_name="m",
+        run_id="rid",
+        residual_dir=tmp_path / "residuals",
+        save_residuals=False,
+    )
+    monkeypatch.setattr(rollouts, "_STATE", state)
+    rollouts._record_sample(_fake_sample(1))
+    state.writer.close()
+    [rec] = read_jsonl(tmp_path / "r.jsonl")
+    assert rec[MINDSET_KEY] == []
+    assert rec["mindset_version"] == MINDSET_VERSION
