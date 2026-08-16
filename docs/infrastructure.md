@@ -146,6 +146,18 @@ zero `turn_errors` — verified across 81 records on Qwen3.5-9B `pos6`/`aff6`/
   reclaims almost nothing. The first version of the prune script recovered 954 MB
   instead of 41 GB for exactly this reason.
 
+### The vLLM engine can die at startup with a scheduler `KeyError`
+
+Seen once in ~140 serve jobs (gemma-3-12b-it `spgrowth6-s1`, 5651657,
+2026-08-16 10:25): 13 s after the server reported healthy, `EngineCore` raised
+`KeyError: 'chatcmpl-…'` in `scheduler.update_from_output`
+(`req_id_to_index[req_id]`), the API server logged `EngineDeadError`, the first
+rollout POST got a 500, and the stage exited 1 with nothing written. Not a
+measurement fault and not reproducible on demand — a vLLM v1 race around the
+first requests. The `afterany` continuation restarted the shard and it completed
+normally. Treat a `FAILED 1:0` this early, with `EngineDeadError` in the server
+log, as "resubmit", not as a config error.
+
 ### A rollout job can hang with its server still generating
 
 Qwen3-14B `d6` shard s0 ran 3h18m and wrote nothing to its job log after the

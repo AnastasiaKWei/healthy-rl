@@ -20,6 +20,7 @@ versions encode the condition:
 | `affpos6` | 6 | affect prompt, original split |
 | `growth6`, `resil6`, `appr6` | 6 | mindset block (growth / resilience / appraisal, v2), otherwise `d6`: no affect prompt, conflicting split. Block sent on turn 1 only. Compare against `d6` |
 | `affgrowth6`, `affresil6`, `affappr6` | 6 | same blocks with the affect prompt on, otherwise `aff6`. Compare against `aff6` |
+| `spgrowth6`, `spresil6`, `spappr6` | 6 | gemma-3-12b-it only: the same blocks on the `sp6` base (scratchpad on, no affect prompt). Compare against `sp6` |
 
 `d6` / `sp6` / `aff6` / `pos6` / `affpos6` are the trustworthy set. Each condition
 needs its own `out_dir` — resume refuses to mix them, and since 2026-08-15 it
@@ -168,6 +169,12 @@ Rollout records, `$ARTIFACT_DIR/rollouts/<model>/<version>/*.jsonl`:
 | Ministral-3-14B-Reasoning-2512 | `affgrowth6` | 24 | complete 2026-08-16 04:40; priority 3 |
 | Ministral-3-14B-Reasoning-2512 | `affresil6` | 24 | complete 2026-08-16 04:50; priority 3 |
 | Ministral-3-14B-Reasoning-2512 | `affappr6` | 24 | complete 2026-08-16 05:55; priority 3 |
+| gemma-3-12b-it | `spgrowth6` | 24 | complete 2026-08-16 ~11:20 (shard 1 primary died at 13 s in a vLLM engine crash, `KeyError` in the scheduler; its `-cont` finished the shard) |
+| gemma-3-12b-it | `spresil6` | 24 | complete 2026-08-16 ~11:20 |
+| gemma-3-12b-it | `spappr6` | 24 | complete 2026-08-16 ~11:15 |
+| gemma-3-12b-it | `affgrowth6` | 24 | complete 2026-08-16 ~11:20; `--nice=2000`. Affect on, NO scratchpad (matches gemma's `aff6`); read at turn end |
+| gemma-3-12b-it | `affresil6` | 24 | complete 2026-08-16 ~11:45; `--nice=2000` |
+| gemma-3-12b-it | `affappr6` | 24 | complete 2026-08-16 ~11:45; `--nice=2000` |
 
 gemma-3-12b-it has no `pos6`/`affpos6` cell: it is the flattest of the measured
 models, and the 2x2s went to the models with a clear conflicting-split signal
@@ -211,6 +218,31 @@ question.
 | Ministral-3-14B-Reasoning-2512 | affappr6 | s0 | 5648875 | 5648876 / 5648877 |
 | Ministral-3-14B-Reasoning-2512 | affappr6 | s1 | 5648878 | 5648879 / 5648880 |
 | Ministral-3-14B-Reasoning-2512 | affappr6 | s2 | 5648881 | 5648882 / 5648883 |
+
+Gemma cells, submitted 2026-08-16 10:23 from the main checkout with `ONLY_MODEL=gemma-3-12b-it scripts/mindset_cells.sh --submit` (54 jobs):
+
+| model | version | shard | primary | continuations |
+|---|---|---|---|---|
+| gemma-3-12b-it | spgrowth6 | s0 | 5651654 | 5651655 / 5651656 |
+| gemma-3-12b-it | spgrowth6 | s1 | 5651657 | 5651658 / 5651659 |
+| gemma-3-12b-it | spgrowth6 | s2 | 5651660 | 5651661 / 5651662 |
+| gemma-3-12b-it | spresil6 | s0 | 5651663 | 5651664 / 5651665 |
+| gemma-3-12b-it | spresil6 | s1 | 5651666 | 5651667 / 5651668 |
+| gemma-3-12b-it | spresil6 | s2 | 5651669 | 5651670 / 5651671 |
+| gemma-3-12b-it | spappr6 | s0 | 5651672 | 5651673 / 5651674 |
+| gemma-3-12b-it | spappr6 | s1 | 5651675 | 5651676 / 5651677 |
+| gemma-3-12b-it | spappr6 | s2 | 5651678 | 5651679 / 5651680 |
+| gemma-3-12b-it | affgrowth6 | s0 | 5651681 | 5651682 / 5651683 |
+| gemma-3-12b-it | affgrowth6 | s1 | 5651684 | 5651685 / 5651686 |
+| gemma-3-12b-it | affgrowth6 | s2 | 5651687 | 5651688 / 5651689 |
+| gemma-3-12b-it | affresil6 | s0 | 5651690 | 5651691 / 5651692 |
+| gemma-3-12b-it | affresil6 | s1 | 5651693 | 5651694 / 5651695 |
+| gemma-3-12b-it | affresil6 | s2 | 5651696 | 5651697 / 5651698 |
+| gemma-3-12b-it | affappr6 | s0 | 5651699 | 5651700 / 5651701 |
+| gemma-3-12b-it | affappr6 | s1 | 5651702 | 5651703 / 5651704 |
+| gemma-3-12b-it | affappr6 | s2 | 5651705 | 5651706 / 5651707 |
+
+All six completed within ~90 minutes; idle continuations were cancelled as each cell reached 24. The one failure was `spgrowth6-s1` (5651657): the vLLM engine died 13 s after the server came up (`scheduler.update_from_output` `KeyError` on a request id, `EngineDeadError`), the stage exited 1 with no records written, and the `afterany` continuation re-ran the shard cleanly. See infrastructure.md.
 
 Overnight events (2026-08-16): `appr6-s1` (5648824) hung mid-rollout at 03:27
 (engine log frozen, 0 tok/s) — cancelled, `-cont` 5648825 finished the shard.
