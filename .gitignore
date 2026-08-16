@@ -44,3 +44,6 @@ logs/partial/
 
 # Symlink to $ARTIFACT_DIR/rollouts (Inspect .eval logs live off-repo)
 inspect-logs
+
+# superpowers SDD scratch (ledgers, briefs, review packages)
+.superpowers/
