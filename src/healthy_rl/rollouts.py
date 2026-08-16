@@ -36,6 +36,7 @@ import ast
 import json
 import os
 import re
+import types
 import uuid
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
@@ -94,6 +95,7 @@ __all__ = [
     "mindset_section",
     "mindset_for",
     "strip_mindset_from_reminders",
+    "reminder_instruction",
     "check_resume_mindset",
 ]
 
@@ -402,6 +404,24 @@ def strip_mindset_from_reminders(samples: Iterable[Any], mindset: Sequence[str])
         sample.metadata = meta
         patched += 1
     return patched
+
+
+def reminder_instruction(affect: bool = False, mindset: Sequence[str] = ()) -> str:
+    """The turn-1 instruction as the scaffold will re-send it after a failure.
+
+    Runs the real stripper over a stub sample rather than repeating its replace
+    inline, so the ``instruction_reminder`` we record (and the rendered prompt
+    doc) cannot drift from what ``build_task`` actually sends. For an empty
+    mindset the stripper is a no-op, so this equals ``bench_instruction(affect)``.
+    """
+    stub = types.SimpleNamespace(
+        metadata={
+            "instruction_prompt": bench_instruction(affect, mindset),
+            "task_id": "summary",
+        }
+    )
+    strip_mindset_from_reminders([stub], mindset)
+    return str(stub.metadata["instruction_prompt"])
 
 
 # ---------------------------------------------------------------------------
@@ -1324,18 +1344,19 @@ def summarise_hook_results(
             if norm_arr.size:
                 observed[str(layer)] = float(norm_arr.mean())
 
-        # Keep every position's projections, not only their mean. ~126 KB a turn
-        # at float16 for a 900-token turn at 5 layers; the mean washed out a
-        # localised signal in this pilot (docs/measurement.md, "Granularity").
+        # Keep every position's projections, not only their mean. ~150 KB a turn
+        # for a 900-token turn at 5 layers -- 33 bytes/token/layer (28 proj at
+        # float16 + 4 norm + 1 kind), ~1.75 MB per rollout measured on Ministral
+        # d6; the mean washed out a localised signal in this pilot
+        # (docs/measurement.md, "Granularity").
         # `kind` is stored, not filtered, so a chunked-prefill one-position
         # chunk (recorded as a decode row) stays visible instead of shifting
         # every later position.
         residuals[f"proj_{suffix}"] = proj.astype(np.float16)
         residuals[f"kind_{suffix}"] = kind.astype(np.int8)
-        norms_all = saved.get(f"norm_{suffix}")
-        if norms_all is not None:
+        if norms is not None:
             residuals[f"norm_{suffix}"] = np.asarray(
-                _to_numpy(norms_all), dtype=np.float32
+                _to_numpy(norms), dtype=np.float32
             ).reshape(-1)
 
         for kind_name in ("res_start", "res_end"):
@@ -2514,9 +2535,7 @@ def run_rollouts(
         # with the mindset section removed entirely (see
         # strip_mindset_from_reminders), which makes it byte-identical to the
         # base arm's instruction.
-        "instruction_reminder": bench_instruction(affect, mindset).replace(
-            mindset_section(mindset), ""
-        ) if mindset else bench_instruction(affect),
+        "instruction_reminder": reminder_instruction(affect, mindset),
         MINDSET_KEY: list(mindset),
         "mindset_version": MINDSET_VERSION,
         "disqualified": False,
@@ -2546,6 +2565,9 @@ def run_rollouts(
         summary["turn_errors"] = state.turn_errors[:50]
         summary["n_turn_errors"] = len(state.turn_errors)
         summary["readout_hack_rates"] = hack_rates(records)
+        # Residual arrays parked between the model call and the record write.
+        # Should be ~0 between rollouts; a growing number is the stash leak (M10).
+        summary["stash_pending"] = len(state.stash)
         summary_path.write_text(
             json.dumps(summary, indent=2, sort_keys=True, default=str) + "\n"
         )

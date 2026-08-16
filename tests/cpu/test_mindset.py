@@ -33,6 +33,7 @@ from healthy_rl.rollouts import (
     compose_instruction,
     mindset_for,
     mindset_section,
+    reminder_instruction,
     strip_mindset_from_reminders,
 )
 
@@ -197,6 +198,7 @@ def test_strip_raises_when_the_section_is_missing():
         strip_mindset_from_reminders([s], ["growth"])
 
 
+
 # ---------------------------------------------------------------------------
 # build_task hands the benchmark the composed instruction and strips reminders
 # ---------------------------------------------------------------------------
@@ -305,6 +307,31 @@ def test_build_task_without_mindset_leaves_reminders_alone(fake_impossiblebench,
 def test_build_task_refuses_the_hf_path_with_mindset(fake_impossiblebench, bench_parquet):
     with pytest.raises(ValueError, match="mindset"):
         rollouts.build_task(["lcbhard_0"], bench_parquet, use_hf=True, mindset=["growth"])
+
+
+# reminder_instruction is what run_rollouts records as `instruction_reminder`
+# and what scripts/render_rollout_prompts.py documents. Both must equal the base
+# arm's turn-1 text: that byte-identity is the send-once claim, and an inline
+# reimplementation of the stripper's replace could drift from the stripper
+# itself without either caller noticing. It reaches bench_instruction, so it
+# needs the faked benchmark module.
+@pytest.mark.parametrize("affect", [False, True])
+@pytest.mark.parametrize("names", [["growth"], ["resilience"], ["growth", "appraisal"]])
+def test_reminder_instruction_equals_the_base_arm_turn_one(
+    fake_impossiblebench, affect, names
+):
+    assert reminder_instruction(affect, names) == bench_instruction(affect)
+
+
+@pytest.mark.parametrize("affect", [False, True])
+def test_reminder_instruction_without_mindset_is_turn_one(fake_impossiblebench, affect):
+    assert reminder_instruction(affect, ()) == bench_instruction(affect)
+
+
+def test_reminder_instruction_rejects_an_unknown_block(fake_impossiblebench):
+    with pytest.raises(KeyError, match="unknown mindset"):
+        reminder_instruction(False, ["gorwth"])
+
 
 
 # ---------------------------------------------------------------------------

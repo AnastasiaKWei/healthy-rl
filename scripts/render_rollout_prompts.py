@@ -18,11 +18,10 @@ The coding problem is omitted: it differs per sample and no arm manipulates it.
 from __future__ import annotations
 
 import argparse
-from types import SimpleNamespace
 
 from healthy_rl.rollouts import (
     AFFECT_INSTRUCTION, MINDSET, MINDSET_VERSION, bench_instruction,
-    strip_mindset_from_reminders,
+    reminder_instruction,
 )
 
 FENCE = "````"  # the benchmark suffix contains ``` and would close a 3-tick fence
@@ -48,17 +47,13 @@ def turn_one(affect: bool, mindset: list[str]) -> str:
 def reminder(affect: bool, mindset: list[str]) -> str:
     """Turn 1 put through the REAL stripper.
 
-    Not a local reimplementation of the rule: ``run_rollouts`` patches the
-    benchmark's samples with ``strip_mindset_from_reminders``, and here the same
-    function patches a stand-in carrying the same metadata key. A change to the
-    stripping rule therefore reaches this document by itself, and this file
-    cannot describe a reminder the pipeline does not send.
+    Not a local reimplementation of the rule: ``reminder_instruction`` is the
+    same helper ``run_rollouts`` uses to record ``instruction_reminder``, and it
+    runs the pipeline's own ``strip_mindset_from_reminders`` over a stand-in
+    sample. A change to the stripping rule therefore reaches this document by
+    itself, and this file cannot describe a reminder the pipeline does not send.
     """
-    stub = SimpleNamespace(
-        metadata={"instruction_prompt": turn_one(affect, mindset), "task_id": "render"}
-    )
-    strip_mindset_from_reminders([stub], mindset)
-    return REMINDER_PREFIX + stub.metadata["instruction_prompt"]
+    return REMINDER_PREFIX + reminder_instruction(affect, mindset)
 
 
 def check() -> None:
