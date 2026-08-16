@@ -29,6 +29,7 @@ Usage (via serve.slurm, so it runs against a real server):
 from __future__ import annotations
 
 import argparse
+import concurrent.futures as cf
 import json
 import os
 import time
@@ -125,6 +126,10 @@ def main() -> int:
     ap.add_argument("--max-tokens", type=int, default=4096)
     ap.add_argument("--timeout", type=float, default=900.0)
     ap.add_argument("--repeats", type=int, default=2)
+    ap.add_argument("--concurrency", type=int, default=1,
+                    help="requests in flight at once. Production runs 8 "
+                         "(max_connections/max_num_seqs); at 1 the fault does "
+                         "not reproduce, so this is the variable under test.")
     args = ap.parse_args()
 
     import pandas as pd
@@ -166,13 +171,21 @@ def main() -> int:
             continue
         text = build_input(frame.loc[task], instruction)
         for label, payload in (("no", None), ("yes", hook)):
-            for rep in range(args.repeats):
-                r = one_request(base_url, args.model, text, args.max_tokens,
-                                payload, args.timeout)
-                print(f"{task:13s} {label:6s} {rep:3d} {r['outcome']:>9s} "
-                      f"{r['seconds']:7.1f} {r['tokens']:6d}", flush=True)
-                results.append({"task": task, "hooks": label == "yes",
-                                "rep": rep, **r})
+            n = args.concurrency * args.repeats
+            with cf.ThreadPoolExecutor(max_workers=args.concurrency) as pool:
+                futures = [pool.submit(one_request, base_url, args.model, text,
+                                       args.max_tokens, payload, args.timeout)
+                           for _ in range(n)]
+                for rep, fut in enumerate(futures):
+                    try:
+                        r = fut.result()
+                    except SystemExit as exc:
+                        print(f"{task:13s} {label:6s} {rep:3d}  ABORT {exc}", flush=True)
+                        raise
+                    print(f"{task:13s} {label:6s} {rep:3d} {r['outcome']:>9s} "
+                          f"{r['seconds']:7.1f} {r['tokens']:6d}", flush=True)
+                    results.append({"task": task, "hooks": label == "yes",
+                                    "rep": rep, **r})
 
     out = Path(os.environ.get("HEALTHY_RL_ARTIFACT_OUT") or root) / "stuck_request_diagnosis.json"
     out.write_text(json.dumps({"model": args.model, "max_tokens": args.max_tokens,
