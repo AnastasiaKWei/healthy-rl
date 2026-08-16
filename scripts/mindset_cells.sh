@@ -5,6 +5,7 @@
 #   scripts/mindset_cells.sh --submit     # write configs, submit
 #
 #   ONLY_MODEL=gemma-3-12b-it scripts/mindset_cells.sh --submit   # just that model
+#   ONLY_BASE=spaff6 scripts/mindset_cells.sh --submit             # just that base cell
 #
 # Cells (docs/superpowers/specs/2026-08-15-mindset-vectors-design.md §2):
 #   priority 1  Ministral d6-base   growth6 resil6 appr6            nice 0
@@ -12,6 +13,7 @@
 #   priority 3  Ministral aff6-base affgrowth6 affresil6 affappr6   nice 4000
 #   priority 4  gemma sp6-base      spgrowth6 spresil6 spappr6      nice 0
 #   priority 5  gemma aff6-base     affgrowth6 affresil6 affappr6   nice 2000
+#   priority 6  gemma spaff6-base   spaffgrowth6 spaffresil6 spaffappr6  nice 0
 # Each shard: primary (4h) -> -cont -> -cont2, chained afterany. Resume appends;
 # an idle continuation exits after model load. Priority is honoured because the
 # cluster runs PriorityType=priority/multifactor.
@@ -30,10 +32,11 @@
 #
 # SHARD_DIR overrides where configs are written (tests use a temp dir).
 #
-# ONLY_MODEL restricts the run to one model (exact name). It filters BOTH phases,
-# so the configs of the other models are neither rewritten nor submitted -- which
-# is what makes it safe to re-run this script to add a model after earlier cells
-# are already queued. Unset means every row, the original behaviour.
+# ONLY_MODEL restricts the run to one model (exact name), ONLY_BASE to one base
+# version (exact name). They filter BOTH phases, so the configs of the other rows
+# are neither rewritten nor submitted -- which is what makes it safe to re-run this
+# script to add a cell after earlier ones are already queued. Unset means every
+# row, the original behaviour; setting both keeps only the rows matching BOTH.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -60,13 +63,20 @@ CELLS=(
   "gemma-3-12b-it|affgrowth6|aff6|growth|2000"
   "gemma-3-12b-it|affresil6|aff6|resilience|2000"
   "gemma-3-12b-it|affappr6|aff6|appraisal|2000"
+  "gemma-3-12b-it|spaffgrowth6|spaff6|growth|0"
+  "gemma-3-12b-it|spaffresil6|spaff6|resilience|0"
+  "gemma-3-12b-it|spaffappr6|spaff6|appraisal|0"
 )
 
-# Empty means every model. Announced on stderr rather than stdout because stdout
-# in dry mode is the sbatch script and nothing else.
+# Empty means every model / every base. A row has to match every filter that is
+# set. Announced on stderr rather than stdout because stdout in dry mode is the
+# sbatch script and nothing else.
 ONLY_MODEL="${ONLY_MODEL:-}"
-in_scope() { [[ -z $ONLY_MODEL || $1 == "$ONLY_MODEL" ]]; }
-echo "models in scope: ${ONLY_MODEL:-all (ONLY_MODEL unset)}" >&2
+ONLY_BASE="${ONLY_BASE:-}"
+in_scope() {  # model base
+  [[ -z $ONLY_MODEL || $1 == "$ONLY_MODEL" ]] && [[ -z $ONLY_BASE || $2 == "$ONLY_BASE" ]]
+}
+echo "models in scope: ${ONLY_MODEL:-all (ONLY_MODEL unset)}; bases in scope: ${ONLY_BASE:-all (ONLY_BASE unset)}" >&2
 
 # Only ever called from phase 1, i.e. before the first sbatch -- which is what
 # makes "nothing submitted" true rather than hopeful.
@@ -138,18 +148,18 @@ done
 selected=0
 for row in "${CELLS[@]}"; do
   IFS='|' read -r model version base mindset nice <<< "$row"
-  in_scope "$model" || continue
+  in_scope "$model" "$base" || continue
   selected=$((selected + 1))
   for i in 0 1 2; do
     src="configs/shards/rollouts-${model}-${base}-s${i}of3.yaml"
     [[ -f "$src" ]] || die "missing base config $src"
   done
 done
-(( selected > 0 )) || die "ONLY_MODEL='$ONLY_MODEL' matches no row in CELLS"
+(( selected > 0 )) || die "ONLY_MODEL='$ONLY_MODEL' ONLY_BASE='$ONLY_BASE' matches no row in CELLS"
 
 for row in "${CELLS[@]}"; do
   IFS='|' read -r model version base mindset nice <<< "$row"
-  in_scope "$model" || continue
+  in_scope "$model" "$base" || continue
   for i in 0 1 2; do
     write_config "$model" "$version" "$base" "$mindset" "$i"
   done
@@ -167,7 +177,7 @@ fi
 
 for row in "${CELLS[@]}"; do
   IFS='|' read -r model version base mindset nice <<< "$row"
-  in_scope "$model" || continue
+  in_scope "$model" "$base" || continue
   for i in 0 1 2; do
     # The sbatch line always names the real location; SHARD_DIR only redirects
     # where this run WROTE the config (so a test can generate into a temp dir).

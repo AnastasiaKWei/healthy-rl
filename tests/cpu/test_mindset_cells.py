@@ -43,6 +43,9 @@ CELLS = {
     ("gemma-3-12b-it", "affgrowth6"): ("aff6", ["growth"], 2000),
     ("gemma-3-12b-it", "affresil6"): ("aff6", ["resilience"], 2000),
     ("gemma-3-12b-it", "affappr6"): ("aff6", ["appraisal"], 2000),
+    ("gemma-3-12b-it", "spaffgrowth6"): ("spaff6", ["growth"], 0),
+    ("gemma-3-12b-it", "spaffresil6"): ("spaff6", ["resilience"], 0),
+    ("gemma-3-12b-it", "spaffappr6"): ("spaff6", ["appraisal"], 0),
 }
 # Every count below is derived from CELLS, so adding a row here is the only edit a
 # new cell needs: 3 shards a cell, 3 jobs a shard.
@@ -293,7 +296,7 @@ def test_only_model_restricts_both_phases_to_that_model(tmp_path):
     jobs are in the queue."""
     only = "gemma-3-12b-it"
     n_cells = sum(1 for model, _v in CELLS if model == only)
-    assert n_cells == 6, "this test is about the gemma cells"
+    assert n_cells == 9, "this test is about the gemma cells"
 
     env, log = _stubbed_env(tmp_path)
     out = tmp_path / "shards"
@@ -305,16 +308,65 @@ def test_only_model_restricts_both_phases_to_that_model(tmp_path):
     assert only in proc.stderr.splitlines()[0]
 
     written = sorted(pth.name for pth in out.iterdir())
-    assert len(written) == 3 * n_cells == 18, written
+    assert len(written) == 3 * n_cells == 27, written
     assert all(name.startswith(f"rollouts-{only}-") for name in written), written
     expected = {f"rollouts-{only}-{version}-s{i}of3.yaml"
                 for model, version in CELLS if model == only for i in range(3)}
     assert set(written) == expected
 
     lines = [l for l in proc.stdout.splitlines() if l.startswith("sbatch --parsable")]
-    assert len(lines) == proc.stdout.count("\n") == 3 * 3 * n_cells == 54
+    assert len(lines) == proc.stdout.count("\n") == 3 * 3 * n_cells == 81
     assert all(only in l for l in lines)
     assert not [l for l in lines if "Ministral" in l or "Qwen" in l]
+    assert not log.exists() or log.read_text() == ""
+
+
+def test_only_model_and_only_base_together_keep_only_the_rows_matching_both(tmp_path):
+    """The two filters intersect: the gemma spaff6 cells are three of the nine gemma
+    cells and the only three built on that base, so setting both has to leave exactly
+    those -- neither every gemma cell nor every spaff6-named row of another model."""
+    only_model, only_base = "gemma-3-12b-it", "spaff6"
+    cells = [(m, v) for (m, v), (b, _m, _n) in CELLS.items()
+             if m == only_model and b == only_base]
+    assert len(cells) == 3, cells
+
+    env, log = _stubbed_env(tmp_path)
+    out = tmp_path / "shards"
+    env["SHARD_DIR"] = str(out)
+    env["ONLY_MODEL"] = only_model
+    env["ONLY_BASE"] = only_base
+    proc = subprocess.run(["bash", str(SCRIPT), "--dry-run"], cwd=REPO, env=env,
+                          capture_output=True, text=True, timeout=120)
+    assert proc.returncode == 0, proc.stderr
+    scope = proc.stderr.splitlines()[0]
+    assert only_model in scope and only_base in scope, scope
+
+    written = sorted(pth.name for pth in out.iterdir())
+    assert len(written) == 9, written
+    assert set(written) == {f"rollouts-{only_model}-{version}-s{i}of3.yaml"
+                            for _m, version in cells for i in range(3)}
+    assert all("spaff" in name for name in written), written
+
+    lines = [l for l in proc.stdout.splitlines() if l.startswith("sbatch --parsable")]
+    assert len(lines) == proc.stdout.count("\n") == 27
+    assert all("spaff" in l for l in lines), lines
+    # The aff6 and sp6 gemma cells share a model with these but not a base.
+    assert not [l for l in lines if re.search(r"-(aff|sp)(growth|resil|appr)6-", l)]
+    assert not log.exists() or log.read_text() == ""
+
+
+def test_only_base_that_matches_nothing_is_an_error(tmp_path):
+    """Same guard as ONLY_MODEL: a base that no row is built on, or a model/base pair
+    that never co-occurs, must fail loudly rather than submit nothing quietly."""
+    env, log = _stubbed_env(tmp_path)
+    env["SHARD_DIR"] = str(tmp_path / "shards")
+    env["ONLY_MODEL"] = "Qwen3.5-9B"
+    env["ONLY_BASE"] = "spaff6"  # a real base, but not one Qwen has a row for
+    proc = subprocess.run(["bash", str(SCRIPT), "--submit"], cwd=REPO, env=env,
+                          capture_output=True, text=True, timeout=60)
+    assert proc.returncode != 0
+    assert "matches no row" in proc.stderr
+    assert "nothing submitted" in proc.stderr
     assert not log.exists() or log.read_text() == ""
 
 
