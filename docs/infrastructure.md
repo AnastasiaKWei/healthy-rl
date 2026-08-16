@@ -139,9 +139,23 @@ request` are absent from the server log at default verbosity, so counting
 3.5 hours against 8 permanently-running requests does not add up under a
 24576-token cap, and that arithmetic is what exposes the hang.
 
+**The signature is remarkably specific.** Across five confirmed hangs on two
+models, every one looked the same:
+
+- job log stops at **~30 lines**, last line `Attempt 1/6`
+- exactly **3 completed** `POST /v1/chat/completions` on the server
+- server drops to **0–2 running requests** where 8 concurrent samples were
+  expected — in one case 0, with nothing to wait for at all
+- no error, on either side
+
+Three completions and then a wedge, every time, with `max_connections: 8` and 8
+in-flight samples. That reproducibility argues for something structural in the
+client's connection handling rather than an unlucky slow generation.
+
 **Suspected cause, not confirmed:** `request_timeout_s: 600` is shorter than a
 full-length generation, so the client may abandon a request the server keeps
-serving. Cancelling the job and letting its dependent continuation resume is the
+serving. Note this does not obviously explain the "always exactly 3" part, so
+treat it as one hypothesis rather than the answer. Cancelling the job and letting its dependent continuation resume is the
 cheap fix — records are checkpointed per rollout, so nothing is lost.
 
 **`scripts/grid_status.sh` now detects this automatically**, because the grid of
