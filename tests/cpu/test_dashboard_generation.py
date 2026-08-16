@@ -189,9 +189,23 @@ def test_one_row_short_without_length_finish_is_still_misaligned():
     assert g.proj.shape[0] == 5 and g.warnings == []
 
 
-def test_capped_generation_with_a_full_set_of_rows_is_not_padded():
+def test_capped_generation_with_a_full_set_of_rows_is_not_padded_but_is_flagged():
+    # A capped generation should be one row short. A full set means a row came from
+    # somewhere else -- a one-position prefill chunk stamped as decode, say -- which
+    # would shift the whole token strip by one.
     g = assemble_generation(text="abcd", reasoning_content=None, tokens=list("abcd"),
                             finish_reason="length", hook_saved=_saved(n_decode=4), capture_layers=LAYERS,
                             probe_layer=PROBE, n_emotions=E, max_tokens=4, seconds=0.1)
     assert not g.misaligned and g.proj.shape[0] == 4 and np.isfinite(g.proj).all()
-    assert g.n_generated == 4 and g.warnings == []
+    assert g.n_generated == 4
+    assert any("extra row" in w for w in g.warnings)
+
+
+def test_length_finish_with_no_hook_rows_at_all_is_not_silently_aligned():
+    # Every layer missing leaves zero rows, which for a one-token generation happens
+    # to equal len(tokens) - 1. The padding branch must not read that as alignment.
+    g = assemble_generation(text="a", reasoning_content=None, tokens=["a"], finish_reason="length",
+                            hook_saved={}, capture_layers=LAYERS, probe_layer=PROBE,
+                            n_emotions=E, max_tokens=1, seconds=0.1)
+    assert g.misaligned and "layer 10" in g.error and "layer 20" in g.error
+    assert g.proj.shape[0] == 0 and g.n_generated == 0 and g.warnings == []

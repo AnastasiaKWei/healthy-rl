@@ -471,9 +471,15 @@ end of the build (2026-08-15), before the GPU smoke gate had run.
     choice from the log. Off that path nothing changes: `text` is the completion
     verbatim and goes back verbatim, reasoning tags and all.
 
-Still open at the time of writing: **nothing here has run on a GPU.** The smoke
-gate (5643496), the dashboard job behind it (5643744) and the streaming spike
-(5643851) were all pending. 5643851 has since run: token-text streaming is
+Still open at the time of writing: **no dashboard session has completed a passing
+gate on a GPU.** The smoke gate 5643496 did run, on spockmk2-22-01, and returned
+`smoke_ok: false`: it served, generated and wrote 3 records with a finite
+`first_start_readout` (−0.0021), but both 512-token-capped task attempts came back
+one decode row short and were reported as misaligned. That is fixed in c41c5af
+(a capped generation's last token has no residual row; it is now padded), and the
+gate was resubmitted as 5645488 with the dashboard job 5645489 behind it —
+result pending. 5643744 was dropped by the failed dependency and never ran.
+5643851 has since run: token-text streaming is
 **feasible** — per-request hooks come back in a final SSE chunk on a streamed
 request, with decode rows still matching the token count — so §3.1's "not in
 this version" is now a scope decision rather than an open question, and the

@@ -227,7 +227,7 @@ def assemble_generation(
             pp_out[li] = pp
 
     misaligned = T != len(tokens)
-    if misaligned and finish_reason == "length" and T == len(tokens) - 1:
+    if misaligned and finish_reason == "length" and n_decode is not None and T == len(tokens) - 1:
         # A generation that stops at the cap is one decode row short: the last
         # sampled token is never fed back through the model, so no forward pass
         # ever runs at its position and it has no residual. (A stop-finished
@@ -239,6 +239,11 @@ def assemble_generation(
         T = len(tokens)
         misaligned = False
         warns.append("last token has no residual (generation hit max_tokens)")
+    elif finish_reason == "length" and not misaligned and n_decode is not None:
+        # A capped generation is supposed to be one row short. A full set means a
+        # row arrived from somewhere else -- a one-position prefill chunk stamped as
+        # decode is the known way -- and the whole strip may be off by one.
+        warns.append("finish_reason=length with a full row set: an extra row may have shifted the strip by one")
     if misaligned:
         problems.append(f"{len(tokens)} logprob tokens but {T} decode rows in hook results")
 

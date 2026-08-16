@@ -278,6 +278,12 @@ record (hook rows ≠ `len(tokens)`) rather than as a quietly shifted token stri
 before hunting elsewhere. A misaligned turn's per-token readouts are unusable
 either way — the dashboard hides its token strip.
 
+Its `start` readout, though, is still valid: `start` is read at the prefill row,
+before any token, so it does not depend on the token alignment at all.
+`/api/aggregate` therefore includes misaligned records in `position=start` like
+any other, and counts them as skipped for the other three readouts — skipped and
+counted, not dropped from the denominator.
+
 **A capped turn is one decode row short, and that is not misalignment.** When
 generation stops at `max_tokens` the last sampled token is never fed back through
 the model, so no forward pass runs at its position and it has no residual row —
@@ -286,10 +292,20 @@ pads one all-NaN row so token index still equals row index, warns
 (`last token has no residual...`), and leaves `misaligned=False`. The `end` readout
 of a capped turn is therefore `None`: skipped and counted, which is right anyway,
 since that position is where the budget ran out rather than where the model
-finished. `think_end`, `answer_start`, `start` and the segment means are unaffected.
+finished. `include_cap=true` does not buy the value back — it moves those turns
+from "excluded" into "skipped and counted", and only yields a number for the rare
+`at_cap` turn that finished on `stop` exactly at the cap and so kept its last row.
 
-Its `start` readout, though, is still valid: `start` is read at the prefill row,
-before any token, so it does not depend on the token alignment at all.
-`/api/aggregate` therefore includes misaligned records in `position=start` like
-any other, and counts them as skipped for the other three readouts — skipped and
-counted, not dropped from the denominator.
+Which of the other readouts survive depends on where the cap landed:
+
+- `start` always. It is read at the prefill row, before any token.
+- The segment means always. They average the finite tokens and skip the pad.
+- `think_end` and `answer_start` **only if the cap fell after the reasoning
+  closed**. If it fell mid-reasoning the span is never closed, so every token is
+  labelled `think`, the last `think` token *is* the padded row, and `think_end`
+  is `None` — and `answer_start` is `None` too, because there are no answer
+  tokens at all.
+
+One stored-field caveat for anyone reading the npz directly: `res_end_L{probe}` on
+a capped turn is the residual at token n−1, not token n. The hook overwrites that
+key on every decode pass, so it holds the last row that existed; nothing pads it.

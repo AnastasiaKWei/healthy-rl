@@ -180,12 +180,18 @@ Ministral-3-14B-Reasoning-2512, one 39-token reply per route:
 | route | result |
 |---|---|
 | per-request (`vllm_xargs.apply_hooks`) + `stream: true` | hook results arrive as one extra chunk, 42 of 42, immediately before `data: [DONE]` |
-| persistent (`/v1/hooks/register` + `/v1/hooks/collect`) + `stream: true` | collected under `chatcmpl-<id>-<suffix>` — the response id plus a suffix, not the id |
+| persistent (`/v1/hooks/register` + `/v1/hooks/collect`) + `stream: true` | collected under `<id>-<suffix>` — the response id (which already begins `chatcmpl-`) plus a suffix, so a lookup by the id alone finds nothing |
 | non-streamed per-request (what the dashboard does today) | reference |
 
 All three produced **39 decode rows and 1 prefill row at every capture layer**
-against 39 `usage.completion_tokens`. Streaming costs no row, and the alignment
-`assemble_generation` already enforces holds unchanged.
+against 39 `usage.completion_tokens`, so streaming costs no row. Read that result
+narrowly: all three replies finished on `stop`, and rows match tokens only there.
+A reply that stops at `max_tokens` has no row for its last token at all — the
+smoke gate (5643496) saw 512 tokens against 511 rows on both capped attempts —
+because that token is never fed back through the model. `assemble_generation`
+pads that case with an all-NaN row rather than calling it misaligned; the
+consequences for the readouts are in
+[measurement.md](measurement.md#the-dashboards-readouts).
 
 vllm-lens 1.2.1 patches `OpenAIServingChat.chat_completion_stream_generator`
 (`_activations_plugin.py`, `_patched_chat_stream_generator`) to serialize the

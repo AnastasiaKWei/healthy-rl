@@ -326,15 +326,29 @@ fatal (see [infrastructure.md](infrastructure.md#the-zstd-patch-is-recorded-not-
 
 | job | what | state |
 |---|---|---|
-| 5643496 | smoke gate, `--stage scripts/dashboard.py::--smoke` | submitted 2026-08-15, pending at time of writing |
-| 5643744 | the dashboard itself, `--dependency=afterok:5643496` | submitted 2026-08-15, pending (Dependency) at time of writing |
-| 5643851 | streaming-hook spike, `--stage scripts/spike_stream_hooks.py` | completed 2026-08-15 on spockmk2-03: `{"per_request_stream_hooks": true, "persistent_keyed_by_response_id": true, "rows_match_tokens": true}` |
+| 5643496 | smoke gate, `--stage scripts/dashboard.py::--smoke` | ran 2026-08-15 on spockmk2-22-01, `smoke_ok: false` — see below |
+| 5643744 | the dashboard itself, `--dependency=afterok:5643496` | dropped 2026-08-15 by the failed dependency, never ran |
+| 5643851 | streaming-hook spike, `--stage scripts/spike_stream_hooks.py` | completed 2026-08-15 on spockmk2-03: `{"per_request_stream_hooks": true, "persistent_keyed_by_response_id": true, "rows_match_tokens": true}`. `persistent_keyed_by_response_id` means the collect key *starts with* the response id (`<id>-<suffix>`) — a prefix match, not the literal id |
+| 5645488 | smoke gate rerun after the fix | submitted 2026-08-15, running on spockmk2-09 at time of writing; **result pending** |
+| 5645489 | the dashboard itself, `--dependency=afterok:5645488` | submitted 2026-08-15, pending (Dependency) at time of writing |
 
-All three are `slurm/serve.slurm` on Ministral-3-14B-Reasoning-2512 with
-`configs/dashboard.yaml`; logs are `logs/serve-<jobid>.out`. **No dashboard
-session has run on a GPU yet** — nothing in this section has been confirmed
-against a real record file. If 5643496 fails, 5643744 shows
-`DependencyNeverSatisfied` and must be cancelled and resubmitted after the fix.
+All of them are `slurm/serve.slurm` on Ministral-3-14B-Reasoning-2512 with
+`configs/dashboard.yaml`; logs are `logs/serve-<jobid>.out`.
+
+**The first smoke gate ran and failed on a real bug.** 5643496 served the model,
+generated, and wrote 3 records; `first_start_readout` was −0.0021 (finite, so the
+probe path works end to end). It returned `smoke_ok: false` because both task
+attempts hit the 512-token cap and came back one decode row short —
+`"512 logprob tokens but 511 decode rows in hook results"` — which
+`assemble_generation` was reporting as `misaligned`. The chat turn (16 tokens,
+`finish=stop`) aligned fine. Cause and fix are in
+[measurement.md](measurement.md#the-dashboards-readouts) (commit c41c5af): a
+capped generation never feeds its last token back, so that token has no residual
+row, and the row is now padded rather than flagged. 5643744 was dropped by the
+`afterok` dependency and never ran; the rerun is 5645488 with 5645489 behind it,
+and **its result is still pending** — nothing in this section has yet been
+confirmed against a record file from a passing gate.
+
 5643851 has answered its question — token-text streaming is feasible, per-request
 hooks and all, and stays unimplemented in this version; the verdict and the
 traps that come with it are in docs/infrastructure.md, "Streaming and hooks".

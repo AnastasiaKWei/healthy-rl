@@ -41,8 +41,10 @@ class FakeEngine:
         text = "".join(words)
         E = self.vectors.n_emotions
         capped = n == max_tokens
-        # Mirror the server: a capped generation never feeds its last token back,
-        # so that token has no residual row and there are n - 1 decode rows.
+        # Mirror the server's row count: a capped generation never feeds its last
+        # token back, so that token has no residual row and there are n - 1 decode
+        # rows. res_end is NOT mirrored -- it is written unconditionally below,
+        # where the server's hook would leave it at the last row it did see.
         rows = n - 1 if capped else n
         saved = {}
         for l in self.vectors.capture_layers:
