@@ -100,25 +100,38 @@ def smoke(state: AppState) -> int:
         body = r.read().decode()
     notes["chat_turn_event"] = "event: turn" in body
     ok &= notes["chat_turn_event"]
-    probs = c.get("/api/problems", params={"split": "original"}).json()["problems"]
-    tid = probs[0]["task_id"]
-    with c.stream("POST", "/api/task/start",
-                  json={"split": "original", "task_id": tid, "attempts": 2,
-                        "auto_continue": True, "max_tokens": 512}) as r:
-        body = r.read().decode()
-    notes["task_done_event"] = "event: done" in body
+    # Guarded: Sandbox.problems raises RuntimeError on any apptainer/parquet
+    # trouble, the app only converts ValueError, and TestClient re-raises server
+    # exceptions -- so the likeliest first-contact failure would otherwise be a
+    # traceback with no verdict. An empty parquet is the IndexError on probs[0].
+    notes["task_done_event"] = False
+    try:
+        probs = c.get("/api/problems", params={"split": "original"}).json()["problems"]
+        tid = probs[0]["task_id"]
+        with c.stream("POST", "/api/task/start",
+                      json={"split": "original", "task_id": tid, "attempts": 2,
+                            "auto_continue": True, "max_tokens": 512}) as r:
+            body = r.read().decode()
+        notes["task_done_event"] = "event: done" in body
+    except Exception as exc:
+        notes["problems_error"] = f"{type(exc).__name__}: {exc}"
     ok &= notes["task_done_event"]
     recs = state.store.records()
     notes["n_records"] = len(recs)
     notes["misaligned"] = [r["record_id"] for r in recs if r.get("misaligned")]
+    # A turn that errored is a red gate: the run is otherwise indistinguishable
+    # from a healthy one (records written, nothing misaligned, readouts finite).
     notes["errors"] = [r["error"] for r in recs if r.get("error")]
-    ok &= len(recs) >= 2 and not notes["misaligned"]
+    ok &= len(recs) >= 2 and not notes["misaligned"] and not notes["errors"]
     # Guarded: the JSON line below is the whole point of the gate, so a smoke that
     # recorded nothing must still print why rather than die on recs[0].
     start = None
-    if recs:
-        conv = c.get(f"/api/conversations/{recs[0]['conversation_id']}").json()
-        start = conv["turns"][0]["readouts"][state.vectors.emotions[0]]["start"]
+    try:
+        if recs:
+            conv = c.get(f"/api/conversations/{recs[0]['conversation_id']}").json()
+            start = conv["turns"][0]["readouts"][state.vectors.emotions[0]]["start"]
+    except Exception as exc:
+        notes["readout_error"] = f"{type(exc).__name__}: {exc}"
     notes["first_start_readout"] = start
     ok &= start is not None
     print(json.dumps({"smoke_ok": bool(ok), **notes}, default=str), flush=True)
@@ -164,9 +177,10 @@ def main(argv: list[str] | None = None) -> int:
                           "temperature": float(dash.get("temperature", 0.0)),
                           "message_limit": int(dash.get("message_limit", 40))})
     if args.smoke:
-        rc = smoke(state)
-        store.close()
-        return rc
+        try:
+            return smoke(state)
+        finally:
+            store.close()  # the records are the evidence, gate red or green
     port = args.port or free_port()
     # AppState.job is this same dict, so /api/session sees the port and tunnel line.
     job.update(job_info(port=port))
@@ -180,6 +194,9 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         health.stop()
         store.close()
+        # A stale endpoint file outlives the job and sends the next tunnel at a
+        # dead port; the helper warns about the ones a SIGKILL leaves behind.
+        ep.unlink(missing_ok=True)
     return 0
 
 

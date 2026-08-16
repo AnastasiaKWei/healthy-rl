@@ -11,6 +11,11 @@ serve:
   max_num_seqs: 4
 
 # --- dashboard defaults (match configs/rollouts.yaml so runs are comparable) --
+# One deliberate exception: temperature. rollouts.yaml uses 1.0 because repeated
+# samples of one problem at 0 would be identical, so there would be no variance to
+# estimate; here you are looking at one turn at a time and want the same prompt to
+# give the same answer twice, so the dashboard defaults to 0.0. Everything else
+# (max_tokens, max_attempts, message_limit) is the rollout value.
 dashboard:
   max_tokens: 2048
   max_attempts: 6
