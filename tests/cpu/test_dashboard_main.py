@@ -28,3 +28,36 @@ def test_replay_state_is_read_only_and_reads_old_records(tmp_path):
     cid = convs[0]["conversation_id"]
     assert rc.get(f"/api/conversations/{cid}").json()["turns"][0]["readouts"]
     assert rc.post("/api/chat/new/send", json={"text": "x"}).status_code == 409
+
+
+def test_rollouts_state_opens_cells_read_only(tmp_path, capsys):
+    from rollout_cell import make_cell
+    from healthy_rl.dashboard.__main__ import startup_report
+    make_cell(tmp_path / "r", "m-a", "appr6", rows=[{"task_id": "lcbhard_0", "sample": 0, "completions": ["a b"], "passed": False}])
+    st = build_state(fake=False, replay=None, session_dir=None, vectors_dir=None, cfg={}, rollouts=[str(tmp_path / "r")])
+    assert st.mode == "rollouts" and st.read_only and st.vectors is None
+    rep = startup_report(st.store)
+    assert "m-a" in rep and "appr6" in rep and "tokenizer" in rep
+    c = TestClient(create_app(st))
+    assert c.get("/api/session").json()["mode"] == "rollouts"
+    assert c.post("/api/chat/new/send", json={"text": "x"}).status_code == 409
+
+
+def test_rollouts_state_with_no_cells_exits(tmp_path):
+    import pytest
+    (tmp_path / "empty").mkdir()
+    with pytest.raises(SystemExit):
+        build_state(fake=False, replay=None, session_dir=None, vectors_dir=None, cfg={}, rollouts=[str(tmp_path / "empty")])
+
+
+def test_startup_report_summarises_a_long_ignored_list(tmp_path):
+    """The real rollouts root has ~200 scratch directories: one line per name is a wall of text."""
+    from rollout_cell import make_cell
+    from healthy_rl.dashboard.__main__ import startup_report
+    make_cell(tmp_path / "r", "m-a", "appr6", rows=[{"task_id": "lcbhard_0", "sample": 0, "completions": ["a b"]}])
+    for i in range(12):
+        (tmp_path / "r" / f"empty{i:02d}").mkdir()
+    st = build_state(fake=False, replay=None, session_dir=None, vectors_dir=None, cfg={}, rollouts=[str(tmp_path / "r")])
+    assert len(st.store.session["ignored"]) == 12
+    line = next(l for l in startup_report(st.store).splitlines() if l.startswith("ignored"))
+    assert "empty00" in line and "empty11" not in line and "(+4 more)" in line
