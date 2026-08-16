@@ -1431,7 +1431,9 @@ function renderTokInfo(i) {
 
 // ---------- aggregate tab ----------
 function fillAggFilter() {
-  if (S.rollouts) { renderAggPicker(); return; }
+  // The picker follows the open rollout until it is touched, so opening one from the rail
+  // moves the selection; the tab has to be repainted or it keeps showing the previous cell.
+  if (S.rollouts) { renderAggPicker(); if (S.tab === "agg") renderAggregate(); return; }
   const sel = $("#aggFilter");
   const opts = [];
   const splits = Array.from(new Set(S.conversations.filter(c => c.source === "task").map(c => c.bench_split).filter(Boolean)));
@@ -1481,6 +1483,9 @@ function renderAggPicker() {
     const avail = offered().map(c => c.version);
     Array.from(G.versions).forEach(v => { if (avail.indexOf(v) < 0) G.versions.delete(v); });
     if (!G.versions.size && avail.length) G.versions.add(avail[0]);
+    // Same for the layer: an explicit one only exists while some selected model captured it.
+    const capt = [].concat.apply([], Array.from(G.models).map(m => (S.models[m] || {}).capture_layers || []));
+    if (G.layer !== "probe" && capt.indexOf(G.layer) < 0) G.layer = "probe";
   };
   const row = (label, node, extra) => {
     const r = el("div", "pickrow");
@@ -1587,7 +1592,7 @@ async function renderAggregate() {
   catch (e) {
     if (seq !== aggSeq) return;
     msg.innerHTML = '<div class="warnbox' + (e.status === 400 ? "" : " crit") + '"><b>No aggregate.</b> ' + esc(e.message) + "</div>";
-    table.innerHTML = ""; $("#aggChart").innerHTML = "";
+    table.innerHTML = ""; $("#aggChart").innerHTML = ""; $("#aggChartSub").textContent = "";
     return;
   }
   if (seq !== aggSeq) return;
