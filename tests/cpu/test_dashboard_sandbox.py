@@ -27,12 +27,27 @@ def _sandbox(tmp_path, runner):
                    scratch_dir=tmp_path / "scratch", timeout_s=5, runner=runner)
 
 
+def test_feedback_marker_is_the_rollout_scaffolds_marker():
+    """The dashboard and the rollout scaffold must agree on the marker verbatim.
+
+    Two copies of the same string is how a feedback message stops matching the
+    one the pilot recorded, silently.
+    """
+    from healthy_rl.rollouts import TEST_FAILURE_MARKER
+    assert FEEDBACK_MARKER == TEST_FAILURE_MARKER
+
+
 def test_command_binds_project_bench_scratch_readonly_where_it_should(tmp_path):
     sb = _sandbox(tmp_path, runner=None)
     cmd = sb.command("problems", "--parquet", "/bench/orig1/original.parquet")
     assert cmd[:3] == ["apptainer", "exec", "--contain"]
     joined = " ".join(cmd)
-    assert f"{tmp_path/'proj'}:/project:ro" in joined and f"{tmp_path/'bench'}:/bench:ro" in joined
+    # Empty network namespace: model-generated code gets no network at all.
+    assert cmd[cmd.index("--net") + 1:cmd.index("--net") + 3] == ["--network", "none"]
+    # Only src is bound, so .env (HF_TOKEN) is never inside the container.
+    assert f"{tmp_path/'proj'}/src:/project/src:ro" in joined
+    assert f"{tmp_path/'proj'}:/project:ro" not in joined
+    assert f"{tmp_path/'bench'}:/bench:ro" in joined
     assert f"{tmp_path/'scratch'}:/scratch:rw" in joined and "--pwd /scratch" in joined
     assert "PYTHONPATH=/project/src" in joined
     assert "HOME=" not in joined  # apptainer refuses APPTAINERENV_HOME; the image's /work is already a tmpfs

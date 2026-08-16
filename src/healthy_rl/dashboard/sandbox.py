@@ -1,10 +1,18 @@
 """Host side of the task loop's code execution: apptainer --contain around sandbox_cli.
 
 Model-generated code runs ONLY through ``Sandbox.run``, inside ``eval.sif``
-with ``--contain`` (docs/infrastructure.md). Binds: the project read-only at
-/project (code), the bench ROOT read-only at /bench (parquets), and a scratch
-directory read-write at /scratch (the code file, cwd, TMPDIR). Nothing under
-``$ARTIFACT_DIR`` other than the bench root is visible.
+with ``--contain`` (docs/infrastructure.md). Binds: the project's ``src`` tree
+read-only at /project/src (code), the bench ROOT read-only at /bench
+(parquets), and a scratch directory read-write at /scratch (the code file, cwd,
+TMPDIR). Nothing under ``$ARTIFACT_DIR`` other than the bench root is visible.
+
+Only ``src`` is bound, not the project root: the root holds ``.env``, which
+carries ``HF_TOKEN``, and model-generated code has no business reading it.
+
+``--net --network none`` puts the container in an empty network namespace, so
+model-generated code cannot reach the network at all. It works unprivileged on
+this cluster (verified 2026-08-15: ``socket.create_connection(('1.1.1.1', 53))``
+inside raises ``OSError: [Errno 101] Network is unreachable``).
 
 HOME is deliberately left alone: the image sets ``HOME=/work`` and apptainer
 refuses ``--env HOME=...`` ("Overriding HOME environment variable with
@@ -48,6 +56,10 @@ class Sandbox:
     directory: the splits are fetched into separate subdirectories because
     ``fetch_bench`` writes fixed-name manifests per directory (docs/runs.md), so
     ``split_parquets`` maps a split name to its parquet relative to that root.
+
+    ``project_dir`` is the project root, but only ``project_dir/src`` is bound
+    (at ``/project/src:ro``) so ``.env`` and its ``HF_TOKEN`` never enter the
+    container; ``command`` also adds ``--net --network none``.
     """
 
     def __init__(self, *, sif: Path, project_dir: Path, bench_dir: Path, scratch_dir: Path,
@@ -71,7 +83,8 @@ class Sandbox:
     def command(self, *cli_args: str) -> list[str]:
         return [
             "apptainer", "exec", "--contain", "--cleanenv", "--writable-tmpfs",
-            "--bind", f"{self.project_dir}:/project:ro",
+            "--net", "--network", "none",
+            "--bind", f"{self.project_dir}/src:/project/src:ro",
             "--bind", f"{self.bench_dir}:/bench:ro",
             "--bind", f"{self.scratch_dir}:/scratch:rw",
             "--env", "PYTHONPATH=/project/src", "--env", "TMPDIR=/scratch",
