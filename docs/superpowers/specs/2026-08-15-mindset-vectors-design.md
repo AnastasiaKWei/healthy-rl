@@ -108,7 +108,8 @@ the block. Everything else in the reminder repeats as before.
 ### 3.4 Records, summary, resume
 
 - `RunState.mindset: tuple[str, ...]`.
-- Every record: `MINDSET_KEY: list(state.mindset)` (`[]` when none) and
+- Every record: `MINDSET_KEY: list(state.mindset)` — in `MINDSET` order, the
+  order the blocks appear in the prompt (`[]` when none) — and
   `"mindset_version": MINDSET_VERSION`.
 - `summary.json`: `mindset`, `mindset_version`, `instruction` (turn 1, already
   recorded), and new `instruction_reminder` (the stripped text the scaffold
