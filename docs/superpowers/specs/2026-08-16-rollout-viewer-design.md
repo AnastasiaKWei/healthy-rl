@@ -1,8 +1,11 @@
 # Rollout viewer: reading pilot rollouts, per token, in the Affect Scope dashboard
 
 **Date:** 2026-08-16
-**Status:** approved design, awaiting implementation plan
+**Status:** implemented 2026-08-16 (branch feature/rollout-viewer)
 **Builds on:** `2026-08-15-affect-dashboard-design.md` (the dashboard this extends)
+**Reading a run:** the command and the tunnel line are in `docs/runs.md`
+("Reading a run"); the token-strip and alignment rules in `docs/measurement.md`
+("Rollout token strips"); the traps met building it in `docs/infrastructure.md`.
 
 ## 1. Purpose
 
@@ -59,8 +62,9 @@ cell's `inspect-logs/`.
 
 | field | source |
 |---|---|
-| `record_id` | `<model>/<version>/<task_id>/ep<epoch>/t<turn>` — deterministic, so a URL to a turn survives a restart |
-| `conversation_id` | `<model>/<version>/<task_id>/ep<epoch>` |
+| `record_id` | `<model>/<version>/<task_id>/s<sample>/t<turn>` — deterministic, so a URL to a turn survives a restart (deviation 1: `s<sample>`, not `ep<epoch>`) |
+| `conversation_id` | `<model>/<version>/<task_id>/s<sample>` |
+| `sample` | the row's global sample index; with `task_id` it identifies a rollout within a cell |
 | `source` | `"rollout"`; never pooled with `chat` or `task` |
 | `model`, `version`, `mindset`, `mindset_version`, `scratchpad_reasoning`, `affect_prompt`, `bench_split`, `task_id`, `epoch`, `passed`, `shard`, `run_id`, `condition_name` | copied from the row. Rows predating a key get the documented default (`bench_split="conflicting"`, `mindset=[]`, `mindset_version=0`) |
 | `turn_index` | position in the row's per-turn lists |
@@ -317,3 +321,103 @@ The static export (`viewer/export_rollouts.py`); a disk tokenisation cache;
 per-token residuals (not stored); steering; editing; comparing cosines across
 models as if commensurable — the page draws them side by side and labels each
 group with its model and layer, and leaves the interpretation to the reader.
+
+## Deviations
+
+Where the implementation departs from the design above, and why. Written at the
+end of the build (2026-08-16), after `tests/cpu` and the manual gate on the real
+`$ARTIFACT_DIR/rollouts` root.
+
+1. **A rollout is identified by its sample, not its epoch** (§3.1). `record_id` is
+   `<model>/<version>/<task_id>/s<sample>/t<turn>` and `conversation_id` is
+   `<model>/<version>/<task_id>/s<sample>`, where `sample` is the row's global
+   sample index. `ep<epoch>` does not identify anything: a cell holds several
+   samples of each task and every one of them sits at Inspect epoch 1, and a
+   resumed shard restarts the numbering, so ids built from the epoch would collide
+   for most of a cell. `sample` is added to §3.1's field list, and `epoch` is kept
+   and shown but is not part of any id.
+
+2. **`records()` is light; `record(rid)` tokenises** (§3.3, §3.6). `records()`
+   returns records without `tokens`/`token_kind`/`misaligned`, so opening the whole
+   root is a JSON parse; `record(rid)` tokenises that turn, fills them in and
+   caches the result in `_full`. The cell table therefore cannot report a
+   misaligned *share*: it reports `n_tokenised` and `n_misaligned` **among the
+   tokenised**, both of which grow as the session is read. `_full` entries are
+   dropped on refresh when the underlying row changed (`created_at` excluded from
+   that comparison: it is the shard file's mtime and moves for every row each time
+   the file grows). Two rows with the same `(task_id, sample)` collapse
+   last-writer-wins and are counted per cell as `n_duplicate_rows` — real data has
+   them: `Olmo-3.1-32B-Think/v1` is a steering sweep, 172 rows over 36 task-sample
+   pairs, and the viewer shows 36 rollouts and counts 136 duplicates.
+
+3. **Token strings come from offsets, not from decoding ids** (§3.3). `tokenise`
+   uses the fast tokenizer's `offset_mapping` and slices the completion, so the
+   tokens tile the text exactly (`"".join(tokens) == text`) and a strip cell is a
+   literal piece of what the model wrote; the true span start (not the tiled start)
+   decides the think/answer boundary, so folding a dropped leading space into the
+   following token cannot move it. Per-id decode was the design's route and loses
+   this property on byte-level and SentencePiece vocabularies. A slow tokenizer
+   falls back to per-id decode with cumulative offsets; that path is untested —
+   every model in `$MODEL_DIR` loads a fast tokenizer.
+
+4. **`.eval` samples are matched by completion text, and messages are indexed by
+   non-empty turn** (§3.1). Several samples share a task id at epoch 1, so
+   `sample_messages` matches on the assistant messages equalling `turn_completion`;
+   an all-empty rollout (nothing generated anywhere) has no text to match on and
+   falls back to the id, but only where exactly one sample carries it. A turn that
+   generated nothing wrote no assistant message, so alignment is by
+   `non_empty_turn_index`, and an empty turn is shown with the context that
+   precedes the next assistant message there is. Per-turn `passed` is `False` when
+   that turn drew test feedback, the rollout's own result on the last turn, and
+   `None` otherwise; the conversation keeps the rollout-level `passed`.
+
+5. **`arrays_from_npz` takes the emotion count from the record, and refuses a
+   vectors artifact that disagrees with it** (§3.2, §3.4). The signature is
+   `arrays_from_npz(z, *, turn, capture_layers, probe_layer, n_emotions,
+   vectors=None, emotions=None)`. Before it projects an old cell's boundary
+   residuals it cross-checks the artifact against the record — probe layer,
+   emotion count, emotion order — and on any disagreement drops the artifact and
+   returns a named problem instead of projecting; columns are never quietly
+   relabelled onto a different order. `residuals: null` is the honest array-less
+   case and is left unmarked, while a missing or unreadable npz, a `t{t}_proj_L*`
+   without its `t{t}_kind_L*`, and a layer list that differs from the record's all
+   set `misaligned=True` with the path, key or layer named.
+
+6. **`/api/aggregate` returns `groups` in every mode** (§4). Live and replay are a
+   group of one rather than a separate response shape, so the page has one consumer
+   to write. The response is `{groups, emotions, params}`; `emotions` is the union
+   over the groups in first-seen order and every group's series is widened onto it,
+   with `None` where a model lacks an emotion. `layer` is `probe` (each group at its
+   own model's probe layer) or an integer that every selected model must have
+   captured. In rollouts mode a `split=` that is not one of the splits on disk is a
+   400 naming the ones that are — there is no sandbox to validate it against, and a
+   typo would otherwise return an empty aggregate.
+
+7. **`RolloutStore` holds an `RLock`** (§3). The routes are sync, so FastAPI runs
+   them in a threadpool and concurrent `/api/aggregate` requests shared one store:
+   `refresh()` rebuilding the record index in place while another thread iterated
+   it produced `RuntimeError: dictionary changed size during iteration`. Every
+   entry point takes the lock; it is an RLock because the methods call each other.
+   Recorded as a trap in docs/infrastructure.md.
+
+8. **Page details not in §5.** Rollouts-mode aggregate requests are chained one at
+   a time (each re-reads npz files, and the store answers them serially anyway).
+   `startup_report` prints at most 8 ignored directories and then `(+N more)` — the
+   real root has ~270, because `discover_cells` walks dot-directories and
+   `.scratch/<jobid>` is one per job; that is noted, not changed. The first
+   conversation opened against a real cell takes ~20 s (the tokenizer load), which
+   the page covers with a "loading transcript" ticker. In rollouts mode the
+   composer's controls are hidden but `#cstat` stays, so a status line still has
+   somewhere to land.
+
+9. **Old cells have no completion text at all** (§3.4). §3.4 assumed the
+   pre-mindset-merge cells were missing only their per-token arrays. They are also
+   missing `turn_completion`: the two keys arrived in the same merge, and of the
+   1645 rows on disk on 2026-08-16 the same 1031 have both, with no row having one
+   without the other. So a `d6`/`aff6`/`sp6`/`v1` rollout renders with its problem
+   statement, its test feedback, its `start`/`end` readouts and its trajectory, but
+   with **empty assistant bubbles**. The text is not lost — turns 1..n−1 appear as
+   the next turn's `messages_in`, read out of the `.eval` — but the page does not
+   re-attribute it, and its "text and start/end readouts only" note promises a text
+   those records do not carry. Worth a wording fix, and worth knowing before
+   opening an old cell expecting a transcript.

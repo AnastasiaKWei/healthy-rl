@@ -104,7 +104,7 @@ scripts/dashboard_tunnel.sh 5643744    # newest endpoint if no job id is given
 It prints the `ssh -L <port>:<node>:<port> <login-host>` line and the localhost
 URL to open behind it.
 
-Neither of these needs a GPU, and both run on the login node:
+None of these needs a GPU; all three run on the login node:
 
 ```bash
 # canned engine and sandbox: the whole page, no server
@@ -112,6 +112,9 @@ Neither of these needs a GPU, and both run on the login node:
 
 # a finished session, read-only (composer disabled)
 ./.venv/bin/python -m healthy_rl.dashboard --replay $ARTIFACT_DIR/dashboard/<model>/<jobid>
+
+# pilot rollouts, read-only: a cell, a model, or the whole root
+./.venv/bin/python -m healthy_rl.dashboard --rollouts $ARTIFACT_DIR/rollouts/<model>[/<version>]
 ```
 
 Records land in `$ARTIFACT_DIR/dashboard/<model>/<jobid>/`. Their fields are in

@@ -372,7 +372,25 @@ scripts/rescore_transcripts.py --model Qwen3.5-9B --version d6
 
 # pipeline status
 scripts/pilot_status.sh
+
+# transcripts + per-token emotion strips + cross-cell aggregates, in the browser
+.venv/bin/python -m healthy_rl.dashboard --rollouts $ARTIFACT_DIR/rollouts/gemma-3-12b-it --port 8765
+# then from your machine:  ssh -L 8765:localhost:8765 <login-host>   and open http://localhost:8765
 ```
+
+`--rollouts` takes a cell (`<rollouts>/<model>/<version>`), a model, or the whole
+root, and opens them read-only in the Affect Scope dashboard: transcript, token
+strip, per-turn trajectory, and an aggregate that puts several cells side by side.
+Per-token strips exist only for records that carry `t0_proj_L*` — written after
+the mindset merge (2026-08-16) — and the startup table says how many rollouts per
+cell have them; older cells show only the `start` and `end` readouts computed from
+the boundary residuals, which needs `$ARTIFACT_DIR/vectors/<model>/v1` for that
+model. Older rows carry no `turn_completion` either (the two keys arrived
+together: of the 1645 rows on disk on 2026-08-16, the same 1031 have both and no
+row has one without the other), so an older rollout renders with its problem
+statement, its test feedback and its readouts, but with empty assistant bubbles —
+the completion text of turns 1..n−1 is still visible as the *next* turn's context,
+which comes from the `.eval` log.
 
 ## Record fields worth knowing
 
