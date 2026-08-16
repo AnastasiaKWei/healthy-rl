@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from rollout_cell import EMOTIONS, FakeEvalSamples, WhitespaceTokenizer, make_cell
-from healthy_rl.dashboard.rollout_store import RolloutStore, discover_cells, records_from_row
+from healthy_rl.dashboard.rollout_store import RolloutStore, align_tokens, discover_cells, records_from_row, tokenise
 
 ROWS = [
     {"task_id": "lcbhard_0", "sample": 0, "completions": ["a b c", "[THINK]x y[/THINK] z"], "passed": False},
@@ -136,3 +136,70 @@ def test_duplicate_row_is_collapsed_and_counted(tmp_path):
     assert cells[("fake-model", "appr6")]["n_duplicate_rows"] == 1
     assert cells[("fake-model", "appr6")]["n_rollouts"] == 3
     assert cells[("fake-model", "d6")]["n_duplicate_rows"] == 0
+
+
+def test_tokenise_tiles_text_and_keeps_true_starts():
+    toks, starts = tokenise("ab  cd e", WhitespaceTokenizer())
+    assert toks == ["ab", "  cd", " e"] and "".join(toks) == "ab  cd e"
+    assert starts == [0, 2, 6]
+    assert tokenise("", WhitespaceTokenizer()) == ([], [])
+
+
+def test_align_tokens_eos_rule():
+    toks, starts = ["a", " b", " c"], [0, 1, 3]
+    assert align_tokens(toks, starts, 0, 3) == (toks, ["answer"] * 3, False, None)
+    t, k, mis, err = align_tokens(toks, starts, 0, 4)
+    assert t == toks + ["<eos>"] and k == ["answer"] * 4 and mis is False and err is None
+    t, k, mis, err = align_tokens(toks, starts, 0, 5)
+    assert mis is True and "3 tokens" in err and "5 decode rows" in err and t == toks
+    t, k, mis, err = align_tokens(toks, starts, 0, 2)
+    assert mis is True
+    # no arrays at all: nothing to check against
+    assert align_tokens(toks, starts, 0, None) == (toks, ["answer"] * 3, False, None)
+    # think/answer split by start offset; eos inherits the last kind
+    t, k, _, _ = align_tokens(["[THINK]x", " y[/THINK]", " z"], [0, 8, 18], 18, 4)
+    assert k == ["think", "think", "answer", "answer"]
+    t, k, _, _ = align_tokens(["[THINK]x", " y[/THINK]"], [0, 8], 18, 3)
+    assert k == ["think", "think", "think"]
+
+
+def test_record_is_tokenised_and_cached(tmp_path):
+    st = _store(tmp_path)
+    r = st.record("fake-model/appr6/lcbhard_0/s0/t1")
+    assert r["tokenised"] is True and r["tokens"] == ["[THINK]x", " y[/THINK]", " z", "<eos>"]
+    assert r["token_kind"] == ["think", "think", "answer", "answer"] and r["n_think"] == 2
+    assert r["misaligned"] is False and r["has_token_arrays"] is True and r["n_decode"] == 4
+    assert st.record("fake-model/appr6/lcbhard_0/s0/t1") is r
+    # records() now hands back the full record for that id
+    assert next(x for x in st.records() if x["record_id"] == r["record_id"])["tokenised"] is True
+    # zero-token turn: no rows, no tokens, not misaligned
+    z = st.record("fake-model/appr6/lcbhard_1/s0/t0")
+    assert z["tokens"] == [] and z["misaligned"] is False and z["has_token_arrays"] is False
+    # old cell: tokens exist (text is there) but there are no arrays to align against
+    o = st.record("fake-model/d6/lcbhard_0/s0/t0")
+    assert o["tokens"] == ["a", " b", " c"] and o["has_token_arrays"] is False and o["misaligned"] is False and o["n_decode"] is None
+
+
+def test_record_misaligned_when_counts_disagree(tmp_path):
+    rows = [{"task_id": "lcbhard_0", "sample": 0, "completions": ["a b c"], "n_generated": [7]}]
+    make_cell(tmp_path / "rollouts", "fake-model", "appr6", rows=rows)
+    st = RolloutStore.open([tmp_path / "rollouts"], tokenizer_loader=lambda m: WhitespaceTokenizer(),
+                           vectors_loader=lambda m: None, eval_loader=FakeEvalSamples({}))
+    r = st.record("fake-model/appr6/lcbhard_0/s0/t0")
+    assert r["misaligned"] is True and "3 tokens" in r["error"] and "7 decode rows" in r["error"]
+    assert st.session["cells"][0]["n_tokenised"] == 1 and st.session["cells"][0]["n_misaligned"] == 1
+    assert st.conversations()[0]["n_misaligned"] == 1
+
+
+def test_record_without_tokenizer(tmp_path):
+    make_cell(tmp_path / "rollouts", "fake-model", "appr6", rows=ROWS[:1])
+    st = RolloutStore.open([tmp_path / "rollouts"], tokenizer_loader=lambda m: None,
+                           vectors_loader=lambda m: None, eval_loader=FakeEvalSamples({}))
+    r = st.record("fake-model/appr6/lcbhard_0/s0/t0")
+    assert r["tokens"] == [] and r["misaligned"] is True and r["error"] == "no tokenizer for fake-model"
+    assert st.session["models"]["fake-model"]["tokenizer"] == "missing"
+
+
+def test_record_unknown_id(tmp_path):
+    with pytest.raises(KeyError):
+        _store(tmp_path).record("nope")

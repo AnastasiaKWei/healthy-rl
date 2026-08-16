@@ -129,6 +129,51 @@ def records_from_row(row: dict, *, model: str, version: str, max_tokens: int | N
     return out
 
 
+EOS_TOKEN = "<eos>"
+
+
+def tokenise(text: str, tokenizer) -> tuple[list[str], list[int]]:
+    """Tokens that tile ``text`` exactly, plus each token's true start offset.
+
+    Fast tokenizers give offsets; a leading gap (SentencePiece drops the space
+    from some spans) is folded into the following token's text so the strip
+    reproduces the text character for character, but the start offset stays the
+    span's own start so a think/answer boundary is not moved by a space.
+    """
+    if not text:
+        return [], []
+    if getattr(tokenizer, "is_fast", False):
+        enc = tokenizer(text, add_special_tokens=False, return_offsets_mapping=True)
+        spans = list(enc["offset_mapping"])
+        tokens, starts, prev = [], [], 0
+        for i, (s, e) in enumerate(spans):
+            e = max(int(e), prev)
+            if i == len(spans) - 1:
+                e = max(e, len(text))
+            tokens.append(text[prev:e]); starts.append(int(s))
+            prev = e
+        return tokens, starts
+    ids = tokenizer.encode(text, add_special_tokens=False)
+    tokens = [tokenizer.decode([i]) for i in ids]
+    starts, pos = [], 0
+    for t in tokens:
+        starts.append(pos); pos += len(t)
+    return tokens, starts
+
+
+def align_tokens(tokens: list[str], starts: list[int], think_end_char: int, n_decode: int | None
+                 ) -> tuple[list[str], list[str], bool, str | None]:
+    """Apply the EOS rule (spec §3.3): N == D aligned; N + 1 == D aligned with an appended
+    ``<eos>``; anything else misaligned. ``n_decode=None`` means there are no arrays."""
+    kinds = ["think" if s < think_end_char else "answer" for s in starts]
+    N = len(tokens)
+    if n_decode is None or N == n_decode:
+        return list(tokens), kinds, False, None
+    if N + 1 == n_decode:
+        return list(tokens) + [EOS_TOKEN], kinds + [kinds[-1] if kinds else "answer"], False, None
+    return list(tokens), kinds, True, f"re-tokenised {N} tokens, {n_decode} decode rows"
+
+
 class RolloutStore:
     """Read-only, ``SessionStore``-shaped view over rollout cells."""
 
@@ -204,7 +249,34 @@ class RolloutStore:
         return [self._full.get(rid) or self._light[rid] for rid in self._order]
 
     def record(self, record_id: str) -> dict:
-        raise NotImplementedError  # Task 3
+        full = self._full.get(record_id)
+        if full is not None:
+            return full
+        self.refresh()
+        light = self._light.get(record_id)
+        if light is None:
+            raise KeyError(record_id)
+        rec = dict(light)
+        warnings = list(rec.get("warnings") or [])
+        n_decode = self._decode_rows(rec)
+        rec["n_decode"] = n_decode
+        rec["has_token_arrays"] = n_decode is not None
+        tok = self._tokenizer_for(rec["model"])
+        if tok is None:
+            rec.update(tokens=[], token_kind=[], n_think=0, misaligned=True, error=f"no tokenizer for {rec['model']}")
+            warnings.append("tokenizer missing: text and turn readouts only")
+        else:
+            _, _, think_end = split_reasoning(rec["text"])
+            toks, starts = tokenise(rec["text"], tok)
+            toks, kinds, mis, err = align_tokens(toks, starts, think_end, n_decode)
+            rec.update(tokens=toks, token_kind=kinds, n_think=sum(1 for k in kinds if k == "think"),
+                       misaligned=mis, error=err)
+        # messages_in / feedback: Task 5
+        rec["warnings"] = warnings
+        rec["tokenised"] = True
+        self._full[record_id] = rec
+        self._session = None          # cell table counts changed
+        return rec
 
     def arrays(self, record_id: str) -> dict[str, np.ndarray]:
         raise NotImplementedError  # Task 4
@@ -248,6 +320,24 @@ class RolloutStore:
             except (OSError, ValueError):
                 cache[path] = False
         return cache[path]
+
+    def _npz_path(self, rec: dict) -> Path | None:
+        rel = rec.get("residuals")
+        return (self._cell_of(rec).path / rel) if rel else None
+
+    def _decode_rows(self, rec: dict) -> int | None:
+        """Decode-row count at the probe layer, or None when the turn has no per-token arrays."""
+        path = self._npz_path(rec)
+        if path is None:
+            return None
+        key = f"t{rec['turn_index']}_kind_L{rec['probe_layer']}"
+        try:
+            with np.load(path) as z:
+                if key not in z.files:
+                    return None
+                return int((np.asarray(z[key]).reshape(-1) == 0).sum())
+        except (OSError, ValueError):
+            return None
 
     def _cell_of(self, rec: dict) -> Cell:
         return next(c for c in self.cells if c.key == (rec["model"], rec["version"]))
