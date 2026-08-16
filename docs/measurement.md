@@ -277,3 +277,9 @@ record (hook rows ≠ `len(tokens)`) rather than as a quietly shifted token stri
 `misaligned` record is not always a bug in the engine; check the prompt length
 before hunting elsewhere. A misaligned turn's per-token readouts are unusable
 either way — the dashboard hides its token strip.
+
+Its `start` readout, though, is still valid: `start` is read at the prefill row,
+before any token, so it does not depend on the token alignment at all.
+`/api/aggregate` therefore includes misaligned records in `position=start` like
+any other, and counts them as skipped for the other three readouts — skipped and
+counted, not dropped from the denominator.

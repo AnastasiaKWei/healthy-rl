@@ -314,17 +314,34 @@ permanently.
 ### Sandbox binds
 
 Model-generated code runs only through `Sandbox.run`, which is
-`apptainer exec --contain --cleanenv --writable-tmpfs` around
-`healthy_rl.dashboard.sandbox_cli`:
+`apptainer exec --contain --cleanenv --writable-tmpfs --net --network none`
+around `healthy_rl.dashboard.sandbox_cli`:
 
 | bind | mode | why |
 |---|---|---|
-| `PROJECT_DIR` → `/project` | ro | the helper's own code (`PYTHONPATH=/project/src`) |
+| `PROJECT_DIR/src` → `/project/src` | ro | the helper's own code (`PYTHONPATH=/project/src`) |
 | `$ARTIFACT_DIR/bench` → `/bench` | ro | the split parquets |
 | `$ARTIFACT_DIR/dashboard/.scratch/<jobid>` → `/scratch` | rw | the code file, cwd, `TMPDIR` |
 
 Nothing else under `$ARTIFACT_DIR` is visible, so the sandbox cannot reach the
-records it is generating. Two things that look like omissions and are not:
+records it is generating.
+
+**Only `src` is bound, not the project root.** The root holds `.env`, which
+carries `HF_TOKEN`; binding it would have put a live credential one `open()`
+away from model-generated code. `/project` inside the container contains
+exactly one entry, `src`.
+
+**`--net --network none` gives the container an empty network namespace**, so
+model-generated code cannot reach anything. It works unprivileged on this
+cluster: `socket.create_connection(('1.1.1.1', 53), timeout=3)` inside raises
+`OSError: [Errno 101] Network is unreachable` (verified 2026-08-15).
+
+**The same `--contain` flag set in `scripts/rescore_transcripts.py:157` and
+`scripts/contradiction_contrast.py:84` executes model-generated code WITHOUT
+network isolation** — those two predate the dashboard's sandbox and were not
+changed with it. A pre-existing, project-wide gap, left as a follow-up.
+
+Two things that look like omissions and are not:
 
 - **`--env HOME=...` is not passed.** The image sets `HOME=/work`, and apptainer
   answers every override with `Overriding HOME environment variable with

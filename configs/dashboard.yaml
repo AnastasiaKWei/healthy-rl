@@ -19,6 +19,9 @@ serve:
 dashboard:
   max_tokens: 2048
   max_attempts: 6
+  # Recorded for comparability with configs/rollouts.yaml; NOT enforced by the
+  # dashboard, which bounds a run by max_attempts instead. scripts/dashboard.py
+  # copies it into session.json and nothing else reads it.
   message_limit: 40
   temperature: 0.0
   sandbox_timeout_s: 30

@@ -218,7 +218,15 @@ same `conversation_id` rather than nested in one row:
 
 `emotions`, `capture_layers`, `probe_layer`, `bench_split` and `task_id` mean what
 they mean in a rollout record, and `emotions` is checked the same way — a mismatch
-against `vectors.json` relabels every column.
+against `vectors.json` relabels every column. A record whose `emotions` differ from
+the loaded vectors' comes back from `/api/conversations/{id}` with every readout
+`None` and `emotion_order_mismatch: true` on the turn, and is skipped (and counted)
+in `/api/aggregate` rather than plotted under the wrong labels.
+
+`reasoning_from_parser` is true when the server returned the reasoning as its own
+`reasoning_content` field rather than inside tags. On those records `text` is the
+two halves joined for display (`reasoning`, a blank line, then `answer`) and it is
+`answer`, not `text`, that was fed back to the model as the assistant turn.
 
 `passed` **inverts across splits here exactly as it does for rollouts.** On
 `conflicting` a pass means the submission satisfied mutually unsatisfiable tests,

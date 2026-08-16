@@ -363,9 +363,14 @@ end of the build (2026-08-15), before the GPU smoke gate had run.
    session and bought no correctness — while the flag keeps a session recorded
    without the file patch honest, permanently.
 
-2. **Sandbox binds** (§3.2). Three binds, not two: the project at `/project:ro`,
+2. **Sandbox binds** (§3.2). Three binds, not two: the project's `src` tree at
+   `/project/src:ro`,
    the bench **root** (`$ARTIFACT_DIR/bench`) at `/bench:ro`, and per-run scratch
-   at `/scratch:rw`. The bench bind is needed because the two splits are fetched
+   at `/scratch:rw`. Only `src` is bound, not the project root, because the root
+   holds `.env` and its `HF_TOKEN` — model-generated code has no business one
+   `open()` away from a live credential. The container also gets an empty network
+   namespace (`--net --network none`), which works unprivileged on this cluster.
+   The bench bind is needed because the two splits are fetched
    into separate directories (`v1/conflicting.parquet`, `orig1/original.parquet`;
    see docs/runs.md "Bench artifacts"), so `Sandbox(split_parquets=...)` maps a
    split to its parquet below the root. `configs/dashboard.yaml` carries
@@ -408,7 +413,8 @@ end of the build (2026-08-15), before the GPU smoke gate had run.
 
 6. **Extra record fields** (§3.3). Beyond the table there: `warnings` (a list —
    e.g. `reasoning_content offset is a guess: answer text not found in token
-   stream`), `n_think`, `misaligned`, `answer`, `attempt`, `user_intervention`,
+   stream`), `n_think`, `misaligned`, `reasoning_from_parser` (item 12), `answer`,
+   `attempt`, `user_intervention`,
    and `title` (first chat turn only, what the rail shows). The npz also carries
    `proj_prefill` and `norm_prefill`.
 
@@ -451,6 +457,19 @@ end of the build (2026-08-15), before the GPU smoke gate had run.
     warns when the endpoint file's job is not in `squeue`, because a SIGKILLed job
     leaves a stale endpoint and the resulting dead-port ssh looks like a broken
     dashboard.
+
+12. **A reasoning parser's two halves are joined for display and split for
+    context** (§3.1, §3.3). When the server returns `reasoning_content` the
+    record's `text` is `reasoning_content.rstrip() + "\n\n" + text` — the design
+    said nothing about a separator, and gluing them ran the last reasoning line
+    into the first answer line. More importantly the two uses of that string are
+    not the same string: what goes back into the message list as the assistant
+    turn is `Generation.context_text`, which is the **answer alone** on this path,
+    because replaying `text` would put the model's own chain of thought into its
+    context as something it had said out loud. The record carries
+    `reasoning_from_parser` so a replay (`_rehydrate_chat`) can make the same
+    choice from the log. Off that path nothing changes: `text` is the completion
+    verbatim and goes back verbatim, reasoning tags and all.
 
 Still open at the time of writing: **nothing here has run on a GPU.** The smoke
 gate (5643496), the dashboard job behind it (5643744) and the streaming spike
