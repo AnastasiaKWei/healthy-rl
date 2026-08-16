@@ -451,6 +451,40 @@ replicate on Nemotron (13/24 → 15/24, p=0.77). One model, twelve problems.
   cannot finish, the honest fallback is a 3-model 2x2 plus a Qwen3-14B cell
   reported at whatever n it reached — not a quiet drop.
 
+## The timeout fix exposed an unmatched token cap in `d6`
+
+`d6` shard configs use `max_tokens: 16384`; `aff6`, `pos6` and `affpos6` use
+24576. That was recorded on 2026-08-15 as harmless, with evidence: no turn in any
+run had ever come within 10% of 16384, so the cap never bound.
+
+**That evidence was an artifact of the bug.** Turns were being killed at 600 s
+before they could reach the cap. With `client_timeout` fixed (694d74d) turns run
+to completion, and the cap started binding immediately:
+
+| cell | cap | turns at cap | rollouts affected |
+|---|---:|---:|---:|
+| Qwen3.5-9B `d6` | 16384 | **5** | **2** |
+| Qwen3.5-9B `aff6` / `pos6` / `affpos6` | 24576 | 0 | 0 |
+| Ministral, Nemotron (all cells) | 16384 / 24576 | 0 | 0 |
+
+A turn sitting exactly at `max_tokens` is truncated: its end-of-turn residual is
+where the cap fell, not where the model finished. So those rollouts measure the
+cap, and they sit in the one cell whose cap differs from the arms it is compared
+against — `d6` vs `aff6` is the affect contrast, and it is now also a
+16384-vs-24576 contrast for the truncated rollouts.
+
+Only Qwen3.5-9B is affected: it is the model with the longest turns. Ministral's
+`d6` has the same 16384 cap and zero cap hits.
+
+**Unresolved — needs a decision before Qwen3.5-9B's 2x2 is analysed.** Either
+raise `d6` to 24576 and re-run the truncated rollouts (matched arms, some compute),
+or keep 16384 and exclude the truncated rollouts from cell-to-cell comparison.
+Do not quote Qwen3.5-9B `d6` against `aff6` until one of those has happened.
+
+The general lesson is worth more than this instance: **a config value shown to be
+non-binding under a bug is not shown to be non-binding.** Re-check headroom
+assumptions after any fix that lets work run longer.
+
 ## Qwen3.5-9B's cells do not cover the same problems
 
 The never-returning Qwen requests are problem-specific, and the problems they
