@@ -112,6 +112,38 @@ zero `turn_errors` — verified across 81 records on Qwen3.5-9B `pos6`/`aff6`/
   reclaims almost nothing. The first version of the prune script recovered 954 MB
   instead of 41 GB for exactly this reason.
 
+### A rollout job can hang with its server still generating
+
+Qwen3-14B `d6` shard s0 ran 3h18m and wrote nothing to its job log after the
+first 3 minutes, while its vLLM server reported 111 tokens/s, 8 running
+requests, 0 waiting, 16% KV cache and no preemption. Two GPUs were held for
+three hours producing nothing.
+
+The give-away is not the server — a healthy server is exactly what this looks
+like — it is that **the client log stops advancing**:
+
+```bash
+# minutes since each running job's log was last written
+now=$(date +%s); for j in $(squeue -u "$USER" -h -t R -o "%i"); do
+  f=$(ls logs/*-"$j".out 2>/dev/null | head -1); [ -n "$f" ] || continue
+  echo "$(basename "$f") $(( (now - $(stat -c %Y "$f")) / 60 ))m"
+done
+```
+
+Judge it against the attempt duration, not against the clock. A single attempt
+here takes ~30 minutes (24576-token cap at the ~14 tokens/s each request gets
+when 8 share a server), so 100 minutes of silence can be legitimate and 200
+minutes with **zero completed attempts** is not. `Added request` / `Finished
+request` are absent from the server log at default verbosity, so counting
+`POST /v1/chat/completions ... 200` is the available proxy: 3 completions in
+3.5 hours against 8 permanently-running requests does not add up under a
+24576-token cap, and that arithmetic is what exposes the hang.
+
+**Suspected cause, not confirmed:** `request_timeout_s: 600` is shorter than a
+full-length generation, so the client may abandon a request the server keeps
+serving. Cancelling the job and letting its dependent continuation resume is the
+cheap fix — records are checkpointed per rollout, so nothing is lost.
+
 ## Gemma 4 under vLLM
 
 Gemma 4 needs `src/healthy_rl/vllm_plugins.py`, registered under the
