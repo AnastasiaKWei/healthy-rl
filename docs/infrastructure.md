@@ -186,6 +186,13 @@ Three completions and then a wedge, every time, with `max_connections: 8` and 8
 in-flight samples. That reproducibility argues for something structural in the
 client's connection handling rather than an unlucky slow generation.
 
+**It only happens to the Qwen models.** Seven confirmed hangs: six on
+Qwen3.5-9B, one on Qwen3-14B. Ministral-3-14B and Nemotron-3-Nano-4B completed
+all eight of their cells — 192 rollouts — without a single one. Not a node
+problem either: the seven are spread across six different nodes, and successful
+jobs ran on others. The two affected models are also the two that generate the
+longest outputs, which is consistent with a duration-triggered fault.
+
 **Suspected cause, not confirmed:** `request_timeout_s: 600` is shorter than a
 full-length generation, so the client may abandon a request the server keeps
 serving. Note this does not obviously explain the "always exactly 3" part, so
@@ -199,6 +206,7 @@ signals, since either alone gives false positives:
 | signal | meaning | default |
 |---|---|---|
 | `NO-ATTEMPTS` | running this long, never finished one attempt | `NOATTEMPT_MIN=75` |
+| | *(75 min is too slow — see below)* | |
 | `NO-PROGRESS` | job log gained no line since the previous run of the script | `STALL_MIN=45` |
 
 `NO-ATTEMPTS` is the one that fires earliest and caught both known cases.
@@ -206,6 +214,15 @@ signals, since either alone gives false positives:
 `$ARTIFACT_DIR/.grid_liveness.tsv` — because a single snapshot cannot tell
 "quiet" from "stopped". Thresholds are multiples of the ~30-minute attempt
 duration, so raise them for slower models rather than reading a flag as proof.
+
+**Detect the signature directly, not elapsed time.** The final four hangs all
+showed the full signature — 30 log lines, `Attempt 1/6`, exactly 3 POSTs, 1
+running request — at **51 minutes**, well inside the 75-minute `NO-ATTEMPTS`
+threshold. Elapsed time is a proxy; the state itself is unambiguous and visible
+much earlier. A better check fires as soon as a job has ≥1 completed POST, 0
+finished attempts, and a client log that has not grown in ~15 minutes. That
+would have caught each of the fourteen hangs roughly half an hour sooner, which
+across one night is several GPU-hours.
 
 It found a second hung job the moment it was written: a `Qwen3.5-9B d6` shard,
 199 minutes idle on "Attempt 1/6", server down to one request. That one had been
