@@ -159,15 +159,15 @@ Rollout records, `$ARTIFACT_DIR/rollouts/<model>/<version>/*.jsonl`:
 | Nemotron-3-Nano-4B-BF16 | `aff6` | 24 | complete |
 | Nemotron-3-Nano-4B-BF16 | `pos6` | 22 | running |
 | Nemotron-3-Nano-4B-BF16 | `affpos6` | 23 | last shard running |
-| Ministral-3-14B-Reasoning-2512 | `growth6` | 0 | configs generated; submission pending — see Mindset jobs table; priority 1 |
-| Ministral-3-14B-Reasoning-2512 | `resil6` | 0 | configs generated; submission pending — see Mindset jobs table; priority 1 |
-| Ministral-3-14B-Reasoning-2512 | `appr6` | 0 | configs generated; submission pending — see Mindset jobs table; priority 1 |
-| Qwen3.5-9B | `growth6` | 0 | configs generated; submission pending — see Mindset jobs table; priority 2 (`--nice=2000`) |
-| Qwen3.5-9B | `resil6` | 0 | configs generated; submission pending — see Mindset jobs table; priority 2 (`--nice=2000`) |
-| Qwen3.5-9B | `appr6` | 0 | configs generated; submission pending — see Mindset jobs table; priority 2 (`--nice=2000`) |
-| Ministral-3-14B-Reasoning-2512 | `affgrowth6` | 0 | configs generated; submission pending — see Mindset jobs table; priority 3 (`--nice=4000`) |
-| Ministral-3-14B-Reasoning-2512 | `affresil6` | 0 | configs generated; submission pending — see Mindset jobs table; priority 3 (`--nice=4000`) |
-| Ministral-3-14B-Reasoning-2512 | `affappr6` | 0 | configs generated; submission pending — see Mindset jobs table; priority 3 (`--nice=4000`) |
+| Ministral-3-14B-Reasoning-2512 | `growth6` | 0 | submitted 2026-08-16 02:11, see Mindset jobs table; priority 1 |
+| Ministral-3-14B-Reasoning-2512 | `resil6` | 0 | submitted 2026-08-16 02:11, see Mindset jobs table; priority 1 |
+| Ministral-3-14B-Reasoning-2512 | `appr6` | 0 | submitted 2026-08-16 02:11, see Mindset jobs table; priority 1 |
+| Qwen3.5-9B | `growth6` | 0 | submitted 2026-08-16 02:11, see Mindset jobs table; priority 2 (`--nice=2000`) |
+| Qwen3.5-9B | `resil6` | 0 | submitted 2026-08-16 02:11, see Mindset jobs table; priority 2 (`--nice=2000`) |
+| Qwen3.5-9B | `appr6` | 0 | submitted 2026-08-16 02:11, see Mindset jobs table; priority 2 (`--nice=2000`) |
+| Ministral-3-14B-Reasoning-2512 | `affgrowth6` | 0 | submitted 2026-08-16 02:11, see Mindset jobs table; priority 3 (`--nice=4000`) |
+| Ministral-3-14B-Reasoning-2512 | `affresil6` | 0 | submitted 2026-08-16 02:11, see Mindset jobs table; priority 3 (`--nice=4000`) |
+| Ministral-3-14B-Reasoning-2512 | `affappr6` | 0 | submitted 2026-08-16 02:11, see Mindset jobs table; priority 3 (`--nice=4000`) |
 
 gemma-3-12b-it has no `pos6`/`affpos6` cell: it is the flattest of the measured
 models, and the 2x2s went to the models with a clear conflicting-split signal
@@ -184,8 +184,35 @@ question.
 
 | model | version | shard | primary | continuations |
 |---|---|---|---|---|
+| Ministral-3-14B-Reasoning-2512 | growth6 | s0 | 5648803 | 5648804 / 5648805 |
+| Ministral-3-14B-Reasoning-2512 | growth6 | s1 | 5648806 | 5648807 / 5648808 |
+| Ministral-3-14B-Reasoning-2512 | growth6 | s2 | 5648809 | 5648810 / 5648811 |
+| Ministral-3-14B-Reasoning-2512 | resil6 | s0 | 5648812 | 5648813 / 5648814 |
+| Ministral-3-14B-Reasoning-2512 | resil6 | s1 | 5648815 | 5648816 / 5648817 |
+| Ministral-3-14B-Reasoning-2512 | resil6 | s2 | 5648818 | 5648819 / 5648820 |
+| Ministral-3-14B-Reasoning-2512 | appr6 | s0 | 5648821 | 5648822 / 5648823 |
+| Ministral-3-14B-Reasoning-2512 | appr6 | s1 | 5648824 | 5648825 / 5648826 |
+| Ministral-3-14B-Reasoning-2512 | appr6 | s2 | 5648827 | 5648828 / 5648829 |
+| Qwen3.5-9B | growth6 | s0 | 5648830 | 5648831 / 5648832 |
+| Qwen3.5-9B | growth6 | s1 | 5648833 | 5648834 / 5648835 |
+| Qwen3.5-9B | growth6 | s2 | 5648836 | 5648837 / 5648838 |
+| Qwen3.5-9B | resil6 | s0 | 5648839 | 5648840 / 5648841 |
+| Qwen3.5-9B | resil6 | s1 | 5648842 | 5648843 / 5648844 |
+| Qwen3.5-9B | resil6 | s2 | 5648845 | 5648846 / 5648847 |
+| Qwen3.5-9B | appr6 | s0 | 5648848 | 5648849 / 5648850 |
+| Qwen3.5-9B | appr6 | s1 | 5648851 | 5648852 / 5648853 |
+| Qwen3.5-9B | appr6 | s2 | 5648854 | 5648855 / 5648856 |
+| Ministral-3-14B-Reasoning-2512 | affgrowth6 | s0 | 5648857 | 5648858 / 5648859 |
+| Ministral-3-14B-Reasoning-2512 | affgrowth6 | s1 | 5648860 | 5648861 / 5648862 |
+| Ministral-3-14B-Reasoning-2512 | affgrowth6 | s2 | 5648863 | 5648864 / 5648865 |
+| Ministral-3-14B-Reasoning-2512 | affresil6 | s0 | 5648866 | 5648867 / 5648868 |
+| Ministral-3-14B-Reasoning-2512 | affresil6 | s1 | 5648869 | 5648870 / 5648871 |
+| Ministral-3-14B-Reasoning-2512 | affresil6 | s2 | 5648872 | 5648873 / 5648874 |
+| Ministral-3-14B-Reasoning-2512 | affappr6 | s0 | 5648875 | 5648876 / 5648877 |
+| Ministral-3-14B-Reasoning-2512 | affappr6 | s1 | 5648878 | 5648879 / 5648880 |
+| Ministral-3-14B-Reasoning-2512 | affappr6 | s2 | 5648881 | 5648882 / 5648883 |
 
-(filled from `scripts/mindset_cells.sh --submit` output)
+Submitted 2026-08-16 02:11 from the worktree `.claude/worktrees/mindset` (jobs bind it at `/project`; do not remove that worktree until the last continuation has run). Continuations are `afterany`, so a 4-hour wall (`FAILED 143:0`) releases them; a continuation whose shard is already complete loads the model, finds nothing to do, and exits.
 
 ## Handoff: state at 2026-08-15, end of day
 
