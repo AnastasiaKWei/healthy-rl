@@ -205,9 +205,9 @@ Rollout records, `$ARTIFACT_DIR/rollouts/<model>/<version>/*.jsonl`:
 | gemma-3-12b-it | `sp6r` | 24 | re-run, complete 2026-08-16 ~12:35; jobs 5653048–5653056 |
 | gemma-3-12b-it | `aff6r` | 24 | re-run, complete 2026-08-16 ~12:20; jobs 5653057–5653065 |
 | Ministral-3-14B-Reasoning-2512 | `d6r` | 24 | re-run, complete 2026-08-16 ~12:35; jobs 5653066–5653074 |
-| Ministral-3-14B-Reasoning-2512 | `aff6r` | 24 | re-run, complete 2026-08-16 ~12:45; jobs 5653075–5653083 |
+| Ministral-3-14B-Reasoning-2512 | `aff6r` | 24 | re-run; first pass lost 11 rollouts to the 600 s client ceiling (`APITimeoutError`, one-turn zero-token records — removed to `*.bak-timeout-2026-08-16`), resumed under 694d74d as jobs 5654088–5654096; complete 2026-08-16 ~13:45, 24/24 real records. Contains turns at the 24,576 cap (see infrastructure.md) |
 | Ministral-3-14B-Reasoning-2512 | `pos6r` | 24 | re-run, complete 2026-08-16 ~12:40; jobs 5653084–5653092 |
-| Ministral-3-14B-Reasoning-2512 | `affpos6r` | 24 | re-run, complete 2026-08-16 ~12:45; jobs 5653093–5653101 |
+| Ministral-3-14B-Reasoning-2512 | `affpos6r` | 24 | re-run; first pass lost 3 rollouts to the 600 s client ceiling (`APITimeoutError`, one-turn zero-token records — removed to `*.bak-timeout-2026-08-16`), resumed under 694d74d as jobs 5654097–5654105; complete 2026-08-16 ~13:45, 24/24 real records. Contains turns at the 24,576 cap (see infrastructure.md) |
 | Ministral-3-14B-Reasoning-2512 | `growth6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `growth6`; per-token base `d6r` |
 | Ministral-3-14B-Reasoning-2512 | `resil6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `resil6`; per-token base `d6r` |
 | Ministral-3-14B-Reasoning-2512 | `appr6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `appr6`; per-token base `d6r` |
