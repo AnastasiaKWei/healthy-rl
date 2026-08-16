@@ -147,7 +147,7 @@ health_timeout_s: 1800
 # asking for it, so it is only interpretable against a matched flag-off run. Those exist:
 #   gemma-3-12b-it/d6  (no scratchpad, no affect)  frustrated FLAT -0.0031 -> -0.0031
 #   Ministral .../d6   (no affect)                 frustrated +0.0094 p<1e-4, monotone
-# scratchpad_reasoning is held FALSE so affect_prompt is the only difference from d6.
+# scratchpad_reasoning is TRUE here: this is the scratchpad-plus-affect base; its flag-off comparison is sp6, and its mindset arms are spaffgrowth6/spaffresil6/spaffappr6.
 #
 # The question our probes can answer and hers could not: does asking a model to
 # VERBALISE affect change what is REPRESENTED, or only what it says?
