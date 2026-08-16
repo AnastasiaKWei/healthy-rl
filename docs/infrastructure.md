@@ -163,6 +163,14 @@ It found a second hung job the moment it was written: a `Qwen3.5-9B d6` shard,
 199 minutes idle on "Attempt 1/6", server down to one request. That one had been
 running unnoticed alongside the first.
 
+**The detector inspects only its own cells, by job name.** Concurrent sessions
+share one Unix user on this cluster, so `squeue -u $USER` returns a teammate's
+jobs too — and the loop that consumes these flags issues `scancel`. An
+unfiltered liveness check is therefore a way to kill someone else's run. The
+match is `^(<models>)-(<cells>)-s[0-9]`, driven by the script's own `MODELS` and
+`CELLS`; anything else is skipped. Whoever adds a cell must add it to `CELLS` or
+it silently goes unmonitored.
+
 ## Gemma 4 under vLLM
 
 Gemma 4 needs `src/healthy_rl/vllm_plugins.py`, registered under the

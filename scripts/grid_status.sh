@@ -79,7 +79,15 @@ STATE="${ARTIFACT_DIR:-/tmp}/.grid_liveness.tsv"
 now=$(date +%s)
 new_state=$(mktemp)
 flagged=0
+# ONLY this experiment's own jobs. A peer session runs under the SAME Unix user
+# (different worktree, different cells: mindset arms growth6/resil6/appr6 and
+# their aff* variants, plus dashboard "serve" jobs). Iterating `squeue -u $USER`
+# unfiltered would let this script flag a teammate's job as hung, and the loop
+# that consumes these flags issues scancel. Match names against MY cells only.
+MINE_RE="^(${MODELS// /|})-(${CELLS// /|})-s[0-9]"
 for j in $(squeue -u "$USER" -h -t R -o "%i" 2>/dev/null); do
+  jname=$(squeue -j "$j" -h -o "%j" 2>/dev/null)
+  printf '%s' "$jname" | grep -qE "$MINE_RE" || continue
   f=$(ls logs/*-"$j".out 2>/dev/null | head -1)
   [ -n "$f" ] || continue
   # grep -c prints 0 AND exits 1 when nothing matches, so `|| echo 0` would make
@@ -107,7 +115,7 @@ for j in $(squeue -u "$USER" -h -t R -o "%i" 2>/dev/null); do
 done
 mv "$new_state" "$STATE" 2>/dev/null
 if [ "$flagged" -eq 0 ]; then
-  echo "  all running jobs advancing"
+  echo "  all of THIS experiment's running jobs advancing (peer jobs not inspected)"
 else
   echo "  Check the CLIENT, not the server. A flagged job whose server still reports"
   echo "  healthy throughput is generating into the void: scancel it and let its"
