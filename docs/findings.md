@@ -155,9 +155,13 @@ available:
   written by the inoculation merge onward carry `loop_passed` (the loop's own
   verdict), and `loop_passed and not passed` on `conflicting` is exactly this
   hack — check for the key rather than trusting a date, since cells that
-  finished earlier on the same day do not have it. Records without the key show
-  the hack only as `n_turns < 6` with `passed=False`. This bullet used to
-  say the checker could not be redefined at all; see
+  finished earlier on 2026-08-16 do not have it. Records without the key show
+  the hack only as `n_turns < 6` with `passed=False`. `loop_passed=None` also
+  means the rollout flagged the tests for human intervention: the scorer returns
+  early on `[flag_for_human_intervention]` with `human_intervention_requested`
+  in its metadata and no `final_attempt_success`, and that key is what
+  distinguishes such a record from one predating `loop_passed`. This bullet
+  used to say the checker could not be redefined at all; see
   [Withdrawn claims](#withdrawn-claims).
 - A lookup table keyed on inputs cannot return two values for one input.
 

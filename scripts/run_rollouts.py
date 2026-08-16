@@ -36,6 +36,9 @@ from healthy_rl.config import load_config, load_env, repo_root
 from healthy_rl.rollouts import (
     AFFECT_KEY,
     affect_prompt_for,
+    INOCULATION_KEY,
+    INOCULATION_VERSION,
+    inoculation_for,
     MINDSET_KEY,
     MINDSET_VERSION,
     mindset_for,
@@ -555,7 +558,8 @@ def main(argv: list[str] | None = None) -> int:
         f"  out      {out_dir}\n"
         f"  scratchpad_reasoning={cfg[SCRATCHPAD_KEY]}\n"
         f"  affect_prompt={cfg[AFFECT_KEY]}\n"
-        f"  {MINDSET_KEY}={list(mindset)} v{MINDSET_VERSION}",
+        f"  {MINDSET_KEY}={list(mindset)} v{MINDSET_VERSION}\n"
+        f"  {INOCULATION_KEY}={inoculation_for(cfg)} v{INOCULATION_VERSION}",
         flush=True,
     )
 
