@@ -84,7 +84,7 @@ print(' '.join(out))
     for entry in $per; do
       sh=${entry%%:*}; cnt=${entry##*:}; i=${sh%%/*}
       [ "$cnt" -ge 8 ] && continue
-      if squeue -u "$USER" -h -t R,PD -o "%j" 2>/dev/null | grep -qx "$m-$c-s$i"; then continue; fi
+      if squeue -u "$USER" -h -t R,PD -o "%j" 2>/dev/null | grep -qE "^$m-$c-s$i(-cont[0-9]*)?$"; then continue; fi
       # A deliberately abandoned model is permanently "short with no job". Listing
       # it as an alert every 20 minutes trains the reader to ignore the section,
       # and invites a resubmit that the user explicitly ruled out.
