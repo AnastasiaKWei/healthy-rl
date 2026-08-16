@@ -6,6 +6,11 @@ this is rendered from it together with the benchmark strings in
 `experiments/render_prompts.py` — edits made here are overwritten and never
 reach a model.
 
+For what the rollout pipeline in this repo sends, which orders the boilerplate
+differently, see `docs/prompts-rollouts.md`. (Hand-added pointer, not from
+`render_prompts.py`: that generator lives on the collaborator's branch, so a
+re-render there will drop this line.)
+
 ## How many times the model sees each part
 
 The scaffold runs with `include_task_reminder=True`, so after every failed
