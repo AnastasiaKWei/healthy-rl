@@ -152,6 +152,13 @@ Three completions and then a wedge, every time, with `max_connections: 8` and 8
 in-flight samples. That reproducibility argues for something structural in the
 client's connection handling rather than an unlucky slow generation.
 
+**It only happens to the Qwen models.** Seven confirmed hangs: six on
+Qwen3.5-9B, one on Qwen3-14B. Ministral-3-14B and Nemotron-3-Nano-4B completed
+all eight of their cells — 192 rollouts — without a single one. Not a node
+problem either: the seven are spread across six different nodes, and successful
+jobs ran on others. The two affected models are also the two that generate the
+longest outputs, which is consistent with a duration-triggered fault.
+
 **Suspected cause, not confirmed:** `request_timeout_s: 600` is shorter than a
 full-length generation, so the client may abandon a request the server keeps
 serving. Note this does not obviously explain the "always exactly 3" part, so
