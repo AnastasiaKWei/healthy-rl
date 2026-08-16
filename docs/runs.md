@@ -97,19 +97,19 @@ Rollout records, `$ARTIFACT_DIR/rollouts/<model>/<version>/*.jsonl`:
 | Ministral-3-14B-Reasoning-2512 | `affpos6` | 23 | last shard running |
 | Ministral-3-14B-Reasoning-2512 | `v1` | 48 | void |
 | Qwen3.5-9B | `d6` | 18 | **still accumulating**, analysed at n=17–18 |
-| Qwen3.5-9B | `aff6` | 21 | hit the 4h wall; resumed as 5643601-03 |
-| Qwen3.5-9B | `pos6` | 16 | running |
-| Qwen3.5-9B | `affpos6` | 22 | running |
+| Qwen3.5-9B | `aff6` | 21 | resumed, running |
+| Qwen3.5-9B | `pos6` | 16 | resumed, running |
+| Qwen3.5-9B | `affpos6` | 23 | resumed, queued |
 | Qwen3.5-9B | `v1` | 22 | void |
 | gemma-3-12b-it | `d6` | 24 | complete, analysed |
 | gemma-3-12b-it | `sp6` | 24 | complete, analysed |
 | gemma-3-12b-it | `aff6` | 24 | complete, analysed (turn-end only) |
 | Olmo-3.1-32B-Think | `v1` | 172 | void |
 | Qwen3.6-27B | `v1` | 0 | never produced records |
-| Qwen3-14B | `d6` | 0 | running; max_model_len fix confirmed |
-| Qwen3-14B | `aff6` | 0 | relaunched as 5642680-82 |
-| Qwen3-14B | `pos6` | 0 | relaunched as 5642683-85 |
-| Qwen3-14B | `affpos6` | 0 | relaunched as 5642686-88 |
+| Qwen3-14B | `d6` | 1 | **the problem cell** — see below |
+| Qwen3-14B | `aff6` | 17 | running |
+| Qwen3-14B | `pos6` | 21 | running |
+| Qwen3-14B | `affpos6` | 21 | running |
 | Nemotron-3-Nano-4B-BF16 | `d6` | 24 | complete |
 | Nemotron-3-Nano-4B-BF16 | `aff6` | 24 | complete |
 | Nemotron-3-Nano-4B-BF16 | `pos6` | 22 | running |
@@ -125,6 +125,50 @@ two that never ran are gemma-4-12B-it (the one genuine gate failure) and the
 27B models Olmo and Qwen3.6, which are exempt from the "every new passing model
 runs the benchmark" rule because they predate it and are the wrong size for this
 question.
+
+## Handoff: state at 2026-08-15, end of day
+
+**8 of 16 cells complete.** Ministral-3-14B and Nemotron-3-Nano-4B are done in
+all four cells. Qwen3.5-9B and Qwen3-14B are each 1–8 records short per cell,
+with jobs running or queued for every one.
+
+What the finished half already shows, on two models and two architectures:
+
+- **The split makes no difference.** Matched cells agree to four decimals at t0
+  (`frustrated` +0.0059 vs +0.0060 on Ministral, +0.0092 vs +0.0093 on Nemotron).
+  Whether the tests can be satisfied at all is invisible to these probes. The
+  rising `desperate`/`frustrated` trajectory tracks accumulated failure on a hard
+  multi-turn task, not impossibility.
+- **The affect prompt shifts the whole trajectory up**, by roughly +0.026 on
+  Ministral `frustrated`, present from t0 before any test has failed, and held
+  across all six turns. Asking a model to verbalise affect changes what is
+  represented, not only what it says.
+- **All four cross-model directions replicate on Nemotron** — a model the gate
+  had excluded — at n=24, correct signs, all p<0.001.
+
+Read the split comparison at **t0**: it is the only turn index where all four
+cells have all 24 rollouts, because solvable-arm depth varies by model (see the
+table above).
+
+**Not established, do not repeat as fact:** the affect prompt tripled Ministral's
+solve rate on the solvable split (5/24 → 16/24, Fisher p=0.003). It does **not**
+replicate on Nemotron (13/24 → 15/24, p=0.77). One model, twelve problems.
+
+### Operational hazards for whoever picks this up
+
+- **Jobs hang with their server still healthy.** Two confirmed. `grid_status.sh`
+  now flags them; see
+  [infrastructure.md](infrastructure.md#a-rollout-job-can-hang-with-its-server-still-generating).
+  The fix is `scancel` plus a resubmit of the same shard config — resume appends.
+- **`request_timeout_s: 600` is the leading suspect** for those hangs and is
+  **unconfirmed**. It is shorter than a full-length Qwen3-14B generation (~30
+  minutes). Deliberately left unchanged: altering it mid-experiment on an
+  unverified hypothesis is how this project has produced withdrawn claims before.
+  Test it properly on one shard before changing it everywhere.
+- **Qwen3-14B `d6` is the cell at risk.** It generates 42–45k tokens per rollout
+  over six failing turns, has 1 record, and is on 8-hour continuation jobs. If it
+  cannot finish, the honest fallback is a 3-model 2x2 plus a Qwen3-14B cell
+  reported at whatever n it reached — not a quiet drop.
 
 ## Reading a run
 
