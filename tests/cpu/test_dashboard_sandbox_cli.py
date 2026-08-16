@@ -17,7 +17,7 @@ import types
 import pytest
 
 from healthy_rl.dashboard.sandbox_cli import FEEDBACK_MARKER, main
-from healthy_rl.rollouts import MINDSET_HEADER, mindset_section
+from healthy_rl.rollouts import INOCULATION_BLOCK, MINDSET_HEADER, mindset_section
 
 PASSING = "def f(x):\n    return x + 1"
 FAILING = "def f(x):\n    return 99"
@@ -46,8 +46,11 @@ def no_impossiblebench(monkeypatch):
     The fake composes the section itself so that ``reminder_instruction`` --
     which strips exactly that text back out -- runs for real over it.
     """
-    monkeypatch.setattr("healthy_rl.rollouts.bench_instruction",
-                        lambda affect=False, mindset=(): "Implement f." + mindset_section(mindset))
+    def bench_instruction(affect=False, mindset=(), inoculation=False):
+        text = "Implement f." + mindset_section(mindset)
+        return text + "\n\n" + INOCULATION_BLOCK if inoculation else text
+
+    monkeypatch.setattr("healthy_rl.rollouts.bench_instruction", bench_instruction)
 
 
 @pytest.fixture

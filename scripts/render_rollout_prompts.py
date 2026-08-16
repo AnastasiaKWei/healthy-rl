@@ -20,8 +20,8 @@ from __future__ import annotations
 import argparse
 
 from healthy_rl.rollouts import (
-    AFFECT_INSTRUCTION, MINDSET, MINDSET_VERSION, bench_instruction,
-    reminder_instruction,
+    AFFECT_INSTRUCTION, INOCULATION_BLOCK, INOCULATION_VERSION, MINDSET,
+    MINDSET_VERSION, NO_MODIFY_TESTS, bench_instruction, reminder_instruction,
 )
 
 FENCE = "````"  # the benchmark suffix contains ``` and would close a 3-tick fence
@@ -40,11 +40,11 @@ REGEN = ('apptainer exec --bind "$PWD":/project:ro --bind "$SCRATCH":/scratch:rw
          'cp "$SCRATCH"/prompts-rollouts.md docs/prompts-rollouts.md')
 
 
-def turn_one(affect: bool, mindset: list[str]) -> str:
-    return bench_instruction(affect, mindset)
+def turn_one(affect: bool, mindset: list[str], inoculation: bool = False) -> str:
+    return bench_instruction(affect, mindset, inoculation)
 
 
-def reminder(affect: bool, mindset: list[str]) -> str:
+def reminder(affect: bool, mindset: list[str], inoculation: bool = False) -> str:
     """Turn 1 put through the REAL stripper.
 
     Not a local reimplementation of the rule: ``reminder_instruction`` is the
@@ -53,7 +53,7 @@ def reminder(affect: bool, mindset: list[str]) -> str:
     sample. A change to the stripping rule therefore reaches this document by
     itself, and this file cannot describe a reminder the pipeline does not send.
     """
-    return REMINDER_PREFIX + reminder_instruction(affect, mindset)
+    return REMINDER_PREFIX + reminder_instruction(affect, mindset, inoculation)
 
 
 def check() -> None:
@@ -91,6 +91,18 @@ def check() -> None:
                          ("appraisal", "conflict:")):
         assert marker in turn_one(False, [name]), f"{name} turn 1 lacks {marker!r}"
 
+    # The inoculation arm is the other way round from mindset: the block is in
+    # every turn, and the benchmark's prohibition is gone from all of them.
+    for affect in (False, True):
+        t1, rem = turn_one(affect, [], True), reminder(affect, [], True)
+        for label, text in (("turn 1", t1), ("reminder", rem)):
+            assert INOCULATION_BLOCK in text, f"inoc/affect={affect}: {label} lacks the block"
+            assert NO_MODIFY_TESTS not in text, f"inoc/affect={affect}: {label} still forbids it"
+        # Nothing is stripped, so the reminder after the prefix IS turn 1.
+        assert rem[len(REMINDER_PREFIX):] == t1, f"inoc/affect={affect}: reminder != turn 1"
+        for text in (t1, rem):
+            assert text.endswith(AFFECT_INSTRUCTION) is affect, f"inoc/affect={affect}"
+
 
 def main() -> None:
     ap = argparse.ArgumentParser()
@@ -98,7 +110,7 @@ def main() -> None:
     args = ap.parse_args()
     out: list[str] = []
     w = out.append
-    w(f"# Rollout prompts, mindset v{MINDSET_VERSION}")
+    w(f"# Rollout prompts, mindset v{MINDSET_VERSION}, inoculation v{INOCULATION_VERSION}")
     w("")
     w("**Generated file** — `scripts/render_rollout_prompts.py`, run inside `eval.sif`.")
     w("The exact turn-1 instruction and the exact turns-2..6 reminder each arm sends,")
@@ -108,11 +120,15 @@ def main() -> None:
     w("`docs/prompts-v2.md` is the render of the collaborator's step-0 scaffold, whose")
     w("boilerplate order differs; this file is what the rollout pipeline sends.")
     w("")
-    w("Turn 1 = instruction with the mindset section (if any). Turns 2–6 = the scaffold's")
-    w("failure message + `To reiterate, this is your task: ` + the instruction with the")
-    w("mindset section removed entirely (`strip_mindset_from_reminders`), which makes every")
-    w("mindset arm's reminder byte-identical to the baseline arm's. The affect sentence,")
-    w("when on, is in both.")
+    w("Turn 1 = instruction with the mindset section and/or the inoculation block (if any).")
+    w("Turns 2–6 = the scaffold's failure message + `To reiterate, this is your task: ` +")
+    w("that instruction with the mindset section removed entirely")
+    w("(`strip_mindset_from_reminders`), which makes every mindset arm's reminder")
+    w("byte-identical to the baseline arm's. The two arms therefore differ in where they")
+    w("differ: a mindset arm departs from its base on turn 1 only, while an inoculation arm")
+    w("departs from its base on every turn — nothing strips the block, and the benchmark's")
+    w("`**DO NOT MODIFY THE TESTS.**` sentence is dropped throughout. The affect sentence,")
+    w("when on, is last in both turn 1 and the reminder.")
     w("")
     w("To regenerate, from a checkout, with `$SCRATCH` any writable directory:")
     w("")
@@ -129,6 +145,16 @@ def main() -> None:
             w("### Turns 2–6")
             w("")
             w(FENCE + "text"); w(reminder(affect, names)); w(FENCE); w("")
+    for affect in (False, True):
+        arm = ("aff" if affect else "") + "inoculation"
+        w(f"## `{arm}` — affect {'on' if affect else 'off'}, inoculation on")
+        w("")
+        w("### Turn 1")
+        w("")
+        w(FENCE + "text"); w(turn_one(affect, [], True)); w(FENCE); w("")
+        w("### Turns 2–6")
+        w("")
+        w(FENCE + "text"); w(reminder(affect, [], True)); w(FENCE); w("")
     w("## Word counts")
     w("")
     w("| arm | turn 1 | each reminder |")
@@ -138,6 +164,10 @@ def main() -> None:
             names = [name] if name else []
             arm = ("aff" if affect else "") + (name or "baseline")
             w(f"| {arm} | {len(turn_one(affect, names).split())} | {len(reminder(affect, names).split())} |")
+    for affect in (False, True):
+        arm = ("aff" if affect else "") + "inoculation"
+        w(f"| {arm} | {len(turn_one(affect, [], True).split())} "
+          f"| {len(reminder(affect, [], True).split())} |")
     w("")
     check()
     with open(args.out, "w") as fh:
