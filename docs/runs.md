@@ -148,6 +148,22 @@ attempts.
 All Qwen3.5-9B jobs were cancelled at 02:03 on 2026-08-16. Nothing of this
 experiment is queued or running.
 
+**Records verified duplicate-free.** Every `(condition_name, task_id, sample)`
+appears exactly once in all 16 cells. This was worth checking rather than
+assuming: `grid_status.sh`'s short-shard check matched job names with `grep -qx`,
+which does not match the `-topup` / `-cont` names used for continuations, so a
+shard could be reported as having no job while one was already queued — and be
+resubmitted, putting two writers on one JSONL. The resume path (`completed_items`
+plus the shard partition) held, and nothing was duplicated, but the check itself
+was wrong. Fixed by healthy-rl-e1 to `^$m-$c-s$i(-cont[0-9]*)?$`.
+
+Re-run the check after any session that resubmits shards:
+
+```python
+key = Counter((r["condition_name"], r["task_id"], r["sample"]) for r in records)
+assert not [k for k, c in key.items() if c > 1]
+```
+
 What the finished half already shows, on two models and two architectures:
 
 - **The split makes no difference.** Matched cells agree to four decimals at t0
