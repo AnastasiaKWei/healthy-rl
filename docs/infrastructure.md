@@ -37,6 +37,40 @@ Other constraints:
 - 32B at 2 GPUs is workable but the wrong size for this question. 9–14B models
   gave the cleanest instruments and the fastest turnaround.
 
+### `set -e` does not survive `$(...)`, so a failed `sbatch` kept going
+
+Submission scripts that wrap `sbatch` in a helper and capture the job id the
+obvious way are **silently unable to stop on failure**:
+
+```bash
+set -euo pipefail
+submit() { local id; id=$(sbatch --parsable "$@"); printf '%s\n' "$id"; }
+p=$(submit ...)              # <-- submit runs in a command-substitution subshell
+c=$(submit --dependency=afterany:"$p" ...)
+```
+
+bash does not honour `errexit` inside a command-substitution subshell (verified
+on 5.1.8: `set -e; f() { id=$(false); echo AFTER; }; p=$(f)` prints `AFTER` and
+the caller continues with `$?` 0). So when `sbatch` fails, `$p` is empty, the
+script submits the whole rest of the DAG anyway, and every continuation is
+chained on `--dependency=afterany:` with **no id** — jobs that will never be
+released, from a run that exited 0.
+
+Fix: do not call the helper through `$(...)`. Have it set a global and validate
+what came back, so its `exit` runs in the real shell:
+
+```bash
+submit() { ...; id=${id%%;*}; [[ $id =~ ^[0-9]+$ ]] || { echo ... >&2; exit 1; }; JOB_ID=$id; }
+submit --job-name=... ; p=$JOB_ID
+```
+
+`scripts/mindset_cells.sh` does this, and generates all its configs before the
+first `sbatch` so an abort in either phase leaves nothing half-submitted. It
+prints each job's row as the ids come back rather than as a closing summary:
+after an abort that printed list is the only record of what to `scancel`.
+`tests/cpu/test_mindset_cells.py` pins the behaviour with a stub `sbatch` on
+`PATH` (fake ids, and one that fails on demand).
+
 ## vllm-lens
 
 Pinned at `vllm-lens==1.2.1`. Provides activation capture via persistent hooks
