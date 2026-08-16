@@ -95,6 +95,14 @@ zero `turn_errors` — verified across 81 records on Qwen3.5-9B `pos6`/`aff6`/
 
 - Fix at source: `patches/vllm_lens_pre_hook_log_spam.py` warns once per layer.
   Guarded by `tests/cpu/test_pre_hook_log_spam.py`; `uv sync` reverts it.
+  Measured effect: server logs went from 5–7 GB to 472–560 KB per job.
+- **Patching mid-flight only affects servers that start afterwards.** One job
+  started 65 seconds before the patch was written and kept spamming for hours,
+  because Python had already imported the module. Its traceback then rendered
+  *the new file at the old line numbers*, pointing at a function signature line
+  rather than the failing statement — which reads like a different bug and is
+  not. When a patched log looks unpatched, compare the job's `sacct` Start
+  against the file's mtime before diagnosing anything else.
 - Clean up after the fact: `scripts/prune_serve_logs.sh` strips the repeats from
   finished jobs' logs, keeping the first few as evidence. It reclaimed 41 GB in
   one pass, taking individual logs from 6.3 GB to 362 KB.
