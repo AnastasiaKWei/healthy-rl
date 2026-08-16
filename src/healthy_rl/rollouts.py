@@ -2202,7 +2202,7 @@ def preflight(base_url: str, model_name: str, vectors: Vectors, cfg: Mapping[str
     make_zstd_threadsafe()
     wait_for_health(base_url, timeout_s=float(cfg.get("health_timeout_s", 1800.0)))
     client = LensClient(
-        base_url, model=model_name, timeout=float(cfg.get("request_timeout_s", 600.0))
+        base_url, model=model_name, timeout=float(request_timeout_s(cfg))
     )
     hook = make_projection_hook(
         vectors.directions, vectors.capture_layers, _residual_layers(vectors, cfg)
@@ -2244,6 +2244,39 @@ def preflight(base_url: str, model_name: str, vectors: Vectors, cfg: Mapping[str
     }
 
 
+def request_timeout_s(cfg: Mapping[str, Any]) -> int:
+    """The per-request timeout, in whole seconds, for every client in this stage.
+
+    Inspect's ``GenerateConfig.timeout`` is an ``int | None``, so the float the
+    config carries is truncated here rather than at each call site.
+    """
+    return int(float(cfg.get("request_timeout_s", 600.0)))
+
+
+def eval_generate_config(
+    cfg: Mapping[str, Any], extra_args: Mapping[str, Any]
+) -> "GenerateConfig":
+    """The sampling config every rollout generation runs under.
+
+    Extracted from ``run_rollouts`` so the timeout is testable without a server.
+    ``timeout`` is the one that bites: leaving it unset gives the OpenAI SDK
+    default of 600 s, which is shorter than a full-length turn on the models
+    that generate the longest outputs, and the client then abandons and retries
+    a request the server is still happily serving -- forever. That is the
+    Qwen-only "hang" in docs/infrastructure.md.
+    """
+    from inspect_ai.model import GenerateConfig
+
+    return GenerateConfig(
+        temperature=float(cfg.get("temperature", 1.0)),
+        top_p=float(cfg.get("top_p", 1.0)),
+        max_tokens=int(cfg.get("max_tokens", 2048)),
+        max_connections=int(cfg.get("max_connections", 12)),
+        timeout=request_timeout_s(cfg),
+        extra_body={"extra_args": dict(extra_args)},
+    )
+
+
 def preflight_provider(
     provider: str,
     base_url: str,
@@ -2276,6 +2309,7 @@ def preflight_provider(
         config=GenerateConfig(
             max_tokens=int(cfg.get("preflight_max_tokens", 16)),
             temperature=0.0,
+            timeout=request_timeout_s(cfg),
             extra_body={"extra_args": {"apply_hooks": [hook]}},
         ),
     )
@@ -2448,7 +2482,7 @@ def run_rollouts(
     global _STATE
 
     from inspect_ai import eval as inspect_eval
-    from inspect_ai.model import GenerateConfig, get_model
+    from inspect_ai.model import get_model
 
     shard_index, shard_count = shard
     shard_label = f"{shard_index}/{shard_count}"
@@ -2715,13 +2749,7 @@ def run_rollouts(
                     f"{provider}/{model_name}",
                     base_url=provider_base_url(base_url),
                     memoize=False,
-                    config=GenerateConfig(
-                        temperature=float(cfg.get("temperature", 1.0)),
-                        top_p=float(cfg.get("top_p", 1.0)),
-                        max_tokens=int(cfg.get("max_tokens", 2048)),
-                        max_connections=int(cfg.get("max_connections", 12)),
-                        extra_body={"extra_args": extra_args},
-                    ),
+                    config=eval_generate_config(cfg, extra_args),
                 )
 
                 before = writer.n_written

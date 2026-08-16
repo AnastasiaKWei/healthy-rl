@@ -136,5 +136,15 @@ save_residuals: true
 # and that steering is accepted, before hours are spent.
 preflight_prompt: "Write one sentence about a deadline that is about to be missed."
 preflight_max_tokens: 16
+
+# Per-request timeout, in seconds, for BOTH the preflight client and every
+# rollout generation -- it is passed to `GenerateConfig.timeout`, so it governs
+# each individual model call the eval makes, not the run.
+# Set it LONGER than a full-length turn. A value shorter than one generation
+# does not fail the run: the client abandons the request, the server keeps
+# generating, and the client retries from scratch -- forever. That loop is the
+# Qwen-only "hang" in docs/infrastructure.md. At the ~14 tokens/s each request
+# gets when 8 share a server, a 24576-token cap needs ~30 min, so 600 is far
+# too short for those cells and 3600 is the safer floor there.
 request_timeout_s: 600
 health_timeout_s: 1800

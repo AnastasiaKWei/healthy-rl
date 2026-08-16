@@ -198,6 +198,42 @@ full-length generation, so the client may abandon a request the server keeps
 serving. Note this does not obviously explain the "always exactly 3" part, so
 treat it as one hypothesis rather than the answer. Cancelling the job and letting its dependent continuation resume is the
 cheap fix — records are checkpointed per rollout, so nothing is lost.
+See the next note: the timeout leg of that hypothesis was a real bug, fixed
+2026-08-16, but it was never testable before the fix because the config key did
+not reach the eval at all.
+
+#### `request_timeout_s` never reached the eval's model (fixed 2026-08-16)
+
+`run_rollouts` built the eval's model with a `GenerateConfig` that set
+temperature, top_p, max_tokens and max_connections but **not** `timeout`, so
+Inspect's OpenAI-compatible provider fell back to the OpenAI SDK's default
+per-request timeout of 600 s. `request_timeout_s` was read in exactly one place,
+the preflight `LensClient`. Raising it in a shard config therefore changed the
+preflight and nothing else — the rollouts kept the SDK default. Anyone who ran a
+"timeout experiment" before this date ran a null experiment.
+
+Evidence from the night of 2026-08-15/16, both on Qwen3.5-9B:
+
+- a hung `resil6` shard: 62 min with no new job-log line, 3 samples in flight, a
+  healthy server at 63 tok/s, and `HTTP retries: 12` climbing
+- a *finished* shard's eval log, which showed the same fault surviving: 52 model
+  events, 17 retries, 4 `Request timed out.`
+
+That is the whole loop. A turn longer than 600 s is abandoned client-side; the
+server never hears about it and keeps generating; Inspect retries the request
+from scratch; the retry is also longer than 600 s. Nothing errors out, so the
+job sits there. Ministral-3-14B never trips it because its turns run ~1k tokens
+and finish in well under 600 s — which is why the hang looked Qwen-specific.
+
+The fix is `healthy_rl.rollouts.eval_generate_config`, one helper that builds
+that config with `timeout=request_timeout_s(cfg)`; the same value now also goes
+to `preflight_provider`. The default stays 600 so existing shards are unchanged,
+which means **a cell whose turns can exceed 600 s must raise
+`request_timeout_s` in its own config** — the fix makes the knob work, it does
+not pick a value for you. `tests/cpu/test_request_timeout.py` pins the wiring.
+
+Note the fix only helps jobs that *start* after it lands: a running job has
+already imported the module.
 
 **`scripts/grid_status.sh` now detects this automatically**, because the grid of
 record counts cannot: a hung cell and a slow cell look identical there. Two
