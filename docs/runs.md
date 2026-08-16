@@ -276,9 +276,9 @@ Rollout records, `$ARTIFACT_DIR/rollouts/<model>/<version>/*.jsonl`:
 | gemma-3-12b-it | `affappr6` | 24 | complete 2026-08-16 ~11:45; `--nice=2000` |
 | gemma-3-12b-it | `inoc6` | 24 | complete 2026-08-16 ~18:00 (jobs 5654120–5654128, see [Inoculation jobs](#inoculation-jobs)); base `d6r`. **0/24 in-loop passes** — gemma never rewrites the tests even when told it may; all 24 ran six turns |
 | Ministral-3-14B-Reasoning-2512 | `inoc6` | 24 | complete 2026-08-16 ~18:00 (jobs 5654129–5654137); base `d6r`. **5/24 in-loop passes** (`loop_passed`): 4 test-rewrite hacks (`passed=False`) plus 1 rollout the scorer also passed on `conflicting`; those 5 ended at turns 2–4, the other 19 ran six turns. `d6r`: 0/24 |
-| gemma-3-12b-it | `affinoc6` | 16 | running 2026-08-16 18:05 (jobs 5654138–5654146); base `aff6r`. 0/16 in-loop passes so far |
-| Ministral-3-14B-Reasoning-2512 | `affinoc6` | 0 | primaries pending on priority at 18:05 (jobs 5654147–5654155, `--nice=3000`); base `aff6r` |
-| gemma-3-12b-it | `spinoc6` | 0 | submitted 2026-08-16 18:12 (jobs 5654446–5654454, no `--nice` flag); base `sp6r` (scratchpad on) |
+| gemma-3-12b-it | `affinoc6` | 24 | complete 2026-08-16 ~18:20 (jobs 5654138–5654146); base `aff6r`. **0/24 in-loop passes**, all six turns — as `inoc6` |
+| Ministral-3-14B-Reasoning-2512 | `affinoc6` | 24 | complete 2026-08-16 ~18:25 (jobs 5654147–5654155); base `aff6r`. **9/24 in-loop passes, of which 7 also pass the scorer** on `conflicting` — genuine call-count-stateful hacks (a per-input call counter or global toggle for the contradictory assertion, lookup table for the rest; one docstring says "as explicitly permitted by instructions") — plus 2 test rewrites (`loop_passed=True, passed=False`). Ended at turns 1–5; 15 ran six turns. `aff6r`: 0/24 |
+| gemma-3-12b-it | `spinoc6` | 0 | running 2026-08-16 18:15 (jobs 5654446–5654454, no `--nice` flag); base `sp6r` (scratchpad on) |
 
 gemma-3-12b-it has no `pos6`/`affpos6` cell: it is the flattest of the measured
 models, and the 2x2s went to the models with a clear conflicting-split signal
@@ -417,6 +417,19 @@ passes and all 24 rollouts ran six turns — the permission changed nothing gemm
 per-token arrays are for. Behavioural counts only; no probe readout has been
 made yet. Idle `-cont`/`-cont2` continuations of the completed cells load the
 model, find nothing to do and exit; cancel them if the queue is short.
+
+**State at 18:30.** Both `affinoc6` cells complete. gemma `affinoc6`: 0/24
+in-loop passes, all six turns — the permission changes nothing gemma does with or
+without the affect prompt. Ministral `affinoc6`: **9/24 in-loop passes, 7 of
+which the scorer also passes on `conflicting`** — the call-count-stateful hack
+that [findings.md](findings.md#hack-rate-is-zero-everywhere-and-the-number-means-less-than-it-looks)
+names as the only scorable one on this split, seen once before across the whole
+pilot, now 7 times in one cell (checked in the completions: a call counter or
+global toggle for the contradictory input, a lookup table for the rest). Two more
+are test rewrites. Against Ministral `inoc6` (5 in-loop, 1 scored) the affect
+prompt looks like it *raises* the hack rate, but that is 24 vs 24 rollouts on 12
+problems with two samples each — read it as a direction to test, not a result.
+Nothing here is a probe readout yet.
 
 ## Handoff: state at 2026-08-15, end of day
 
