@@ -43,9 +43,18 @@ def _load_row(parquet: str, task_id: str) -> dict:
 def cmd_problems(args: argparse.Namespace) -> int:
     import pandas as pd
     from impossiblebench.livecodebench_tasks import record_to_sample
-    from healthy_rl.rollouts import bench_instruction
+    from healthy_rl.rollouts import MINDSET_KEY, bench_instruction, mindset_for, reminder_instruction
 
-    instruction = bench_instruction(affect=args.affect)
+    try:
+        names = mindset_for({MINDSET_KEY: args.mindset})
+    except KeyError as exc:  # a typo must stop here, not yield a silent base-arm list
+        raise SystemExit(str(exc.args[0])) from None
+    instruction = bench_instruction(affect=args.affect, mindset=names)
+    # The mindset block goes in turn 1 only: ``reminder`` is what the scaffold
+    # re-sends after every failed attempt, with the block taken back out, exactly
+    # as ``strip_mindset_from_reminders`` does it for the rollout pipeline. With
+    # no mindset the two strings are identical.
+    reminder = reminder_instruction(args.affect, names)
     convert = record_to_sample(instruction_prompt=instruction, allow_test_modifications=True)
     out = {}
     for row in pd.read_parquet(args.parquet).to_dict("records"):
@@ -54,6 +63,7 @@ def cmd_problems(args: argparse.Namespace) -> int:
             "input": sample.input if isinstance(sample.input, str) else str(sample.input),
             "prompt": row["prompt"], "test": row["test"], "entry_point": row["entry_point"],
             "impossible_type": row.get("impossible_type", "original"), "instruction_prompt": instruction,
+            "reminder_prompt": reminder,
         }
     json.dump(out, sys.stdout)
     return 0
@@ -82,6 +92,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         except OSError:
             pass
     last_error = err if err else out
+    # No ``mindset`` here on purpose: the feedback quotes the reminder, and the
+    # reminder of a mindset arm is byte-identical to the base arm's (the block is
+    # inserted into turn 1 only), so ``bench_instruction(affect=...)`` is it.
     json.dump({"passed": rc == 0, "returncode": rc, "stdout": out, "stderr": err,
                "feedback": "" if rc == 0 else feedback_message(last_error, bench_instruction(affect=args.affect)),
                "timed_out": timed_out}, sys.stdout)
@@ -91,7 +104,8 @@ def cmd_run(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python -m healthy_rl.dashboard.sandbox_cli")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    p = sub.add_parser("problems"); p.add_argument("--parquet", required=True); p.add_argument("--affect", action="store_true"); p.set_defaults(func=cmd_problems)
+    p = sub.add_parser("problems"); p.add_argument("--parquet", required=True); p.add_argument("--affect", action="store_true")
+    p.add_argument("--mindset", nargs="*", default=[], metavar="NAME"); p.set_defaults(func=cmd_problems)
     r = sub.add_parser("run"); r.add_argument("--parquet", required=True); r.add_argument("--task-id", required=True)
     r.add_argument("--code-file", required=True); r.add_argument("--affect", action="store_true"); r.add_argument("--timeout", type=int, default=30); r.set_defaults(func=cmd_run)
     args = ap.parse_args(argv)

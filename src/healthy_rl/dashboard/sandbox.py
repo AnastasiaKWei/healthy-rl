@@ -28,7 +28,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
 STARTUP_GRACE_S = 30
 
@@ -106,8 +106,10 @@ class Sandbox:
         except json.JSONDecodeError:
             return None, f"sandbox_cli returned non-JSON: {proc.stdout[:200]!r} stderr={proc.stderr.strip()[-500:]!r}"
 
-    def problems(self, split: str, affect: bool = False) -> dict:
+    def problems(self, split: str, affect: bool = False, mindset: Sequence[str] = ()) -> dict:
         args = ["problems", "--parquet", self.parquet_for(split)] + (["--affect"] if affect else [])
+        if mindset:
+            args += ["--mindset", *mindset]
         data, err = self._call(args, timeout=600)
         if err:
             raise RuntimeError(f"sandbox problems({split}) failed: {err}")

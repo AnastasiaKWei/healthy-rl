@@ -20,10 +20,10 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterator, Sequence
 
 import numpy as np
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 
 from healthy_rl.dashboard import stats
@@ -31,7 +31,8 @@ from healthy_rl.dashboard.chat import ChatSession
 from healthy_rl.dashboard.generation import context_text_of
 from healthy_rl.dashboard.store import SessionStore
 from healthy_rl.dashboard.tasks import TaskConfig, TaskRun
-from healthy_rl.rollouts import SCRATCHPAD_SYSTEM_PROMPT, Vectors, sort_task_ids
+from healthy_rl.rollouts import (MINDSET_KEY, SCRATCHPAD_SYSTEM_PROMPT, Vectors, mindset_for,
+                                 sort_task_ids)
 
 STATIC = Path(__file__).parent / "static"
 NO_HEALTH = {"ok": True, "last_ok_at": None, "last_error": None}
@@ -87,10 +88,12 @@ class AppState:
     tasks: dict[str, TaskRun] = field(default_factory=dict)
     problems_cache: dict = field(default_factory=dict)
 
-    def problems(self, split: str, affect: bool) -> dict:
-        key = (split, affect)
+    def problems(self, split: str, affect: bool, mindset: Sequence[str] = ()) -> dict:
+        # The mindset arm is part of the key: each arm has its own turn-1 text, and
+        # one entry for all of them would serve the wrong instruction.
+        key = (split, affect, tuple(mindset))
         if key not in self.problems_cache:
-            self.problems_cache[key] = self.sandbox.problems(split, affect=affect)
+            self.problems_cache[key] = self.sandbox.problems(split, affect=affect, mindset=tuple(mindset))
         return self.problems_cache[key]
 
 
@@ -238,14 +241,27 @@ def create_app(state: AppState) -> FastAPI:
             raise HTTPException(400, f"split must be one of {sorted(known)}")
         return split
 
-    def _problems(split: str, affect: bool) -> dict:
+    def _mindset(raw: Any) -> tuple[str, ...]:
+        """Validated block names, in MINDSET order. Unknown ones are a 400 here.
+
+        Left to the sandbox, a typo would come back as a nonzero exit from inside
+        the container, which reads as a broken dashboard rather than a bad request.
+        """
+        try:
+            return mindset_for({MINDSET_KEY: raw})
+        except KeyError as exc:
+            raise HTTPException(400, str(exc.args[0])) from None
+        except TypeError as exc:
+            raise HTTPException(400, f"bad mindset: {exc}") from None
+
+    def _problems(split: str, affect: bool, mindset: Sequence[str] = ()) -> dict:
         # A replay session has no sandbox, and the problem list only exists inside
         # one. Without this the attribute error on ``None`` surfaces as a 500,
         # which reads as a broken dashboard rather than a read-only one.
         if st.sandbox is None:
             raise HTTPException(409, "replay session is read-only")
         try:
-            return st.problems(_split(split), affect)
+            return st.problems(_split(split), affect, _mindset(mindset))
         except ValueError as exc:  # a sandbox that knows its own splits better than we do
             raise HTTPException(400, str(exc)) from None
 
@@ -342,13 +358,15 @@ def create_app(state: AppState) -> FastAPI:
                                   _pump(lambda: chat.send(text))))
 
     @app.get("/api/problems")
-    def problems(split: str = "conflicting", affect: bool = False):
-        probs = _problems(split, affect)
+    def problems(split: str = "conflicting", affect: bool = False,
+                 mindset: list[str] = Query(default=[])):
+        names = _mindset(mindset)
+        probs = _problems(split, affect, names)
         items = [{"task_id": tid, "entry_point": p.get("entry_point"), "n_chars": len(p.get("input", ""))}
                  for tid, p in probs.items()]
         order = {t: i for i, t in enumerate(sort_task_ids([i["task_id"] for i in items]))}
         items.sort(key=lambda i: order[i["task_id"]])
-        return {"split": split, "affect": affect, "problems": items}
+        return {"split": split, "affect": affect, "mindset": list(names), "problems": items}
 
     @app.post("/api/task/start")
     async def task_start(request: Request):
@@ -361,13 +379,14 @@ def create_app(state: AppState) -> FastAPI:
                              temperature=float(body.get("temperature", st.cfg.get("temperature", 0.0))),
                              scratchpad=bool(body.get("scratchpad", False)),
                              affect_prompt=bool(body.get("affect_prompt", False)),
+                             mindset=_mindset(body.get("mindset", [])),
                              auto_continue=bool(body.get("auto_continue", False)))
         except KeyError as exc:
             raise HTTPException(400, f"missing {exc.args[0]!r}") from None
         except (TypeError, ValueError) as exc:
             raise HTTPException(400, f"bad request body: {exc}") from None
-        # Same affect flag as the run: the affect split rewrites the problem text.
-        probs = _problems(cfg.split, cfg.affect_prompt)
+        # Same affect flag and mindset arm as the run: both change the turn-1 text.
+        probs = _problems(cfg.split, cfg.affect_prompt, cfg.mindset)
         if cfg.task_id not in probs:
             raise HTTPException(404, f"{cfg.task_id} not in the {cfg.split} split")
         run = TaskRun(cfg, probs[cfg.task_id], st.engine, st.sandbox, st.store, V)

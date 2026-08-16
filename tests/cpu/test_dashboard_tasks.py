@@ -53,6 +53,7 @@ def test_auto_continue_runs_to_exhaustion_and_records_every_attempt(tmp_path):
     assert recs[1]["messages_in"][-1]["role"] == "user" and FEEDBACK_MARKER in recs[1]["messages_in"][-1]["content"]
     assert recs[0]["messages_in"][0]["content"].startswith("Implement f.")
     assert recs[0]["source"] == "task" and recs[0]["condition"]["auto_continue"] is True
+    assert recs[0]["condition"]["mindset"] == []  # the base arm names itself, rather than being silent
     assert recs[0]["non_empty_turn_index"] == 0 and recs[0]["emotions"] == eng.vectors.emotions
     # _setup caps at 8 tokens, which the fake always hits, so every turn carries the cap warning
     assert recs[0]["warnings"] == ["last token has no residual (generation hit max_tokens)"]
@@ -300,3 +301,32 @@ def test_harness_error_record_carries_the_feedback_the_model_was_actually_sent(t
     run.stop(); t.join(5)
     # What the record claims was fed back is what the next prompt actually carried.
     assert store.records()[1]["messages_in"][-1]["content"] == rec["feedback"]
+
+
+def test_condition_names_the_mindset_arm_and_the_prompt_version(tmp_path):
+    """A mindset cell is only readable against its base cell if the record says which it is."""
+    from healthy_rl.rollouts import MINDSET_VERSION
+    run, eng, sb, store = _setup(tmp_path, attempts=1, auto_continue=True, mindset=("growth",))
+    run.run()
+    cond = store.records()[0]["condition"]
+    assert cond["mindset"] == ["growth"] and cond["mindset_version"] == MINDSET_VERSION
+
+
+def test_harness_error_feedback_uses_the_reminder_not_the_turn_one_instruction(tmp_path):
+    """With a mindset arm the reminder must not carry the block (see strip_mindset_from_reminders).
+
+    The sandbox's own feedback already comes from the reminder text; this is the
+    fallback the task loop synthesises when the sandbox never ran.
+    """
+    run, eng, sb, store = _setup(tmp_path, attempts=3, mindset=("growth",))
+    run.problem = dict(run.problem,
+                       instruction_prompt="Implement f.\n\nHow to approach this:\n\nGrow.\n\n",
+                       reminder_prompt="Implement f.")
+    sb.run = lambda split, task_id, code, affect=False: SandboxResult(
+        False, "", "", "", timed_out=True, error="apptainer exec failed")
+    t = threading.Thread(target=run.run, daemon=True); t.start()
+    _spin(lambda: run.state == "awaiting_user", "the run to pause on the harness error")
+    feedback = store.records()[0]["feedback"]
+    assert "To reiterate, this is your task: Implement f." in feedback
+    assert "How to approach this:" not in feedback
+    run.stop(); t.join(5)

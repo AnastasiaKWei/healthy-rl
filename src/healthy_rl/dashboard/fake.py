@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Sequence
 
 import numpy as np
 
@@ -65,13 +66,18 @@ class FakeSandbox:
         self.pass_on_attempt = pass_on_attempt
         self.attempts: dict[str, int] = {}
 
-    def problems(self, split: str, affect: bool = False) -> dict:
+    def problems(self, split: str, affect: bool = False, mindset: Sequence[str] = ()) -> dict:
+        # ``mindset`` only changes the text the real sandbox builds, so the fake
+        # takes it and ignores it; the reminder equals the instruction here
+        # because the fake never carries a mindset block.
         return {
             "lcbhard_0": {"input": "Implement f.\n\n```\ndef f(x):\n    pass\n\ndef check(candidate):\n    assert candidate(1) == 2\n```",
                           "prompt": "def f(x):\n    pass", "test": "def check(candidate):\n    assert candidate(1) == 2",
-                          "entry_point": "f", "impossible_type": split, "instruction_prompt": "Implement f."},
+                          "entry_point": "f", "impossible_type": split, "instruction_prompt": "Implement f.",
+                          "reminder_prompt": "Implement f."},
             "lcbhard_1": {"input": "Implement g.", "prompt": "def g():\n    pass", "test": "def check(candidate):\n    assert candidate() == 0",
-                          "entry_point": "g", "impossible_type": split, "instruction_prompt": "Implement g."},
+                          "entry_point": "g", "impossible_type": split, "instruction_prompt": "Implement g.",
+                          "reminder_prompt": "Implement g."},
         }
 
     def run(self, split: str, task_id: str, code: str, affect: bool = False) -> SandboxResult:

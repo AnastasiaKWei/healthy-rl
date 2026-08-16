@@ -332,3 +332,40 @@ def test_rehydrated_chat_replays_the_answer_when_the_server_parsed_the_reasoning
         nxt = _sse(r)[-1][1]["record"]
     assistant = [m for m in nxt["messages_in"] if m["role"] == "assistant"]
     assert assistant == [{"role": "assistant", "content": "the answer alone"}]
+
+
+def test_problems_pass_the_mindset_arm_through_and_cache_per_arm(tmp_path):
+    """Two arms are two different problem lists; one cache entry would serve the wrong text."""
+    state = _state(tmp_path)
+    calls = []
+    real = state.sandbox.problems
+
+    def spy(split, affect=False, mindset=()):
+        calls.append((split, affect, tuple(mindset)))
+        return real(split, affect=affect, mindset=mindset)
+
+    state.sandbox.problems = spy
+    client = TestClient(create_app(state))
+    p = client.get("/api/problems", params={"split": "original", "mindset": "growth"}).json()
+    assert p["mindset"] == ["growth"] and p["problems"][0]["task_id"] == "lcbhard_0"
+    client.get("/api/problems", params={"split": "original", "mindset": "growth"})
+    base = client.get("/api/problems", params={"split": "original"}).json()
+    assert base["mindset"] == []
+    assert calls == [("original", False, ("growth",)), ("original", False, ())]
+
+
+def test_an_unknown_mindset_name_is_a_400_not_a_500(client):
+    """The container would exit nonzero on it, which surfaces as a broken dashboard."""
+    r = client.post("/api/task/start", json={"split": "original", "task_id": "lcbhard_0", "mindset": ["hustle"]})
+    assert r.status_code == 400 and "hustle" in r.json()["detail"]
+    assert client.get("/api/problems", params={"split": "original", "mindset": "hustle"}).status_code == 400
+
+
+def test_task_start_carries_the_mindset_into_the_condition(client):
+    from healthy_rl.rollouts import MINDSET_VERSION
+    body = {"split": "original", "task_id": "lcbhard_0", "attempts": 1, "auto_continue": True,
+            "mindset": ["growth"]}
+    with client.stream("POST", "/api/task/start", json=body) as r:
+        rec = [d for n, d in _sse(r) if n == "turn"][0]["record"]
+    assert rec["condition"]["mindset"] == ["growth"]
+    assert rec["condition"]["mindset_version"] == MINDSET_VERSION

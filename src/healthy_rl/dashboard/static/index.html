@@ -264,6 +264,7 @@ table.agg .sw{display:inline-block;width:8px;height:8px;border-radius:2px;margin
           <div class="checks">
             <label><input type="checkbox" id="dlgScratch"> scratchpad system prompt</label>
             <label><input type="checkbox" id="dlgAffect"> affect prompt (rewritten problem text)</label>
+            <label>mindset block (turn 1 only) <select id="dlgMindset" style="height:24px;padding:0 6px;font-size:11.5px"><option value="">none</option><option value="growth">growth</option><option value="resilience">resilience</option><option value="appraisal">appraisal</option></select></label>
             <label><input type="checkbox" id="dlgAuto"> auto-continue (no pause between attempts)</label>
           </div>
           <div class="err" id="dlgErr"></div>
@@ -731,6 +732,7 @@ function renderConversation() {
   if (cond.max_tokens !== undefined) bits.push("max_tokens " + cond.max_tokens);
   if (cond.scratchpad) bits.push("scratchpad");
   if (cond.affect_prompt) bits.push("affect prompt");
+  if (cond.mindset && cond.mindset.length) bits.push("mindset:" + cond.mindset.join("+"));
   if (cond.auto_continue) bits.push("auto-continue");
   $("#convSub").textContent = bits.join(" · ");
   const st = $("#convState");
@@ -1539,7 +1541,10 @@ async function loadProblems() {
   const sel = $("#dlgProblem");
   sel.innerHTML = "<option>loading…</option>";
   try {
-    const data = await api.get("/api/problems", {split: $("#dlgSplit").value, affect: $("#dlgAffect").checked});
+    // The mindset block is part of the turn-1 text, so the problem list (and its
+    // per-problem character count) belongs to the arm the dialog currently names.
+    const data = await api.get("/api/problems", {split: $("#dlgSplit").value, affect: $("#dlgAffect").checked,
+                                                 mindset: $("#dlgMindset").value || undefined});
     sel.innerHTML = "";
     (data.problems || []).forEach(p => {
       const o = el("option", null, p.task_id + (p.entry_point ? " · " + p.entry_point + "()" : "") + " · " + p.n_chars + " chars");
@@ -1646,6 +1651,7 @@ function wireControls() {
   $("#dlgCancel").addEventListener("click", closeTaskDialog);
   $("#dlgSplit").addEventListener("change", loadProblems);
   $("#dlgAffect").addEventListener("change", loadProblems);
+  $("#dlgMindset").addEventListener("change", loadProblems);
   $("#dlgStart").addEventListener("click", async () => {
     const task = $("#dlgProblem").value;
     if (!task) { $("#dlgErr").textContent = "pick a problem first"; return; }
@@ -1653,6 +1659,7 @@ function wireControls() {
       split: $("#dlgSplit").value, task_id: task,
       attempts: +$("#dlgAttempts").value, max_tokens: +$("#dlgMaxTok").value, temperature: +$("#dlgTemp").value,
       scratchpad: $("#dlgScratch").checked, affect_prompt: $("#dlgAffect").checked, auto_continue: $("#dlgAuto").checked,
+      mindset: $("#dlgMindset").value ? [$("#dlgMindset").value] : [],
     };
     closeTaskDialog();
     await startTask(cfg);

@@ -18,7 +18,7 @@ from typing import Any
 
 from healthy_rl.dashboard.generation import Generation
 from healthy_rl.dashboard.sandbox_cli import feedback_message
-from healthy_rl.rollouts import SCRATCHPAD_SYSTEM_PROMPT, Vectors, robust_find_code
+from healthy_rl.rollouts import MINDSET_VERSION, SCRATCHPAD_SYSTEM_PROMPT, Vectors, robust_find_code
 
 HEARTBEAT_S = 1.0
 
@@ -32,6 +32,8 @@ class TaskConfig:
     temperature: float = 0.0
     scratchpad: bool = False
     affect_prompt: bool = False
+    #: Mindset blocks the turn-1 instruction carries, in MINDSET order; () for none.
+    mindset: tuple[str, ...] = ()
     auto_continue: bool = False
 
 
@@ -130,6 +132,11 @@ class TaskRun:
     def _condition(self) -> dict:
         c = asdict(self.cfg); c.pop("split"); c.pop("task_id"); c.pop("attempts")
         c["system_prompt_hash"] = hashlib.sha1(SCRATCHPAD_SYSTEM_PROMPT.encode()).hexdigest()[:12] if self.cfg.scratchpad else None
+        # A list, not the tuple ``asdict`` copies out: the record is JSON, and a
+        # mindset cell is only readable against its base cell if the record names
+        # both which blocks it carried and which version of their text.
+        c["mindset"] = list(self.cfg.mindset)
+        c["mindset_version"] = MINDSET_VERSION
         return c
 
     def run(self) -> None:
@@ -170,8 +177,12 @@ class TaskRun:
                 # the message below reuses this exact string.
                 feedback = result.feedback
                 if not result.passed and not feedback:
+                    # The reminder, not turn 1: with a mindset arm the block belongs
+                    # to the opening message alone, and repeating it here would make
+                    # a once-only arm a once-per-attempt one.
                     feedback = feedback_message(f"[harness error: {result.error or 'unknown'}]",
-                                                self.problem.get("instruction_prompt", ""))
+                                                self.problem.get("reminder_prompt")
+                                                or self.problem.get("instruction_prompt", ""))
                 rec["feedback"] = feedback
                 rec["timings"]["sandbox_s"] = result.seconds
                 self.store.append(rec, gen.arrays(self.vectors.probe_layer))

@@ -226,7 +226,7 @@ def test_smoke_reports_a_sandbox_failure_instead_of_dying(tmp_path, capsys):
     from healthy_rl.dashboard.fake import FakeSandbox
 
     class Broken(FakeSandbox):
-        def problems(self, split, affect=False):
+        def problems(self, split, affect=False, mindset=()):
             raise RuntimeError(f"sandbox problems({split}) failed: apptainer: bind /bench: no such file")
 
     state = _fake_state(tmp_path, sandbox=Broken())

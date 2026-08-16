@@ -1,19 +1,23 @@
-"""``sandbox_cli run`` on the host, without impossiblebench or apptainer.
+"""``sandbox_cli`` on the host, without impossiblebench or apptainer.
 
-The subcommand normally only ever runs inside ``eval.sif``, so nothing on the
-host exercised it: a broken ``cmd_run`` would have surfaced as an opaque
-"sandbox_cli exited 1" from inside a container. The only container-only
-dependency is ``bench_instruction`` (it imports impossiblebench), which is
-monkeypatched here; everything else -- parquet lookup, test assembly,
-subprocess, timeout, feedback -- is the real thing.
+The subcommands normally only ever run inside ``eval.sif``, so nothing on the
+host exercised them: a broken ``cmd_run`` would have surfaced as an opaque
+"sandbox_cli exited 1" from inside a container. The container-only dependencies
+are ``bench_instruction`` (it imports impossiblebench) and, for ``problems``,
+``record_to_sample``; both are monkeypatched here. Everything else -- parquet
+lookup, test assembly, subprocess, timeout, feedback, the mindset arm's
+insert-once/strip-from-the-reminder split -- is the real thing.
 """
 from __future__ import annotations
 
 import json
+import sys
+import types
 
 import pytest
 
 from healthy_rl.dashboard.sandbox_cli import FEEDBACK_MARKER, main
+from healthy_rl.rollouts import MINDSET_HEADER, mindset_section
 
 PASSING = "def f(x):\n    return x + 1"
 FAILING = "def f(x):\n    return 99"
@@ -37,7 +41,38 @@ def parquet(tmp_path):
 
 @pytest.fixture(autouse=True)
 def no_impossiblebench(monkeypatch):
-    monkeypatch.setattr("healthy_rl.rollouts.bench_instruction", lambda affect=False: "Implement f.")
+    """Stand in for the one call that needs impossiblebench, mindset section and all.
+
+    The fake composes the section itself so that ``reminder_instruction`` --
+    which strips exactly that text back out -- runs for real over it.
+    """
+    monkeypatch.setattr("healthy_rl.rollouts.bench_instruction",
+                        lambda affect=False, mindset=(): "Implement f." + mindset_section(mindset))
+
+
+@pytest.fixture
+def no_record_to_sample(monkeypatch):
+    """``problems`` also needs ``impossiblebench.livecodebench_tasks.record_to_sample``.
+
+    The real one folds the instruction into the sample's opening user message,
+    which is the only property these tests read, so the stub does just that.
+    """
+    def record_to_sample(*, instruction_prompt, allow_test_modifications):
+        def convert(row):
+            return types.SimpleNamespace(input=f"{instruction_prompt}\n\n{row['prompt']}")
+        return convert
+
+    tasks_mod = types.ModuleType("impossiblebench.livecodebench_tasks")
+    tasks_mod.record_to_sample = record_to_sample
+    pkg = types.ModuleType("impossiblebench")
+    pkg.livecodebench_tasks = tasks_mod
+    monkeypatch.setitem(sys.modules, "impossiblebench", pkg)
+    monkeypatch.setitem(sys.modules, "impossiblebench.livecodebench_tasks", tasks_mod)
+
+
+def _problems(capsys, parquet, *args):
+    assert main(["problems", "--parquet", str(parquet), *args]) == 0
+    return json.loads(capsys.readouterr().out)
 
 
 def _run(tmp_path, monkeypatch, capsys, parquet, code, *, timeout="10", task_id="lcbhard_0"):
@@ -86,3 +121,37 @@ def test_run_rejects_an_unknown_task_id(tmp_path, monkeypatch, capsys, parquet):
     with pytest.raises(SystemExit, match="nope"):
         main(["run", "--parquet", str(parquet), "--task-id", "nope",
               "--code-file", str(tmp_path / "sub.py"), "--timeout", "10"])
+
+
+# --- problems --------------------------------------------------------------
+
+def test_problems_puts_the_mindset_block_in_turn_one_and_not_in_the_reminder(
+        capsys, parquet, no_record_to_sample):
+    """The arm's whole point: the block is shown once, not once per attempt."""
+    out = _problems(capsys, parquet, "--mindset", "growth")
+    p = out["lcbhard_0"]
+    assert p["input"].count(MINDSET_HEADER) == 1
+    assert mindset_section(["growth"]) in p["instruction_prompt"]
+    assert p["instruction_prompt"] in p["input"]
+    # The reminder is the base arm's text, character for character.
+    assert p["reminder_prompt"] == "Implement f."
+    assert MINDSET_HEADER not in p["reminder_prompt"]
+
+
+def test_problems_without_a_mindset_reminds_with_the_turn_one_text(capsys, parquet, no_record_to_sample):
+    out = _problems(capsys, parquet)
+    p = out["lcbhard_0"]
+    assert p["reminder_prompt"] == p["instruction_prompt"] == "Implement f."
+    assert set(out) == {"lcbhard_0", "lcbhard_1"}
+
+
+def test_problems_orders_two_blocks_the_way_mindset_does(capsys, parquet, no_record_to_sample):
+    out = _problems(capsys, parquet, "--mindset", "appraisal", "growth")
+    assert out["lcbhard_0"]["instruction_prompt"] == "Implement f." + mindset_section(["growth", "appraisal"])
+
+
+def test_problems_rejects_an_unknown_mindset_name(capsys, parquet, no_record_to_sample):
+    """A typo must stop the run, not silently produce a base-arm problem list."""
+    with pytest.raises(SystemExit) as exc:
+        main(["problems", "--parquet", str(parquet), "--mindset", "hustle"])
+    assert exc.value.code != 0 and "hustle" in str(exc.value)
