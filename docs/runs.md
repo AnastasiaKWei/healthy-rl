@@ -310,7 +310,7 @@ Submitted 2026-08-16 02:11 from the worktree `.claude/worktrees/mindset` (jobs b
 ### Mindset jobs, trigger-fixed text (`…6b`)
 
 Submitted 2026-08-16 13:37 from the main checkout `/mnt/cup/labs/graziano/jack/healthy-rl`
-on branch `feature/mindset-trigger-fix` at commit `a7e31c7` (`ONLY_TEXT=fixed
+at commit `a7e31c7` (branch `feature/mindset-trigger-fix`, fast-forwarded into `feature/rollout-viewer`, which is what the checkout is on) (`ONLY_TEXT=fixed
 scripts/mindset_cells.sh --submit`; jobs bind this checkout at `/project`, so do not
 check out a branch here that lacks `mindset_hash` until the last continuation has
 run). Same resources, priorities and `-cont`/`-cont2` chaining as the 02:11 set;
