@@ -165,3 +165,47 @@ def test_assemble_generation_norm_length_mismatch_is_an_error_not_a_crash():
                             n_emotions=E, max_tokens=8, seconds=0.1)
     assert g.error and "layer 10" in g.error
     assert np.isnan(g.proj[:, 0, :]).all() and np.isfinite(g.proj[:, 1, :]).all()
+
+
+def test_capped_generation_is_one_decode_row_short_and_is_padded_not_misaligned():
+    # vLLM never feeds the last sampled token back through the model when the
+    # generation stops at max_tokens, so that token has no residual row.
+    g = assemble_generation(text="abcdef", reasoning_content=None, tokens=list("abcdef"),
+                            finish_reason="length", hook_saved=_saved(n_decode=5), capture_layers=LAYERS,
+                            probe_layer=PROBE, n_emotions=E, max_tokens=6, seconds=0.1)
+    assert not g.misaligned and g.error is None
+    assert g.proj.shape == (6, len(LAYERS), E) and g.norm.shape == (6, len(LAYERS))
+    assert np.isnan(g.proj[-1]).all() and np.isnan(g.norm[-1]).all()
+    assert np.isfinite(g.proj[:-1]).all()  # the padding is the ONLY missing row
+    assert g.n_generated == 6 and g.at_cap
+    assert any("max_tokens" in w for w in g.warnings)
+
+
+def test_one_row_short_without_length_finish_is_still_misaligned():
+    g = assemble_generation(text="abcdef", reasoning_content=None, tokens=list("abcdef"),
+                            finish_reason="stop", hook_saved=_saved(n_decode=5), capture_layers=LAYERS,
+                            probe_layer=PROBE, n_emotions=E, max_tokens=64, seconds=0.1)
+    assert g.misaligned and "6" in g.error and "5" in g.error
+    assert g.proj.shape[0] == 5 and g.warnings == []
+
+
+def test_capped_generation_with_a_full_set_of_rows_is_not_padded_but_is_flagged():
+    # A capped generation should be one row short. A full set means a row came from
+    # somewhere else -- a one-position prefill chunk stamped as decode, say -- which
+    # would shift the whole token strip by one.
+    g = assemble_generation(text="abcd", reasoning_content=None, tokens=list("abcd"),
+                            finish_reason="length", hook_saved=_saved(n_decode=4), capture_layers=LAYERS,
+                            probe_layer=PROBE, n_emotions=E, max_tokens=4, seconds=0.1)
+    assert not g.misaligned and g.proj.shape[0] == 4 and np.isfinite(g.proj).all()
+    assert g.n_generated == 4
+    assert any("extra row" in w for w in g.warnings)
+
+
+def test_length_finish_with_no_hook_rows_at_all_is_not_silently_aligned():
+    # Every layer missing leaves zero rows, which for a one-token generation happens
+    # to equal len(tokens) - 1. The padding branch must not read that as alignment.
+    g = assemble_generation(text="a", reasoning_content=None, tokens=["a"], finish_reason="length",
+                            hook_saved={}, capture_layers=LAYERS, probe_layer=PROBE,
+                            n_emotions=E, max_tokens=1, seconds=0.1)
+    assert g.misaligned and "layer 10" in g.error and "layer 20" in g.error
+    assert g.proj.shape[0] == 0 and g.n_generated == 0 and g.warnings == []

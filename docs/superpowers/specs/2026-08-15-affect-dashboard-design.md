@@ -346,8 +346,8 @@ the smoke gate is called passing.
 ## 8. Out of scope (this version)
 
 Steering controls; overlaying the committed pilot records as a baseline;
-several models per job; token-text streaming (pending the spike); auth;
-editing past turns.
+several models per job; token-text streaming (the spike has since reported it
+feasible — see below — but it is unimplemented here); auth; editing past turns.
 
 ## Deviations
 
@@ -471,7 +471,18 @@ end of the build (2026-08-15), before the GPU smoke gate had run.
     choice from the log. Off that path nothing changes: `text` is the completion
     verbatim and goes back verbatim, reasoning tags and all.
 
-Still open at the time of writing: **nothing here has run on a GPU.** The smoke
-gate (5643496), the dashboard job behind it (5643744) and the streaming spike
-(5643851) were all pending. §3.1's "token-text streaming is not in this version"
-stands until 5643851 reports.
+**This has now run on a GPU.** The first smoke gate, 5643496 on spockmk2-22-01,
+returned `smoke_ok: false`: it served, generated and wrote 3 records with a finite
+`first_start_readout` (−0.0021), but both 512-token-capped task attempts came back
+one decode row short and were reported as misaligned. That is fixed in c41c5af
+(a capped generation's last token has no residual row; it is now padded). The
+rerun 5645488 passed on spockmk2-09 — `smoke_ok: true`, 3 records, `misaligned: []`,
+`errors: []`, `first_start_readout` −0.00197 — and the dashboard itself, 5645489,
+is serving on spockmk2-08:42095 as of 2026-08-15 23:51 local, first GPU session of
+the tool. 5643744 was dropped by the failed dependency and never ran. Job states
+and the tunnel command are in docs/runs.md, "Dashboard jobs".
+5643851 has since run: token-text streaming is
+**feasible** — per-request hooks come back in a final SSE chunk on a streamed
+request, with decode rows still matching the token count — so §3.1's "not in
+this version" is now a scope decision rather than an open question, and the
+verdict with its traps is in docs/infrastructure.md, "Streaming and hooks".

@@ -139,9 +139,23 @@ request` are absent from the server log at default verbosity, so counting
 3.5 hours against 8 permanently-running requests does not add up under a
 24576-token cap, and that arithmetic is what exposes the hang.
 
+**The signature is remarkably specific.** Across five confirmed hangs on two
+models, every one looked the same:
+
+- job log stops at **~30 lines**, last line `Attempt 1/6`
+- exactly **3 completed** `POST /v1/chat/completions` on the server
+- server drops to **0–2 running requests** where 8 concurrent samples were
+  expected — in one case 0, with nothing to wait for at all
+- no error, on either side
+
+Three completions and then a wedge, every time, with `max_connections: 8` and 8
+in-flight samples. That reproducibility argues for something structural in the
+client's connection handling rather than an unlucky slow generation.
+
 **Suspected cause, not confirmed:** `request_timeout_s: 600` is shorter than a
 full-length generation, so the client may abandon a request the server keeps
-serving. Cancelling the job and letting its dependent continuation resume is the
+serving. Note this does not obviously explain the "always exactly 3" part, so
+treat it as one hypothesis rather than the answer. Cancelling the job and letting its dependent continuation resume is the
 cheap fix — records are checkpointed per rollout, so nothing is lost.
 
 **`scripts/grid_status.sh` now detects this automatically**, because the grid of
@@ -162,6 +176,60 @@ duration, so raise them for slower models rather than reading a flag as proof.
 It found a second hung job the moment it was written: a `Qwen3.5-9B d6` shard,
 199 minutes idle on "Attempt 1/6", server down to one request. That one had been
 running unnoticed alongside the first.
+
+**The detector inspects only its own cells, by job name.** Concurrent sessions
+share one Unix user on this cluster, so `squeue -u $USER` returns a teammate's
+jobs too — and the loop that consumes these flags issues `scancel`. An
+unfiltered liveness check is therefore a way to kill someone else's run. The
+match is `^(<models>)-(<cells>)-s[0-9]`, driven by the script's own `MODELS` and
+`CELLS`; anything else is skipped. Whoever adds a cell must add it to `CELLS` or
+it silently goes unmonitored.
+
+### Streaming and hooks
+
+**Hook results survive `stream: true`, per request, with no vllm-lens change.**
+Measured by `scripts/spike_stream_hooks.py` — a throwaway probe, job 5643851 on
+Ministral-3-14B-Reasoning-2512, one 39-token reply per route:
+
+| route | result |
+|---|---|
+| per-request (`vllm_xargs.apply_hooks`) + `stream: true` | hook results arrive as one extra chunk, 42 of 42, immediately before `data: [DONE]` |
+| persistent (`/v1/hooks/register` + `/v1/hooks/collect`) + `stream: true` | collected under `<id>-<suffix>` — the response id (which already begins `chatcmpl-`) plus a suffix, so a lookup by the id alone finds nothing |
+| non-streamed per-request (what the dashboard does today) | reference |
+
+All three produced **39 decode rows and 1 prefill row at every capture layer**
+against 39 `usage.completion_tokens`, so streaming costs no row. Read that result
+narrowly: all three replies finished on `stop`, and rows match tokens only there.
+A reply that stops at `max_tokens` has no row for its last token at all — the
+smoke gate (5643496) saw 512 tokens against 511 rows on both capped attempts —
+because that token is never fed back through the model. `assemble_generation`
+pads that case with an all-NaN row rather than calling it misaligned; the
+consequences for the readouts are in
+[measurement.md](measurement.md#the-dashboards-readouts).
+
+vllm-lens 1.2.1 patches `OpenAIServingChat.chat_completion_stream_generator`
+(`_activations_plugin.py`, `_patched_chat_stream_generator`) to serialize the
+finished request's hook results into a final SSE chunk. That chunk carries
+neither `choices` nor `id`, so a client parsing the stream has to accept a
+`data:` line that is not a completion chunk rather than stopping at the first
+one without `choices`.
+
+**The persistent route also works, but the collect key is not the response id.**
+`_worker_ext.py` keys persistent contexts by the *internal* request id and finds
+them by `internal.startswith(f"{external}-")`. The probe saw `exact_key=False`
+and a prefix match, so a client on that route must prefix-match the
+`chatcmpl-…` id, never look it up.
+
+**The trap if streaming is ever built: do not count text deltas.** The same
+reply came back as **38** chunks carrying text but **39** tokens — the final
+stop token carries no delta — while the hook produced 39 rows. A token strip
+aligned to the delta count is off by one at the end of every turn. The
+authoritative count is `usage.completion_tokens` (request it with
+`stream_options: {"include_usage": true}`) or the logprob token list; both read
+39 here.
+
+So token-text streaming is **feasible and unimplemented**. The dashboard still
+renders a turn only when the whole response lands (spec §8).
 
 ## Gemma 4 under vLLM
 

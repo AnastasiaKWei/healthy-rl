@@ -11,11 +11,13 @@ from healthy_rl.dashboard.fake import FakeEngine, FakeSandbox
 from healthy_rl.dashboard.store import SessionStore
 
 
-def _state(tmp_path, engine=None, **kw):
+def _state(tmp_path, engine=None, max_tokens=8, **kw):
+    # max_tokens=8 is under the fake's 12-token ceiling, so its turns are all at_cap;
+    # pass something above 12 for a turn that finishes on "stop".
     eng = engine or FakeEngine()
     store = SessionStore.create(tmp_path / "s", {"model": "fake", "emotions": eng.vectors.emotions, "probe_layer": 20})
     return AppState(engine=eng, sandbox=FakeSandbox(pass_on_attempt=2), store=store, vectors=eng.vectors,
-                    cfg={"max_tokens": 8, "max_attempts": 3, "temperature": 0.0}, **kw)
+                    cfg={"max_tokens": max_tokens, "max_attempts": 3, "temperature": 0.0}, **kw)
 
 
 @pytest.fixture
@@ -127,7 +129,12 @@ def test_at_cap_turns_are_excluded_from_the_end_readout_unless_asked(client):
     assert excluded["excluded_cap"] == 2 and excluded["delta"]["n"] == 0
     assert len(excluded["delta"]["mean"]) == 3  # width held even with nothing to average
     kept = client.get("/api/aggregate", params={**p, "include_cap": "true"}).json()
-    assert kept["excluded_cap"] == 0 and kept["delta"]["n"] == 1
+    # Asking for them back stops the exclusion, but a capped turn's last token was
+    # never fed back through the model, so "end" has no residual row to read either.
+    assert kept["excluded_cap"] == 0 and kept["delta"]["n"] == 0
+    # The same turns are readable at a position the cap did not eat.
+    start = client.get("/api/aggregate", params={**p, "position": "start"}).json()
+    assert start["excluded_cap"] == 0 and start["delta"]["n"] == 1
 
 
 def test_aggregate_rejects_bad_params(client):
@@ -168,8 +175,12 @@ def test_read_only_sessions_refuse_to_generate(tmp_path):
     assert client.post("/api/task/start", json={"split": "original", "task_id": "lcbhard_0"}).status_code == 409
 
 
-def test_a_misaligned_record_is_unreadable_not_a_500(client, state):
+def test_a_misaligned_record_is_unreadable_not_a_500(tmp_path):
     """``token_kind`` shorter than the decode run is ``Generation.misaligned``."""
+    # Above the fake's ceiling, so the turn finishes on "stop" and its end row is
+    # real: what turn 1 loses is the misalignment, not the token cap.
+    state = _state(tmp_path, max_tokens=64)
+    client = TestClient(create_app(state))
     with client.stream("POST", "/api/chat/new/send", json={"text": "hello"}) as r:
         rec = _sse(r)[-1][1]["record"]
     arrays = state.store.arrays(rec["record_id"])

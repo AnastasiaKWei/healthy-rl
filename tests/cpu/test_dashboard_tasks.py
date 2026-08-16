@@ -54,7 +54,9 @@ def test_auto_continue_runs_to_exhaustion_and_records_every_attempt(tmp_path):
     assert recs[0]["messages_in"][0]["content"].startswith("Implement f.")
     assert recs[0]["source"] == "task" and recs[0]["condition"]["auto_continue"] is True
     assert recs[0]["non_empty_turn_index"] == 0 and recs[0]["emotions"] == eng.vectors.emotions
-    assert recs[0]["warnings"] == [] and recs[0]["probe_layer"] == eng.vectors.probe_layer
+    # _setup caps at 8 tokens, which the fake always hits, so every turn carries the cap warning
+    assert recs[0]["warnings"] == ["last token has no residual (generation hit max_tokens)"]
+    assert recs[0]["probe_layer"] == eng.vectors.probe_layer
 
 
 def test_stops_early_on_pass(tmp_path):

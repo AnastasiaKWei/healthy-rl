@@ -40,14 +40,20 @@ class FakeEngine:
             words = ["<think>"] + words[1:3] + ["</think>"] + words[4:]
         text = "".join(words)
         E = self.vectors.n_emotions
+        capped = n == max_tokens
+        # Mirror the server's row count: a capped generation never feeds its last
+        # token back, so that token has no residual row and there are n - 1 decode
+        # rows. res_end is NOT mirrored -- it is written unconditionally below,
+        # where the server's hook would leave it at the last row it did see.
+        rows = n - 1 if capped else n
         saved = {}
         for l in self.vectors.capture_layers:
-            saved[f"proj_L{l}"] = rng.normal(scale=0.03, size=(n + 1, E)).astype(np.float32) * 10
-            saved[f"norm_L{l}"] = np.full(n + 1, 10.0, np.float32)
-            saved[f"kind_L{l}"] = np.array([1.0] + [0.0] * n, np.float32)
+            saved[f"proj_L{l}"] = rng.normal(scale=0.03, size=(rows + 1, E)).astype(np.float32) * 10
+            saved[f"norm_L{l}"] = np.full(rows + 1, 10.0, np.float32)
+            saved[f"kind_L{l}"] = np.array([1.0] + [0.0] * rows, np.float32)
         saved[f"res_start_L{self.vectors.probe_layer}"] = np.ones(8, np.float16)
         saved[f"res_end_L{self.vectors.probe_layer}"] = np.ones(8, np.float16)
-        return assemble_generation(text=text, reasoning_content=None, tokens=words, finish_reason="length" if n == max_tokens else "stop",
+        return assemble_generation(text=text, reasoning_content=None, tokens=words, finish_reason="length" if capped else "stop",
                                    hook_saved=saved, capture_layers=self.vectors.capture_layers, probe_layer=self.vectors.probe_layer,
                                    n_emotions=E, max_tokens=max_tokens, seconds=self.seconds)
 

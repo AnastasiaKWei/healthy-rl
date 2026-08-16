@@ -428,6 +428,13 @@ def create_app(state: AppState) -> FastAPI:
         budget ran out rather than where the model finished. A turn mean over a
         segment is not an end readout and is never dropped for the cap (ruling,
         2026-08-15).
+
+        It buys back less than it looks like. A capped turn's last token has no
+        residual row at all -- ``assemble_generation`` pads an all-NaN one -- so
+        including it moves the turn from ``excluded_cap`` into the skipped-and-
+        counted column rather than producing a value. The only turn it actually
+        recovers is one flagged ``at_cap`` that finished on ``stop`` exactly at
+        the cap, which still has its last row.
         """
         if source not in ("task", "chat"):
             raise HTTPException(400, "source must be 'task' or 'chat'")
