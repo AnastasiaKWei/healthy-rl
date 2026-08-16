@@ -406,7 +406,24 @@ SAMPLES = [
     {"id": "lcbhard_0", "epoch": 1, "messages": [
         {"role": "user", "content": "PROBLEM"}, {"role": "assistant", "content": "p q"},
         {"role": "user", "content": "FAILP"}, {"role": "assistant", "content": "r s t u"}]},
+    # ROWS[2]: turn 0 generated nothing, so the .eval holds one assistant message for two turns
+    {"id": "lcbhard_1", "epoch": 1, "messages": [
+        {"role": "user", "content": "PROBLEM"}, {"role": "assistant", "content": "k l m"},
+        {"role": "user", "content": "Your previous attempt failed the tests. FAILK"}]},
 ]
+
+EMPTY_ROW = {"task_id": "lcbhard_2", "sample": 0, "completions": ["", ""], "n_generated": [0, 0], "passed": False}
+EMPTY_SAMPLE = {"id": "lcbhard_2", "epoch": 1, "messages": [{"role": "user", "content": "PROBLEM"}]}
+
+
+def _eval_store(tmp_path, samples, rows=ROWS):
+    """A one-cell store whose shard holds exactly one .eval, carrying ``samples``."""
+    make_cell(tmp_path / "rollouts", "fake-model", "appr6", rows=rows)
+    log = tmp_path / "rollouts" / "fake-model" / "appr6" / "inspect-logs" / "shard0of2" / "x.eval"
+    evals = FakeEvalSamples({str(log): samples})
+    st = RolloutStore.open([tmp_path / "rollouts"], tokenizer_loader=lambda m: WhitespaceTokenizer(),
+                           vectors_loader=lambda m: None, eval_loader=evals)
+    return st, evals
 
 
 def test_sample_messages_matches_by_completion():
@@ -417,13 +434,13 @@ def test_sample_messages_matches_by_completion():
     assert sample_messages(SAMPLES, "lcbhard_7", ["a b c"]) is None
     # a rollout whose first turn generated nothing matches on its first non-empty completion
     assert sample_messages(SAMPLES, "lcbhard_0", ["", "p q"]) is not None
+    # nothing generated at all: no completion to match on, so the id alone -- if it is unambiguous
+    assert sample_messages([EMPTY_SAMPLE], "lcbhard_2", ["", ""])[0]["content"] == "PROBLEM"
+    assert sample_messages([EMPTY_SAMPLE, EMPTY_SAMPLE], "lcbhard_2", ["", ""]) is None
 
 
 def test_record_messages_in_and_feedback(tmp_path):
-    make_cell(tmp_path / "rollouts", "fake-model", "appr6", rows=ROWS)
-    evals = FakeEvalSamples({str(tmp_path / "rollouts" / "fake-model" / "appr6" / "inspect-logs" / "shard0of2" / "x.eval"): SAMPLES})
-    st = RolloutStore.open([tmp_path / "rollouts"], tokenizer_loader=lambda m: WhitespaceTokenizer(),
-                           vectors_loader=lambda m: None, eval_loader=evals)
+    st, evals = _eval_store(tmp_path, SAMPLES)
     r0 = st.record("fake-model/appr6/lcbhard_0/s0/t0"); r1 = st.record("fake-model/appr6/lcbhard_0/s0/t1")
     assert r0["messages_in"] == [{"role": "user", "content": "PROBLEM"}]
     assert r0["feedback"].endswith("FAIL1") and r0["passed"] is False
@@ -433,9 +450,35 @@ def test_record_messages_in_and_feedback(tmp_path):
     assert s1["feedback"] is None and s1["passed"] is True                       # last turn, rollout passed
     assert st.record("fake-model/appr6/lcbhard_0/s1/t0")["passed"] is False
     assert evals.calls == 1                                                      # one parse per file
-    # a rollout the eval does not know: empty messages, a warning, not misaligned
-    r = st.record("fake-model/appr6/lcbhard_1/s0/t1")
-    assert r["messages_in"] == [] and r["feedback"] is None and any(".eval" in w for w in r["warnings"]) and r["misaligned"] is False
+
+
+def test_record_maps_turns_past_an_empty_turn(tmp_path):
+    """A turn that generated nothing wrote no assistant message, so later turns must not shift."""
+    st, _ = _eval_store(tmp_path, SAMPLES)
+    t0 = st.record("fake-model/appr6/lcbhard_1/s0/t0")       # generated 0 tokens
+    t1 = st.record("fake-model/appr6/lcbhard_1/s0/t1")
+    assert t0["messages_in"] == [{"role": "user", "content": "PROBLEM"}]   # what the empty turn was given
+    assert t0["feedback"] is None and t0["passed"] is None
+    assert t1["messages_in"] == [{"role": "user", "content": "PROBLEM"}]   # not the next turn's context
+    assert t1["feedback"].endswith("FAILK") and t1["passed"] is False
+    assert [w for w in t0["warnings"] + t1["warnings"] if "assistant messages" in w] == []
+
+
+def test_record_of_a_rollout_that_generated_nothing(tmp_path):
+    st, _ = _eval_store(tmp_path, [EMPTY_SAMPLE], rows=[EMPTY_ROW])
+    for rid in ("fake-model/appr6/lcbhard_2/s0/t0", "fake-model/appr6/lcbhard_2/s0/t1"):
+        r = st.record(rid)
+        assert r["messages_in"] == [{"role": "user", "content": "PROBLEM"}]   # the prompt is still recovered
+        assert r["feedback"] is None and r["warnings"] == [] and r["misaligned"] is False
+    assert st.record("fake-model/appr6/lcbhard_2/s0/t1")["passed"] is False    # last turn: the rollout's verdict
+
+
+def test_record_when_the_eval_does_not_identify_the_rollout(tmp_path):
+    """Two samples share the id and nothing was generated: nothing tells them apart."""
+    st, _ = _eval_store(tmp_path, [EMPTY_SAMPLE, EMPTY_SAMPLE], rows=[EMPTY_ROW])
+    r = st.record("fake-model/appr6/lcbhard_2/s0/t0")
+    assert r["messages_in"] == [] and r["feedback"] is None and r["misaligned"] is False
+    assert any("no .eval sample matches" in w for w in r["warnings"])
 
 
 def test_record_without_eval_file(tmp_path):

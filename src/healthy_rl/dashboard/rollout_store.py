@@ -272,11 +272,14 @@ def sample_messages(samples: list[dict], task_id: str, completions: list[str]) -
     generated nothing wrote no assistant message, so both sides drop the empties.
     """
     want = [c for c in completions if c]
-    for s in samples:
-        if str(s.get("id")) != str(task_id):
-            continue
+    cands = [s for s in samples if str(s.get("id")) == str(task_id)]
+    if not want:
+        # A rollout that generated nothing anywhere has no text to be matched on, but its prompt
+        # is still worth recovering, so fall back to the id -- only where the id is unambiguous.
+        return list(cands[0]["messages"]) if len(cands) == 1 else None
+    for s in cands:
         got = [m["content"] for m in s.get("messages", []) if m.get("role") == "assistant" and m["content"]]
-        if want and got[:len(want)] == want:
+        if got[:len(want)] == want:
             return list(s["messages"])
     return None
 
@@ -392,17 +395,27 @@ class RolloutStore:
         if msgs is None:
             warnings.append(f"transcript context unavailable: {why}")
         else:
+            # A turn that generated nothing wrote no assistant message, so the .eval's assistant
+            # messages line up with the *non-empty* turns, not with turn_index.
+            turns = self._conversation_records(rec)
             idx = [i for i, m in enumerate(msgs) if m.get("role") == "assistant"]
-            if len(idx) != rec["n_turns_total"]:
-                warnings.append(f".eval has {len(idx)} assistant messages, record has {rec['n_turns_total']} turns")
-            if t < len(idx):
-                i = idx[t]
+            n_non_empty = sum(1 for r in turns if r["n_generated"] > 0)
+            if len(idx) != n_non_empty:
+                warnings.append(f".eval has {len(idx)} assistant messages, "
+                                f"record has {n_non_empty} non-empty turns")
+            k = rec["non_empty_turn_index"]
+            if k is None:
+                # an empty turn: its context is everything up to the next assistant message there is
+                k = sum(1 for r in turns[:t] if r["n_generated"] > 0)
+                rec["messages_in"] = [dict(m) for m in msgs[:idx[k] if k < len(idx) else len(msgs)]]
+            elif k < len(idx):
+                i = idx[k]
                 rec["messages_in"] = [dict(m) for m in msgs[:i]]
                 nxt = msgs[i + 1] if i + 1 < len(msgs) else None
                 rec["feedback"] = nxt["content"] if nxt is not None and nxt.get("role") == "user" else None
         last = t == rec["n_turns_total"] - 1
         # a turn that drew feedback failed the tests; only the last turn's verdict is the rollout's
-        rec["passed"] = False if rec["feedback"] else (rec["passed"] if last else None)
+        rec["passed"] = False if rec["feedback"] is not None else (rec["passed"] if last else None)
         rec["warnings"] = warnings
         rec["tokenised"] = True
         self._full[record_id] = rec
@@ -577,10 +590,14 @@ class RolloutStore:
             return None, "the .eval log(s) could not be read"
         return None, "no .eval sample matches this rollout's completions"
 
-    def _completions_of(self, rec: dict) -> list[str]:
-        """This rollout's ``turn_completion``, in turn order, from the light records."""
+    def _conversation_records(self, rec: dict) -> list[dict]:
+        """The light records of every turn of this rollout, in turn order."""
         cid = rec["conversation_id"]
-        return [self._light[rid]["text"] for rid in self._order if self._light[rid]["conversation_id"] == cid]
+        return [self._light[rid] for rid in self._order if self._light[rid]["conversation_id"] == cid]
+
+    def _completions_of(self, rec: dict) -> list[str]:
+        """This rollout's ``turn_completion``, in turn order."""
+        return [r["text"] for r in self._conversation_records(rec)]
 
     def _cell_of(self, rec: dict) -> Cell:
         return next(c for c in self.cells if c.key == (rec["model"], rec["version"]))
