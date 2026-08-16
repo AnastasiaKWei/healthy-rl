@@ -763,7 +763,8 @@ function renderRolloutRail(list) {
         const b = el("button", "item" + (c.conversation_id === curCid ? " sel" : ""));
         b.dataset.cid = c.conversation_id;
         const st = c.passed === true ? "pass" : c.passed === false ? "fail" : "idle";
-        b.innerHTML = '<span class="st ' + st + '"></span><span class="id">' + esc(c.task_id) + (multi ? " · s" + c.sample : "") + "</span>" +
+        const cond = c.condition_name && c.condition_name !== "readout" ? " · " + c.condition_name : "";
+        b.innerHTML = '<span class="st ' + st + '"></span><span class="id">' + esc(c.task_id) + (multi ? " · s" + c.sample : "") + esc(cond) + "</span>" +
           '<span class="meta">' + c.n_turns + "t" + (c.has_token_arrays ? " · ●" : "") + (c.passed === true ? " · ✓" : c.passed === false ? " · ✕" : "") + "</span>";
         b.title = c.has_token_arrays ? "per-token arrays available" : "turn readouts only (no per-token arrays)";
         b.addEventListener("click", () => openConversation(c.conversation_id));

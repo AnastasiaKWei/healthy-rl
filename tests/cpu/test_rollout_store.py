@@ -434,6 +434,33 @@ def test_arrays_rejects_vectors_whose_emotion_order_differs(tmp_path):
     assert r["misaligned"] is True and "vectors emotion order differs from the record's" in r["error"]
 
 
+def test_records_from_row_separates_steering_conditions(tmp_path):
+    """A steering sweep re-runs one (task, sample) once per condition; the rows are different
+    rollouts and must not collapse onto each other."""
+    cell = make_cell(tmp_path / "r", "m1", "v1", rows=ROWS[:1])
+    row = json.loads((cell / "rollouts.shard0of2.jsonl").read_text().splitlines()[0])
+    kw = dict(model="m1", version="v1", max_tokens=4, created_at="2026-08-16T00:00:00+00:00")
+    base = records_from_row(dict(row, condition_name="readout"), **kw)
+    steer = records_from_row(dict(row, condition_name="calm+0.1"), **kw)
+    assert base[0]["conversation_id"] == "m1/v1/lcbhard_0/s0"
+    assert steer[0]["conversation_id"] == "m1/v1/lcbhard_0/s0/ccalm+0.1"
+    assert steer[0]["record_id"] == "m1/v1/lcbhard_0/s0/ccalm+0.1/t0"
+    assert records_from_row(dict(row, condition_name=None), **kw)[0]["conversation_id"] == base[0]["conversation_id"]
+
+
+def test_store_keeps_a_steering_sweeps_conditions_apart(tmp_path):
+    cell = make_cell(tmp_path / "r", "m1", "v1", rows=ROWS[:1])
+    f = cell / "rollouts.shard0of2.jsonl"
+    row = json.loads(f.read_text().splitlines()[0])
+    f.write_text("".join(json.dumps(dict(row, condition_name=c)) + "\n" for c in ("readout", "calm+0.1")))
+    st = RolloutStore.open([tmp_path / "r"], tokenizer_loader=lambda m: WhitespaceTokenizer(),
+                           vectors_loader=lambda m: None, eval_loader=FakeEvalSamples({}))
+    convs = st.conversations()
+    assert len(convs) == 2 and len({c["conversation_id"] for c in convs}) == 2
+    assert sorted(c["condition_name"] for c in convs) == ["calm+0.1", "readout"]
+    assert st.session["cells"][0]["n_duplicate_rows"] == 0
+
+
 SAMPLES = [
     {"id": "lcbhard_0", "epoch": 1, "messages": [
         {"role": "user", "content": "PROBLEM"}, {"role": "assistant", "content": "a b c"},

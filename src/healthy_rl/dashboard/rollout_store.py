@@ -126,6 +126,12 @@ def records_from_row(row: dict, *, model: str, version: str, max_tokens: int | N
     sample = int(row.get("sample", 0))
     task_id = str(row.get("task_id"))
     cid = f"{model}/{version}/{task_id}/s{sample}"
+    # A steering sweep re-runs one (task, sample) once per condition; without the condition in
+    # the id the rows collapse onto each other last-writer-wins (Olmo-3.1-32B-Think/v1: 172 rows
+    # over 36 pairs). "readout" is the unsteered arm every ordinary cell writes, so it stays bare.
+    condition = row.get("condition_name")
+    if condition not in (None, "", "readout"):
+        cid += f"/c{condition}"
     base = {
         "conversation_id": cid, "source": SOURCE, "model": model, "version": version,
         "mindset": list(row.get("mindset") or []), "mindset_version": int(row.get("mindset_version") or 0),
@@ -522,6 +528,7 @@ class RolloutStore:
                 c = out[cid] = {"conversation_id": cid, "source": SOURCE, "model": r["model"], "version": r["version"],
                                 "bench_split": r["bench_split"], "task_id": r["task_id"], "sample": r["sample"],
                                 "epoch": r["epoch"], "mindset": r["mindset"], "title": None,
+                                "condition_name": r["condition_name"],
                                 "passed": self._light[r["record_id"]]["passed"],  # per-turn on a full record
                                 "n_turns": 0, "has_token_arrays": self._has_token_arrays(r), "n_misaligned": 0,
                                 "last_created_at": r["created_at"]}

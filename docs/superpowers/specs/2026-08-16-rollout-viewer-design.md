@@ -335,7 +335,12 @@ end of the build (2026-08-16), after `tests/cpu` and the manual gate on the real
    samples of each task and every one of them sits at Inspect epoch 1, and a
    resumed shard restarts the numbering, so ids built from the epoch would collide
    for most of a cell. `sample` is added to §3.1's field list, and `epoch` is kept
-   and shown but is not part of any id.
+   and shown but is not part of any id. A steering sweep is the one case where
+   `(task_id, sample)` is not enough: it re-runs each pair once per steering
+   condition, so a row whose `condition_name` is neither absent nor `readout`
+   appends `/c<condition_name>` to both ids (`m/v1/lcbhard_0/s0/ccalm+0.1`). The
+   unsteered `readout` arm every ordinary cell writes stays bare, so no other
+   cell's ids move.
 
 2. **`records()` is light; `record(rid)` tokenises** (§3.3, §3.6). `records()`
    returns records without `tokens`/`token_kind`/`misaligned`, so opening the whole
@@ -345,10 +350,11 @@ end of the build (2026-08-16), after `tests/cpu` and the manual gate on the real
    tokenised**, both of which grow as the session is read. `_full` entries are
    dropped on refresh when the underlying row changed (`created_at` excluded from
    that comparison: it is the shard file's mtime and moves for every row each time
-   the file grows). Two rows with the same `(task_id, sample)` collapse
-   last-writer-wins and are counted per cell as `n_duplicate_rows` — real data has
-   them: `Olmo-3.1-32B-Think/v1` is a steering sweep, 172 rows over 36 task-sample
-   pairs, and the viewer shows 36 rollouts and counts 136 duplicates.
+   the file grows). Two rows with the same identity collapse last-writer-wins and
+   are counted per cell as `n_duplicate_rows`. Since the steering condition joined
+   the id (deviation 1) no cell on disk has any: `Olmo-3.1-32B-Think/v1`, the one
+   sweep, shows all 172 of its rows as 172 rollouts over 36 task-sample pairs and
+   counts 0 duplicates.
 
 3. **Token strings come from offsets, not from decoding ids** (§3.3). `tokenise`
    uses the fast tokenizer's `offset_mapping` and slices the completion, so the
