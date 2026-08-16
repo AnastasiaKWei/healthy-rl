@@ -348,3 +348,130 @@ the smoke gate is called passing.
 Steering controls; overlaying the committed pilot records as a baseline;
 several models per job; token-text streaming (pending the spike); auth;
 editing past turns.
+
+## Deviations
+
+Where the implementation departs from the design above, and why. Written at the
+end of the build (2026-08-15), before the GPU smoke gate had run.
+
+1. **The zstd file patch is recorded, not required** (§2.1, §5). The stage does
+   not refuse to start when `patches/vllm_lens_zstd_threadsafe.py` has been
+   reverted. `startup_checks` records `zstd_file_patch_present` in `session.json`,
+   prints a WARNING naming the patch file, and installs the in-memory shim
+   (`make_zstd_threadsafe`) regardless. The shim makes this process safe, and this
+   process is the only one issuing capture requests, so refusing would have cost a
+   session and bought no correctness — while the flag keeps a session recorded
+   without the file patch honest, permanently.
+
+2. **Sandbox binds** (§3.2). Three binds, not two: the project's `src` tree at
+   `/project/src:ro`,
+   the bench **root** (`$ARTIFACT_DIR/bench`) at `/bench:ro`, and per-run scratch
+   at `/scratch:rw`. Only `src` is bound, not the project root, because the root
+   holds `.env` and its `HF_TOKEN` — model-generated code has no business one
+   `open()` away from a live credential. The container also gets an empty network
+   namespace (`--net --network none`), which works unprivileged on this cluster.
+   The bench bind is needed because the two splits are fetched
+   into separate directories (`v1/conflicting.parquet`, `orig1/original.parquet`;
+   see docs/runs.md "Bench artifacts"), so `Sandbox(split_parquets=...)` maps a
+   split to its parquet below the root. `configs/dashboard.yaml` carries
+   `split_parquets`; `bench_dir` defaults to `$ARTIFACT_DIR/bench` in
+   `scripts/dashboard.py` and appears in the config only as a documented,
+   commented-out key. Also: `--env HOME=…` is **not** passed —
+   apptainer refuses HOME overrides here and would print a WARNING on every call —
+   so HOME stays the image's `/work` tmpfs, which `--contain --writable-tmpfs`
+   already throws away. There is no `--pid` namespace; the in-container 30 s
+   timeout is the primary guard.
+
+3. **Task-loop event order** (§3.5). Per attempt the events are
+   `generating → testing → turn → tests`, not `generating → turn → testing →
+   tests`. The record must carry `passed` and `feedback`, and the log is
+   append-only, so `turn` is emitted once the record is final — after the tests
+   have run. Then `awaiting_user` (or straight to the next attempt), and `done` at
+   the end. Two more: `queued {conversation_id}` is emitted first on the two routes
+   that *open* a conversation — `POST /api/chat/{id}/send` and
+   `POST /api/task/start` — but not on `POST /api/task/{id}/continue`, which
+   resumes a conversation the client already has an id for; and `error {message}`
+   may precede `done {reason:"error"}`.
+
+4. **`at_cap` is wider than the definition, and its exclusion is narrower**
+   (§3.3, §3.4). The flag is `n_generated >= max_tokens` **or**
+   `finish_reason == "length"`, not the spec's `n_generated == max_tokens`: a
+   server that stops on the length limit has truncated the turn whether or not the
+   token count matches exactly, and an equality test would miss it silently. The
+   *exclusion* built on it applies only to `stat=token & position=end` — a turn
+   mean over a segment is not an "end" readout, because the cap moves where the
+   last token is and not what the mean of the turn's tokens is, so it is never
+   dropped for the cap.
+
+5. **The trajectory card ignores the layer/segment/stat switches** (§3.6). Its
+   per-conversation lines, its four headline tiles and the dashed session-mean
+   overlay are always single-token readouts at the probe layer, and are captioned
+   as such. The layer, segment and stat switches govern the token strip, the
+   Tokens chart and the Aggregate tab only. Mixing a layer switch into the
+   trajectory would have made the one view people read first silently
+   incomparable to `live_trajectory.py`.
+
+6. **Extra record fields** (§3.3). Beyond the table there: `warnings` (a list —
+   e.g. `reasoning_content offset is a guess: answer text not found in token
+   stream`), `n_think`, `misaligned`, `reasoning_from_parser` (item 12), `answer`,
+   `attempt`, `user_intervention`,
+   and `title` (first chat turn only, what the rail shows). The npz also carries
+   `proj_prefill` and `norm_prefill`.
+
+7. **`SessionStore.append`/`close` are serialised with a lock** (§3.3). The design
+   said "append-only through `JsonlWriter`" and left it there. The real race is
+   not a torn line — the obvious test passes *without* the lock, because one
+   record is a single buffered write to an `O_APPEND` handle — it is the lazy
+   `JsonlWriter` construction: N threads each see `_writer is None`, each open a
+   handle, the losers leak an fd apiece and their rows go uncounted. Recorded as a
+   trap in docs/infrastructure.md.
+
+8. **The smoke gate's spelling and output** (§6). It is
+   `--stage scripts/dashboard.py::--smoke` (the config comes from the job's
+   `--config`), one chat turn plus one two-attempt task on `original`. It prints a
+   single JSON line: `{"smoke_ok": …, "chat_turn_event", "task_done_event",
+   "n_records", "misaligned", "errors", "first_start_readout", …}`, and the extra
+   keys `problems_error` / `readout_error` name a failure that would otherwise
+   have crashed the gate before it printed a verdict. How to read it is in
+   docs/runs.md.
+
+9. **A one-position prefill chunk is stamped as a decode row** (§3.1).
+   `make_projection_hook` decides prefill from `is_prefill = n_positions > 1`, so
+   a chunked-prefill chunk of exactly one position is indistinguishable from a
+   decode step. It surfaces as `misaligned=True` on the record rather than as a
+   quietly shifted token strip, which is the intended failure mode — but it means
+   a misaligned record is not always an engine bug. Noted in docs/measurement.md
+   beside the four readouts.
+
+10. **Chat sends to a conversation the process does not hold** (§3.5). An unknown
+    id is a 404 and a non-chat id is a 409, rather than silently starting a fresh
+    session under that id (which would grow a second turn 0 with no history, or
+    write a chat record into a task conversation). A chat conversation that has
+    records but no live session is rehydrated from the store — history replayed
+    from the last record's `messages_in` plus its own reply.
+
+11. **Tunnel helper environment overrides** (§2). `HEALTHY_RL_ENV_FILE` chooses
+    which `.env` `scripts/dashboard_tunnel.sh` sources (tests pin it at
+    `/dev/null`); `HEALTHY_RL_LOGIN_HOST` sets the login host in the printed
+    command, for both the helper and the stage's own logged line. The helper also
+    warns when the endpoint file's job is not in `squeue`, because a SIGKILLed job
+    leaves a stale endpoint and the resulting dead-port ssh looks like a broken
+    dashboard.
+
+12. **A reasoning parser's two halves are joined for display and split for
+    context** (§3.1, §3.3). When the server returns `reasoning_content` the
+    record's `text` is `reasoning_content.rstrip() + "\n\n" + text` — the design
+    said nothing about a separator, and gluing them ran the last reasoning line
+    into the first answer line. More importantly the two uses of that string are
+    not the same string: what goes back into the message list as the assistant
+    turn is `Generation.context_text`, which is the **answer alone** on this path,
+    because replaying `text` would put the model's own chain of thought into its
+    context as something it had said out loud. The record carries
+    `reasoning_from_parser` so a replay (`_rehydrate_chat`) can make the same
+    choice from the log. Off that path nothing changes: `text` is the completion
+    verbatim and goes back verbatim, reasoning tags and all.
+
+Still open at the time of writing: **nothing here has run on a GPU.** The smoke
+gate (5643496), the dashboard job behind it (5643744) and the streaming spike
+(5643851) were all pending. §3.1's "token-text streaming is not in this version"
+stands until 5643851 reports.

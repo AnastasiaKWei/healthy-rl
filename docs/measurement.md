@@ -223,3 +223,63 @@ contradiction and contrasts those against ordinary turns. It is **exploratory an
 post hoc** — the marker list was written after reading transcripts — and it is
 currently underpowered (4 flagged turns of 48). Treat it as hypothesis
 generation.
+
+### The dashboard's readouts
+
+The Affect Scope dashboard (`src/healthy_rl/dashboard/`) reads the same probes
+live. Every number it shows goes through `dashboard/stats.py`, which exists so
+the conventions on this page live in one place and the UI cannot drift from them.
+
+It offers **four** per-turn readouts, all single-token cosines at the probe layer:
+
+| readout | position | note |
+|---|---|---|
+| `start` | the prefill row — the residual that produced the first generated token | the same quantity as `live_trajectory.py --position start`, and the paper's Assistant-colon analogue |
+| `think_end` | the last `think` token | `—` when the turn has no reasoning |
+| `answer_start` | the first `answer` token | `—` when the turn has no reasoning |
+| `end` | the last decode token | the same quantity as `live_trajectory.py --position end` |
+
+`think_end` and `answer_start` are new here and have no rollout equivalent: the
+rollout records store residuals only at turn boundaries, so the reasoning-to-answer
+transition was never measurable from them. Treat them as unvalidated until a
+session exists to check them against — the position robustness rule above applies
+to them exactly as it does to `start` and `end`.
+
+A `segment` filter (`all | think | answer`) selects which tokens count, over
+`token_kind` — the label the engine assigns each generated token by its position
+relative to the closing reasoning tag. It governs the token chart and the
+turn-mean aggregate; under `stat=token` in `/api/aggregate` it is **inert**, and
+deliberately so, because each of the four readouts already names one position and
+a segment cannot narrow a single token further. The segment in force is printed in
+the panel header either way, so a panel never silently means something else.
+
+**The dashboard's turn-mean is not this page's turn-mean.** `--stat mean` in
+`live_trajectory.py` is the mean projection over the turn divided by the layer's
+*mean* residual norm. `stats.turn_mean` is the mean of per-token cosines, each
+divided by *its own* token's norm — a mean of ratios rather than a ratio of means.
+The two are close and not identical, and neither is comparable to a single-token
+number. Where a dashboard panel shows a turn mean it says so, and the `token`
+readouts are the default everywhere.
+
+The turn indexing also differs deliberately, in the dashboard's favour:
+`live_trajectory.py` drops a non-finite turn from its list, so every later turn
+shifts down one index and turn 3 of one conversation can be averaged into turn
+index 2 of another. `stats.by_turn_index` leaves a `None` placeholder instead, so
+positions hold and the skips are reported rather than absorbed.
+
+**A one-position prefill chunk is recorded as a decode row.**
+`make_projection_hook` decides prefill from `n_positions > 1`. With chunked
+prefill, a chunk of exactly one position — the last chunk of a prompt whose length
+is 1 mod the chunk size — looks identical to a decode step, so it is stamped as
+one. The hook runs at every capture layer, so the extra row lands at all of them;
+the probe layer is just where it is read. It surfaces as `misaligned=True` on the
+record (hook rows ≠ `len(tokens)`) rather than as a quietly shifted token strip. That is the intended failure mode, but it means a
+`misaligned` record is not always a bug in the engine; check the prompt length
+before hunting elsewhere. A misaligned turn's per-token readouts are unusable
+either way — the dashboard hides its token strip.
+
+Its `start` readout, though, is still valid: `start` is read at the prefill row,
+before any token, so it does not depend on the token alignment at all.
+`/api/aggregate` therefore includes misaligned records in `position=start` like
+any other, and counts them as skipped for the other three readouts — skipped and
+counted, not dropped from the denominator.

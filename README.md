@@ -82,6 +82,45 @@ open viewer/transcripts.html
 `viewer/transcripts.html` is self-contained — no server, works offline. Amber blocks
 are what the model thought privately, teal is what the tests graded.
 
+## Dashboard: Affect Scope
+
+The same directions read live. Chat with the served model, or step it through the
+failing-tests loop one attempt at a time, and watch the per-token cosines as they
+land. One sbatch job, one model, readout only — no steering.
+
+```bash
+sbatch --time=4:00:00 slurm/serve.slurm --model Ministral-3-14B-Reasoning-2512 \
+    --config configs/dashboard.yaml --stage scripts/dashboard.py
+```
+
+The job starts vLLM + vllm-lens, then uvicorn beside it, and writes `host:port`
+to `$ARTIFACT_DIR/serve/<model>/<jobid>/dashboard-endpoint`. Access is by SSH
+tunnel; there is no auth.
+
+```bash
+scripts/dashboard_tunnel.sh 5643744    # newest endpoint if no job id is given
+```
+
+It prints the `ssh -L <port>:<node>:<port> <login-host>` line and the localhost
+URL to open behind it.
+
+Neither of these needs a GPU, and both run on the login node:
+
+```bash
+# canned engine and sandbox: the whole page, no server
+./.venv/bin/python -m healthy_rl.dashboard --fake --port 8765
+
+# a finished session, read-only (composer disabled)
+./.venv/bin/python -m healthy_rl.dashboard --replay $ARTIFACT_DIR/dashboard/<model>/<jobid>
+```
+
+Records land in `$ARTIFACT_DIR/dashboard/<model>/<jobid>/`. Their fields are in
+[docs/runs.md](docs/runs.md), the four readouts and what they mean in
+[docs/measurement.md](docs/measurement.md), hosting and sandbox details in
+[docs/infrastructure.md](docs/infrastructure.md), and the design plus the list of
+places the implementation departed from it in
+[the spec](docs/superpowers/specs/2026-08-15-affect-dashboard-design.md).
+
 ## Documentation
 
 Read these before extending the pilot — several confident-looking results from the

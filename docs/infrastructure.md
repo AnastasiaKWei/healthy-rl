@@ -77,6 +77,92 @@ threads and counts silent mismatches separately from raised errors.
 dependency change. A silently reverted patch means silently wrong emotion means,
 which is indistinguishable from a real null result.
 
+### The pre-hook logs a traceback per forward pass
+
+`_make_pre_hook` reads hidden states from `args[1]`. When a model's decoder
+layers are called with fewer positional arguments that raises IndexError;
+vllm-lens catches it, skips the pre-hook, and logs the whole traceback at
+WARNING with `exc_info=True` — on every forward pass, of every layer, of every
+request. One 3-hour Qwen3.5-9B job logged it **12.1 million times** and wrote a
+5.6 GB server log. `$ARTIFACT_DIR/serve` reached 99 GB of a 108 GB artifact tree
+before anyone noticed, because nothing fails and the rollouts keep producing
+correct records.
+
+**It is not a measurement fault.** Captures come from post-hooks. Every record
+written while the log was filling carries `hook_data: true`, a residual file and
+zero `turn_errors` — verified across 81 records on Qwen3.5-9B `pos6`/`aff6`/
+`affpos6` and Nemotron `d6`.
+
+- Fix at source: `patches/vllm_lens_pre_hook_log_spam.py` warns once per layer.
+  Guarded by `tests/cpu/test_pre_hook_log_spam.py`; `uv sync` reverts it.
+  Measured effect: server logs went from 5–7 GB to 472–560 KB per job.
+- **Patching mid-flight only affects servers that start afterwards.** One job
+  started 65 seconds before the patch was written and kept spamming for hours,
+  because Python had already imported the module. Its traceback then rendered
+  *the new file at the old line numbers*, pointing at a function signature line
+  rather than the failing statement — which reads like a different bug and is
+  not. When a patched log looks unpatched, compare the job's `sacct` Start
+  against the file's mtime before diagnosing anything else.
+- Clean up after the fact: `scripts/prune_serve_logs.sh` strips the repeats from
+  finished jobs' logs, keeping the first few as evidence. It reclaimed 41 GB in
+  one pass, taking individual logs from 6.3 GB to 362 KB.
+- **When writing such a filter, match on signatures, not on "skip the next N
+  lines".** The tensor-parallel workers print concurrently, so their six-line
+  tracebacks interleave; a positional state machine drops the wrong lines and
+  reclaims almost nothing. The first version of the prune script recovered 954 MB
+  instead of 41 GB for exactly this reason.
+
+### A rollout job can hang with its server still generating
+
+Qwen3-14B `d6` shard s0 ran 3h18m and wrote nothing to its job log after the
+first 3 minutes, while its vLLM server reported 111 tokens/s, 8 running
+requests, 0 waiting, 16% KV cache and no preemption. Two GPUs were held for
+three hours producing nothing.
+
+The give-away is not the server — a healthy server is exactly what this looks
+like — it is that **the client log stops advancing**:
+
+```bash
+# minutes since each running job's log was last written
+now=$(date +%s); for j in $(squeue -u "$USER" -h -t R -o "%i"); do
+  f=$(ls logs/*-"$j".out 2>/dev/null | head -1); [ -n "$f" ] || continue
+  echo "$(basename "$f") $(( (now - $(stat -c %Y "$f")) / 60 ))m"
+done
+```
+
+Judge it against the attempt duration, not against the clock. A single attempt
+here takes ~30 minutes (24576-token cap at the ~14 tokens/s each request gets
+when 8 share a server), so 100 minutes of silence can be legitimate and 200
+minutes with **zero completed attempts** is not. `Added request` / `Finished
+request` are absent from the server log at default verbosity, so counting
+`POST /v1/chat/completions ... 200` is the available proxy: 3 completions in
+3.5 hours against 8 permanently-running requests does not add up under a
+24576-token cap, and that arithmetic is what exposes the hang.
+
+**Suspected cause, not confirmed:** `request_timeout_s: 600` is shorter than a
+full-length generation, so the client may abandon a request the server keeps
+serving. Cancelling the job and letting its dependent continuation resume is the
+cheap fix — records are checkpointed per rollout, so nothing is lost.
+
+**`scripts/grid_status.sh` now detects this automatically**, because the grid of
+record counts cannot: a hung cell and a slow cell look identical there. Two
+signals, since either alone gives false positives:
+
+| signal | meaning | default |
+|---|---|---|
+| `NO-ATTEMPTS` | running this long, never finished one attempt | `NOATTEMPT_MIN=75` |
+| `NO-PROGRESS` | job log gained no line since the previous run of the script | `STALL_MIN=45` |
+
+`NO-ATTEMPTS` is the one that fires earliest and caught both known cases.
+`NO-PROGRESS` is stateful — it keeps the previous line counts in
+`$ARTIFACT_DIR/.grid_liveness.tsv` — because a single snapshot cannot tell
+"quiet" from "stopped". Thresholds are multiples of the ~30-minute attempt
+duration, so raise them for slower models rather than reading a flag as proof.
+
+It found a second hung job the moment it was written: a `Qwen3.5-9B d6` shard,
+199 minutes idle on "Attempt 1/6", server down to one request. That one had been
+running unnoticed alongside the first.
+
 ## Gemma 4 under vLLM
 
 Gemma 4 needs `src/healthy_rl/vllm_plugins.py`, registered under the
@@ -189,6 +275,24 @@ Two more:
   falls back to `<bench_dir>/conflicting.parquet`, so pointing `bench_dir` at the
   `original` split's directory alone sends the run hunting for a conflicting
   parquet that is not there. Both keys appear in every `pos6`/`affpos6` config.
+- **`bench_dir` means two different directories.** In `configs/rollouts.yaml`
+  (read by `scripts/run_rollouts.py`) it is one split's *fetch* directory,
+  `$ARTIFACT_DIR/bench/v1`. For the dashboard it is the bench *root*:
+  `configs/dashboard.yaml` sets `split_parquets`, which maps each split to its
+  parquet below that root, and leaves `bench_dir` itself as a commented-out key —
+  `scripts/dashboard.py` defaults it to `$ARTIFACT_DIR/bench`. The dashboard offers
+  both splits in one session, so it cannot be pinned to one fetch directory. Each is right for its stage and neither validates the
+  other's value, so a key copied between the two configs points the run one level
+  off, at a directory with no parquet where it looks.
+- **`serve.max_model_len` must fit the checkpoint, and a copied serve block
+  will not.** Qwen3-14B caps `max_position_embeddings` at 40960; vLLM rejects a
+  larger `max_model_len` at engine construction rather than clamping it. All
+  twelve of its first cross-product jobs died 19 seconds in — before the weights
+  loaded — because the serve block came from Qwen3.5-9B, whose limit is 262144.
+  Ministral and Nemotron are also 262144, so this is the one model in the set
+  that needs its own value. Check `max_position_embeddings` against the config
+  whenever a serve block is copied to a new checkpoint. The failure is at least
+  loud and instant; the same copy carrying a wrong `max_tokens` would not be.
 - **`fetch_bench.py` compares `expect_columns` as an ordered list.** The
   `original` and `conflicting` parquets carry the same six columns in different
   order (`entry_point` and `impossible_type` are swapped), so the two fetch
@@ -213,3 +317,123 @@ rollouts at more turns is the better trade for this question.
 
 Check `turn_n_generated` in the rollout records before trusting any trajectory. A
 run where most turns sit exactly at the cap is measuring the cap.
+
+## Affect Scope dashboard
+
+The interactive readout (`src/healthy_rl/dashboard/`, spec in
+`docs/superpowers/specs/2026-08-15-affect-dashboard-design.md`). It runs as a
+`serve.slurm` stage, so everything above about the cluster holds for it too: no
+DNS on the compute node, two GPUs, apptainer for anything that executes model
+code.
+
+```bash
+sbatch --time=4:00:00 slurm/serve.slurm --model Ministral-3-14B-Reasoning-2512 \
+    --config configs/dashboard.yaml --stage scripts/dashboard.py
+```
+
+`scripts/dashboard.py` loads the vectors, runs the startup checks, binds uvicorn
+on a free port of `0.0.0.0`, and writes `host:port` to
+`$ARTIFACT_DIR/serve/<model>/<jobid>/dashboard-endpoint`, beside vLLM's own
+`endpoint` file. It deletes that file on the way out. A job killed outright
+(SIGKILL, node failure) leaves one behind, and an ssh tunnel to a dead node's
+port fails in a way that looks like a broken dashboard — so
+`scripts/dashboard_tunnel.sh` checks `squeue` for the job the endpoint belongs to
+and warns when it is not there.
+
+The helper reads `.env`, but an `ARTIFACT_DIR` or `HEALTHY_RL_LOGIN_HOST` already
+in the environment wins over the file (`set -a; . .env` would otherwise overwrite
+both, so each is saved and put back). `HEALTHY_RL_ENV_FILE` chooses which `.env`
+is sourced — the tests pin it at `/dev/null`. `HEALTHY_RL_LOGIN_HOST` is also
+what the stage itself prints in the tunnel line it logs; without it the line says
+`<login-host>`.
+
+There is no auth. The port is reachable from anything that can reach the compute
+node; the tunnel is the only intended route.
+
+### No new dependencies
+
+`fastapi` and `uvicorn` come from vLLM's dependency set, and `httpx` was already a
+direct dependency of this project (`pyproject.toml`), so the dashboard adds
+nothing to `pyproject.toml`. Convenient, and fragile in exactly one direction: `uv sync` still reverts
+`patches/vllm_lens_zstd_threadsafe.py`, the same as for rollouts.
+
+### The zstd patch is recorded, not required
+
+The stage does **not** refuse to start when the file patch is missing. Instead
+`startup_checks` reads whether `vllm_lens._helpers._serialize`'s compressor is the
+patch's `_PerCallZstd`, calls `make_zstd_threadsafe()` to install the in-memory
+shim either way, prints `WARNING: vllm-lens zstd file patch is NOT applied ...` to
+stderr if it was not, and records `zstd_file_patch_present` and
+`zstd_inmemory_shim` in `session.json` (both are shown in the Settings tab). The
+shim makes this process safe, and this process is the only one issuing capture
+requests, so refusing would have cost a session and bought no correctness. The
+flag is what keeps it honest: a session recorded without the file patch says so,
+permanently.
+
+### Sandbox binds
+
+Model-generated code runs only through `Sandbox.run`, which is
+`apptainer exec --contain --cleanenv --writable-tmpfs --net --network none`
+around `healthy_rl.dashboard.sandbox_cli`:
+
+| bind | mode | why |
+|---|---|---|
+| `PROJECT_DIR/src` → `/project/src` | ro | the helper's own code (`PYTHONPATH=/project/src`) |
+| `$ARTIFACT_DIR/bench` → `/bench` | ro | the split parquets |
+| `$ARTIFACT_DIR/dashboard/.scratch/<jobid>` → `/scratch` | rw | the code file, cwd, `TMPDIR` |
+
+Nothing else under `$ARTIFACT_DIR` is visible, so the sandbox cannot reach the
+records it is generating.
+
+**Only `src` is bound, not the project root.** The root holds `.env`, which
+carries `HF_TOKEN`; binding it would have put a live credential one `open()`
+away from model-generated code. `/project` inside the container contains
+exactly one entry, `src`.
+
+**`--net --network none` gives the container an empty network namespace**, so
+model-generated code cannot reach anything. It works unprivileged on this
+cluster: `socket.create_connection(('1.1.1.1', 53), timeout=3)` inside raises
+`OSError: [Errno 101] Network is unreachable` (verified 2026-08-15).
+
+**The same `--contain` flag set in `scripts/rescore_transcripts.py:157` and
+`scripts/contradiction_contrast.py:84` executes model-generated code WITHOUT
+network isolation** — those two predate the dashboard's sandbox and were not
+changed with it. A pre-existing, project-wide gap, left as a follow-up.
+
+Two things that look like omissions and are not:
+
+- **`--env HOME=...` is not passed.** The image sets `HOME=/work`, and apptainer
+  answers every override with `Overriding HOME environment variable with
+  APPTAINERENV_HOME is not permitted` — one WARNING line on stderr of every single
+  call. Under `--contain --writable-tmpfs` the in-image `/work` is a throwaway
+  tmpfs, so HOME is already contained.
+- **No `--pid` namespace.** The primary guard on runaway code is the in-container
+  wall-clock timeout (`sandbox_timeout_s`, default 30).
+
+**Each `Sandbox.run` costs ~5.6 s before any test executes**, all of it apptainer
+start-up. That is why the host-side timeout is the container limit plus a grace
+period — `sandbox_timeout_s` (default 30 s) + `STARTUP_GRACE_S` (30 s) = 60 s —
+rather than the container limit alone, and why a six-attempt task loop feels
+slower than the generation times add up to.
+
+### `SessionStore.append` needs a lock, but not the obvious one
+
+A task run and a chat send are in flight on different threads, both appending. The
+tempting test — hammer `append` from N threads, assert no line is torn — passes
+**without any lock**, because one record is a single buffered write to a handle
+opened `O_APPEND` and does not tear. The real race is the lazy `JsonlWriter`
+construction: unsynchronised, N threads each see `self._writer is None` and open
+their own handle; the losers are dropped without being closed (a leaked fd apiece)
+and the rows they wrote go uncounted by the survivor. `append` and `close` take a
+`threading.Lock`, which also covers the `np.savez`, so a row is never visible
+before the arrays it points at.
+
+### `.msg{flex:none}` — the transcript clipping trap
+
+Message bubbles in a scrolling flex column need `flex:none`. Without it the
+default `flex-shrink:1` lets a long turn be squeezed to fit the column: the
+transcript renders with its text cut off and no scrollbar to reveal it. This is
+the bug the published mockup shipped with, and it is why the spec says the mockup
+is a reference rather than a drop-in. Every fixed-size flex child in
+`src/healthy_rl/dashboard/static/index.html` carries the same declaration — status
+dots, rail markers, legend swatches.

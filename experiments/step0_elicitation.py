@@ -232,6 +232,15 @@ def main() -> None:
         "Used to regenerate just the samples the broken find_code corrupted, "
         "instead of a whole split.",
     )
+    p.add_argument(
+        "--epochs",
+        type=int,
+        default=1,
+        help="repeats of every task. Sampling is not pinned (temperature and seed are "
+        "provider defaults), so one epoch gives no variance estimate — re-running two "
+        "of ten samples once moved a per-turn score by 10%% with nothing else changed. "
+        "Use 3 when comparing arms.",
+    )
     p.add_argument("--time-limit", type=int, default=900, help="seconds per sample")
     p.add_argument("--token-limit", type=int, default=500_000, help="tokens per sample")
     p.add_argument("--max-sandboxes", type=int, default=4, help="lower when two runs share one Docker VM")
@@ -252,6 +261,8 @@ def main() -> None:
         # names their logs are already under — analyse/viewer key arms by directory.
         if args.mindset:
             slug += "-mindset-" + "+".join(args.mindset)
+        if args.epochs != 1:
+            slug += f"-e{args.epochs}"
         log_dir = str(REPO / "logs" / "step0" / slug)
     else:
         log_dir = args.log_dir
@@ -299,6 +310,7 @@ def main() -> None:
         max_connections=4,
         max_sandboxes=args.max_sandboxes,
         sample_id=args.task_ids,
+        epochs=args.epochs,
         retry_on_error=1,
         time_limit=args.time_limit,
         token_limit=args.token_limit,
