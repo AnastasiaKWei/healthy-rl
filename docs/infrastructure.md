@@ -144,6 +144,25 @@ full-length generation, so the client may abandon a request the server keeps
 serving. Cancelling the job and letting its dependent continuation resume is the
 cheap fix — records are checkpointed per rollout, so nothing is lost.
 
+**`scripts/grid_status.sh` now detects this automatically**, because the grid of
+record counts cannot: a hung cell and a slow cell look identical there. Two
+signals, since either alone gives false positives:
+
+| signal | meaning | default |
+|---|---|---|
+| `NO-ATTEMPTS` | running this long, never finished one attempt | `NOATTEMPT_MIN=75` |
+| `NO-PROGRESS` | job log gained no line since the previous run of the script | `STALL_MIN=45` |
+
+`NO-ATTEMPTS` is the one that fires earliest and caught both known cases.
+`NO-PROGRESS` is stateful — it keeps the previous line counts in
+`$ARTIFACT_DIR/.grid_liveness.tsv` — because a single snapshot cannot tell
+"quiet" from "stopped". Thresholds are multiples of the ~30-minute attempt
+duration, so raise them for slower models rather than reading a flag as proof.
+
+It found a second hung job the moment it was written: a `Qwen3.5-9B d6` shard,
+199 minutes idle on "Attempt 1/6", server down to one request. That one had been
+running unnoticed alongside the first.
+
 ## Gemma 4 under vLLM
 
 Gemma 4 needs `src/healthy_rl/vllm_plugins.py`, registered under the

@@ -57,6 +57,64 @@ sacct -u "$USER" --starttime=now-24hours --format=JobID%12,JobName%40,State%16,E
   && echo "  (none)"
 
 echo
+echo "--- liveness (a hung client looks IDENTICAL to a slow one in the grid above) ---"
+# Qwen3-14B d6 s0 held two GPUs for 3h18m writing nothing while its vLLM server
+# reported 111 tok/s, 8 running requests and no preemption. Server health is not
+# evidence the job is alive; the CLIENT log is. Two independent signals, because
+# either alone gives false positives:
+#
+#   NO-PROGRESS  the job log has not gained a line since the previous run of this
+#                script, and that was more than STALL_MIN minutes ago. Stateful
+#                on purpose -- one snapshot cannot tell "quiet" from "stopped".
+#   NO-ATTEMPTS  the job has run longer than NOATTEMPT_MIN and has never finished
+#                a single attempt. This is what the hang actually looked like, and
+#                it is the signal that fires earliest.
+#
+# A single attempt can legitimately take ~30 minutes (a 24576-token cap at the
+# ~14 tok/s each request gets when 8 share one server), so thresholds are in
+# multiples of that, not in "feels like a while".
+STALL_MIN=${STALL_MIN:-45}
+NOATTEMPT_MIN=${NOATTEMPT_MIN:-75}
+STATE="${ARTIFACT_DIR:-/tmp}/.grid_liveness.tsv"
+now=$(date +%s)
+new_state=$(mktemp)
+flagged=0
+for j in $(squeue -u "$USER" -h -t R -o "%i" 2>/dev/null); do
+  f=$(ls logs/*-"$j".out 2>/dev/null | head -1)
+  [ -n "$f" ] || continue
+  # grep -c prints 0 AND exits 1 when nothing matches, so `|| echo 0` would make
+  # the count the two-line string "0\n0" and every numeric test would error.
+  lines=$(awk 'END {print NR}' "$f" 2>/dev/null); lines=${lines:-0}
+  done_att=$(grep -acE 'Tests (failed|passed) on attempt|Test execution failed' "$f" 2>/dev/null); done_att=${done_att:-0}
+  elapsed_min=$(( ( now - $(date -d "$(sacct -j "$j" --format=Start -n 2>/dev/null | head -1 | tr -d ' ')" +%s 2>/dev/null || echo "$now") ) / 60 ))
+  printf '%s	%s	%s
+' "$j" "$lines" "$now" >> "$new_state"
+
+  why=""
+  prev=$(awk -v j="$j" '$1==j {print $2"	"$3}' "$STATE" 2>/dev/null | tail -1)
+  if [ -n "$prev" ]; then
+    plines=$(printf '%s' "$prev" | cut -f1); pts=$(printf '%s' "$prev" | cut -f2)
+    gap=$(( (now - pts) / 60 ))
+    [ "$lines" = "$plines" ] && [ "$gap" -ge "$STALL_MIN" ] && why="NO-PROGRESS (${gap}m, no new log lines)"
+  fi
+  [ "$done_att" -eq 0 ] && [ "$elapsed_min" -ge "$NOATTEMPT_MIN" ] \
+    && why="${why:+$why; }NO-ATTEMPTS (${elapsed_min}m elapsed, 0 attempts finished)"
+
+  if [ -n "$why" ]; then
+    flagged=$((flagged + 1))
+    printf '  !! %-10s %-34s %s\n' "$j" "$(basename "$f" .out)" "$why"
+  fi
+done
+mv "$new_state" "$STATE" 2>/dev/null
+if [ "$flagged" -eq 0 ]; then
+  echo "  all running jobs advancing"
+else
+  echo "  Check the CLIENT, not the server. A flagged job whose server still reports"
+  echo "  healthy throughput is generating into the void: scancel it and let its"
+  echo "  continuation resume (records checkpoint per rollout, so nothing is lost)."
+fi
+
+echo
 echo "--- newest log line per running job ---"
 for j in $(squeue -u "$USER" -h -t R -o "%i" 2>/dev/null); do
   f=$(ls -t logs/*-"$j".out 2>/dev/null | head -1)
