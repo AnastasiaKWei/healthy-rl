@@ -2651,6 +2651,10 @@ def run_rollouts(
         "samples_per_problem": {str(c.tier): c.n_samples for c in conditions},
         "readout_problems": readout_problems,
         "n_bench_problems": len(all_task_ids),
+        # Recorded so analysis can tell a truncated turn from a finished one
+        # without going back to the shard config. A turn AT this value ended
+        # where the cap fell, not where the model stopped.
+        "max_tokens": int(cfg.get("max_tokens", 2048)),
         BENCH_SPLIT_KEY: split,
         "bench_parquet": str(bench_parquet),
         "emotions": vectors.emotions,

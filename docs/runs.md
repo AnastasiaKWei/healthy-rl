@@ -476,10 +476,15 @@ against — `d6` vs `aff6` is the affect contrast, and it is now also a
 Only Qwen3.5-9B is affected: it is the model with the longest turns. Ministral's
 `d6` has the same 16384 cap and zero cap hits.
 
-**Unresolved — needs a decision before Qwen3.5-9B's 2x2 is analysed.** Either
-raise `d6` to 24576 and re-run the truncated rollouts (matched arms, some compute),
-or keep 16384 and exclude the truncated rollouts from cell-to-cell comparison.
-Do not quote Qwen3.5-9B `d6` against `aff6` until one of those has happened.
+**RULING 2026-08-16: keep the 16384 cap and EXCLUDE the truncated rollouts.**
+Qwen3.5-9B `d6` is analysed at n=22-minus-truncated rather than re-run; every
+rollout that is compared is untruncated. Cost if wrong: a smaller n in one cell,
+against a re-run costing hours of GPU for two rollouts.
+
+`scripts/live_trajectory.py` enforces this automatically — it reads the cell's
+`max_tokens` from its shard config, drops any rollout with a turn at the cap, and
+prints how many it dropped. `--include-truncated` overrides. Summaries written
+from 2026-08-16 also record `max_tokens`, so the cap travels with the run.
 
 The general lesson is worth more than this instance: **a config value shown to be
 non-binding under a bug is not shown to be non-binding.** Re-check headroom
