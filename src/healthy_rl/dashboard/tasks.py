@@ -49,7 +49,8 @@ def record_for(gen: Generation, *, conversation_id: str, source: str, turn_index
         "text": gen.text, "reasoning": gen.reasoning, "answer": gen.answer,
         "tokens": gen.tokens, "token_kind": gen.token_kind,
         "n_generated": gen.n_generated, "n_think": gen.n_think, "at_cap": gen.at_cap,
-        "finish_reason": gen.finish_reason, "misaligned": gen.misaligned, "error": gen.error,
+        "finish_reason": gen.finish_reason, "misaligned": gen.misaligned,
+        "reasoning_from_parser": gen.reasoning_from_parser, "error": gen.error,
         "warnings": list(gen.warnings),
         "emotions": list(vectors.emotions), "capture_layers": list(vectors.capture_layers),
         "probe_layer": vectors.probe_layer, "condition": dict(condition),
@@ -150,7 +151,7 @@ class TaskRun:
                                  condition=self._condition(), bench_split=self.cfg.split, task_id=self.cfg.task_id,
                                  attempt=attempt, user_intervention=self._intervention, passed=None, feedback=None)
                 self._intervention = None
-                self.messages.append({"role": "assistant", "content": gen.text})
+                self.messages.append({"role": "assistant", "content": gen.context_text})
                 if gen.error and gen.n_generated == 0:
                     self.store.append(rec, gen.arrays(self.vectors.probe_layer))
                     self.events.put({"event": "turn", "data": {"record": public_record(rec)}})
@@ -162,7 +163,16 @@ class TaskRun:
                 code = robust_find_code(gen.answer or gen.text)
                 result = self.sandbox.run(self.cfg.split, self.cfg.task_id, code, affect=self.cfg.affect_prompt)
                 rec["passed"] = bool(result.passed)
-                rec["feedback"] = result.feedback
+                # Build the harness-error fallback BEFORE the record is appended: the
+                # log is append-only, so a record written with an empty feedback would
+                # say forever that nothing was fed back, while the next user message
+                # carries this text. The record must name what the model was told, and
+                # the message below reuses this exact string.
+                feedback = result.feedback
+                if not result.passed and not feedback:
+                    feedback = feedback_message(f"[harness error: {result.error or 'unknown'}]",
+                                                self.problem.get("instruction_prompt", ""))
+                rec["feedback"] = feedback
                 rec["timings"]["sandbox_s"] = result.seconds
                 self.store.append(rec, gen.arrays(self.vectors.probe_layer))
                 self.events.put({"event": "turn", "data": {"record": public_record(rec)}})
@@ -186,8 +196,6 @@ class TaskRun:
                 if self._stop.is_set():
                     reason = "stopped"
                     return
-                feedback = result.feedback or feedback_message(
-                    f"[harness error: {result.error or 'unknown'}]", self.problem.get("instruction_prompt", ""))
                 content = (self._intervention + "\n\n" + feedback) if self._intervention else feedback
                 self.messages.append({"role": "user", "content": content})
         except Exception as exc:  # a raising engine or sandbox ends the run, loudly

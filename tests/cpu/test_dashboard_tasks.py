@@ -4,8 +4,11 @@ import queue
 import threading
 import time
 
+import numpy as np
+
 from healthy_rl.dashboard.chat import ChatSession
 from healthy_rl.dashboard.fake import FakeEngine, FakeSandbox
+from healthy_rl.dashboard.generation import assemble_generation
 from healthy_rl.dashboard.sandbox import SandboxResult
 from healthy_rl.dashboard.sandbox_cli import FEEDBACK_MARKER
 from healthy_rl.dashboard.store import SessionStore
@@ -222,3 +225,76 @@ def test_stop_during_generation_skips_the_pause(tmp_path):
     names = [e["event"] for e in _drain(run.events)]
     assert "awaiting_user" not in names and names[-1] == "done"
     assert run.state == "stopped" and len(eng.calls) == 1
+
+
+class ReasoningEngine(FakeEngine):
+    """A server with a reasoning parser: the two halves come back as two fields."""
+
+    def generate(self, messages, *, max_tokens, temperature):
+        gen = super().generate(messages, max_tokens=max_tokens, temperature=temperature)
+        self.calls[-1] = list(messages)
+        saved = {}
+        for l in self.vectors.capture_layers:
+            saved[f"proj_L{l}"] = np.zeros((3, self.vectors.n_emotions), np.float32)
+            saved[f"norm_L{l}"] = np.full(3, 10.0, np.float32)
+            saved[f"kind_L{l}"] = np.array([1.0, 0.0, 0.0], np.float32)
+        return assemble_generation(
+            text="```python\ndef f(x):\n    return 2\n```", reasoning_content="the tests disagree",
+            tokens=["the tests disagree", "```python\ndef f(x):\n    return 2\n```"],
+            finish_reason="stop", hook_saved=saved, capture_layers=self.vectors.capture_layers,
+            probe_layer=self.vectors.probe_layer, n_emotions=self.vectors.n_emotions,
+            max_tokens=max_tokens, seconds=0.0)
+
+
+def test_task_loop_feeds_back_the_answer_not_the_chain_of_thought(tmp_path):
+    """A reasoning-parser server must not have its own reasoning replayed at it.
+
+    ``text`` joins the two halves for the transcript; feeding that back would put
+    the chain of thought into the model's mouth as something it said out loud.
+    """
+    eng = ReasoningEngine()
+    store = SessionStore.create(tmp_path / "s", {"model": "fake"})
+    sb = FakeSandbox()
+    cfg = TaskConfig(split="original", task_id="lcbhard_0", attempts=2, max_tokens=8, auto_continue=True)
+    run = TaskRun(cfg, sb.problems("original")["lcbhard_0"], eng, sb, store, eng.vectors)
+    run.run()
+    assistant = [m for m in eng.calls[1] if m["role"] == "assistant"]
+    assert len(assistant) == 1
+    assert assistant[0]["content"] == "```python\ndef f(x):\n    return 2\n```"
+    assert "the tests disagree" not in assistant[0]["content"]
+    rec = store.records()[0]
+    assert rec["reasoning_from_parser"] is True
+    assert rec["text"] == "the tests disagree\n\n```python\ndef f(x):\n    return 2\n```"
+
+
+def test_chat_feeds_back_the_answer_not_the_chain_of_thought(tmp_path):
+    eng = ReasoningEngine()
+    store = SessionStore.create(tmp_path / "s", {"model": "fake"})
+    chat = ChatSession(eng, store, eng.vectors, max_tokens=8)
+    list(chat.send("hi"))
+    list(chat.send("again"))
+    assistant = [m for m in eng.calls[1] if m["role"] == "assistant"]
+    assert assistant[0]["content"] == "```python\ndef f(x):\n    return 2\n```"
+    assert "the tests disagree" not in assistant[0]["content"]
+
+
+def test_harness_error_record_carries_the_feedback_the_model_was_actually_sent(tmp_path):
+    """A harness error still sends a synthesised message; the record must say so.
+
+    The log is append-only, so a record written with ``feedback: None`` claims
+    forever that nothing was fed back, while the next user message carries text.
+    """
+    run, eng, sb, store = _setup(tmp_path, attempts=3)
+    def broken(split, task_id, code, affect=False):
+        return SandboxResult(False, "", "", "", timed_out=True, error="sandbox exceeded 60s")
+    sb.run = broken
+    t = threading.Thread(target=run.run, daemon=True); t.start()
+    _spin(lambda: run.state == "awaiting_user", "the run to pause")
+    rec = store.records()[0]
+    assert rec["feedback"] and "[harness error" in rec["feedback"]
+    assert "sandbox exceeded 60s" in rec["feedback"]
+    run.resume(None)
+    _spin(lambda: len(store.records()) >= 2, "the next attempt to be recorded")
+    run.stop(); t.join(5)
+    # What the record claims was fed back is what the next prompt actually carried.
+    assert store.records()[1]["messages_in"][-1]["content"] == rec["feedback"]

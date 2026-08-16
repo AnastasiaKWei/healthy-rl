@@ -53,7 +53,7 @@ class ChatSession:
                          condition={"max_tokens": self.max_tokens, "temperature": self.temperature},
                          title=self.title if self.turn == 0 else None)
         self.store.append(rec, gen.arrays(self.vectors.probe_layer))
-        self.messages.append({"role": "assistant", "content": gen.text})
+        self.messages.append({"role": "assistant", "content": gen.context_text})
         self.turn += 1
         if gen.error and gen.n_generated == 0:
             yield {"event": "error", "data": {"message": gen.error}}

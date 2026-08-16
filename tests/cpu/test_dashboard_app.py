@@ -267,3 +267,57 @@ def test_pump_finishes_the_turn_when_the_stream_is_abandoned():
     while time.monotonic() < deadline and not pumped:
         time.sleep(0.02)
     assert pumped == ["record"]
+
+
+def test_replay_sessions_answer_409_for_problem_lists_not_500(tmp_path):
+    """A replay session has no sandbox, and the problem list lives inside one.
+
+    Without the guard the ``None.problems`` attribute error surfaces as a 500,
+    which reads as a broken dashboard rather than a read-only one.
+    """
+    state = _state(tmp_path, read_only=True)
+    state.sandbox = None
+    client = TestClient(create_app(state))
+    r = client.get("/api/problems", params={"split": "original"})
+    assert r.status_code == 409 and "read-only" in r.json()["detail"]
+    r2 = client.post("/api/task/start", json={"split": "original", "task_id": "lcbhard_0"})
+    assert r2.status_code == 409 and "read-only" in r2.json()["detail"]
+
+
+def test_a_record_written_under_a_different_emotion_order_is_refused_not_relabelled(client, state):
+    """Reordered directions would draw joy in despair's column, silently.
+
+    docs/runs.md says the dashboard checks ``emotions`` the way the rollout
+    analysis does; this is that check.
+    """
+    with client.stream("POST", "/api/chat/new/send", json={"text": "hello"}) as r:
+        rec = _sse(r)[-1][1]["record"]
+    arrays = state.store.arrays(rec["record_id"])
+    bad = {k: v for k, v in rec.items() if k != "record_id"}
+    bad["emotions"] = list(reversed(rec["emotions"]))
+    bad["turn_index"] = 1
+    state.store.append(bad, arrays)
+    turns = client.get(f"/api/conversations/{rec['conversation_id']}").json()["turns"]
+    assert turns[0]["emotion_order_mismatch"] is False
+    assert turns[1]["emotion_order_mismatch"] is True
+    assert all(v is None for v in turns[1]["readouts"]["desperate"].values())
+    # And it is skipped-and-counted in the aggregate, never quietly relabelled.
+    a = client.get("/api/aggregate", params={"source": "chat", "position": "start"}).json()
+    assert a["by_turn"]["skipped"] == [0, 1]
+
+
+def test_rehydrated_chat_replays_the_answer_when_the_server_parsed_the_reasoning(client, state):
+    """The stored ``text`` is reasoning + answer for display; only the answer goes back."""
+    with client.stream("POST", "/api/chat/new/send", json={"text": "hello"}) as r:
+        rec = _sse(r)[-1][1]["record"]
+    cid = rec["conversation_id"]
+    arrays = state.store.arrays(rec["record_id"])
+    parsed = {k: v for k, v in rec.items() if k != "record_id"}
+    parsed.update(turn_index=1, reasoning_from_parser=True, answer="the answer alone",
+                  text="secret reasoning\n\nthe answer alone")
+    state.store.append(parsed, arrays)
+    state.chats.clear()
+    with client.stream("POST", f"/api/chat/{cid}/send", json={"text": "more"}) as r:
+        nxt = _sse(r)[-1][1]["record"]
+    assistant = [m for m in nxt["messages_in"] if m["role"] == "assistant"]
+    assert assistant == [{"role": "assistant", "content": "the answer alone"}]

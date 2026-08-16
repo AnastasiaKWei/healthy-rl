@@ -67,6 +67,11 @@ def _to_numpy(value: Any) -> np.ndarray:
     return np.asarray(value)
 
 
+def context_text_of(rec: dict) -> str:
+    """``Generation.context_text`` for a stored record, for replayed history."""
+    return rec.get("answer", "") if rec.get("reasoning_from_parser") else rec.get("text", "")
+
+
 def merge_hook_results(hook_results: dict | None) -> dict[str, np.ndarray]:
     """Flatten ``{hook_index: {key: tensor}}`` into ``{key: ndarray}``."""
     merged: dict[str, np.ndarray] = {}
@@ -94,9 +99,22 @@ class Generation:
     at_cap: bool
     finish_reason: str | None
     misaligned: bool = False
+    reasoning_from_parser: bool = False
     error: str | None = None
     seconds: float = 0.0
     warnings: list[str] = field(default_factory=list)
+
+    @property
+    def context_text(self) -> str:
+        """The assistant turn to feed back into the message list.
+
+        ``text`` is for display. On a server with a reasoning parser it is the
+        chain of thought and the answer joined for the transcript, and feeding
+        that back would put the reasoning into the model's own context as if it
+        had said it aloud. Off that path ``text`` *is* the completion verbatim
+        (tags and all), which is what the scaffold sent last time.
+        """
+        return self.answer if self.reasoning_from_parser else self.text
 
     def arrays(self, probe_layer: int) -> dict[str, np.ndarray]:
         """What ``SessionStore.append`` stores for this generation."""
@@ -126,6 +144,7 @@ def assemble_generation(
     tokens = list(tokens)
     problems: list[str] = []
     warns: list[str] = []
+    from_parser = bool(reasoning_content)
     L = len(capture_layers)
 
     # --- reasoning / answer split -------------------------------------------
@@ -139,14 +158,20 @@ def assemble_generation(
         reasoning, answer = reasoning_content.strip(), text.strip()
         joined = "".join(tokens)
         idx = joined.find(text.strip()) if text.strip() else -1
-        if idx > 0:
+        if idx >= 0:
+            # idx == 0 is a found answer that starts at the first token -- zero
+            # think tokens -- not a failed search. Only idx < 0 is "not found",
+            # and only that gets the fallback and the warning.
             think_end_char = idx
         else:
             think_end_char = len(reasoning_content)
             warns.append(
                 "reasoning_content offset is a guess: answer text not found in token stream"
             )
-        full_text = reasoning_content + text
+        # Display only, and separated: the two halves came back as two fields, so
+        # glueing them would run the last reasoning line into the first answer
+        # line. ``Generation.context_text`` is what goes back to the model.
+        full_text = reasoning_content.rstrip() + "\n\n" + text
     else:
         reasoning, answer, think_end_char = split_reasoning(text)
         full_text = text
@@ -214,6 +239,6 @@ def assemble_generation(
         res_end=None if res_end is None else np.asarray(res_end, np.float32),
         n_generated=T, n_think=sum(k == "think" for k in kinds),
         at_cap=(T >= max_tokens) or (finish_reason == "length"),
-        finish_reason=finish_reason, misaligned=misaligned,
+        finish_reason=finish_reason, misaligned=misaligned, reasoning_from_parser=from_parser,
         error="; ".join(problems) if problems else None, seconds=seconds, warnings=warns,
     )

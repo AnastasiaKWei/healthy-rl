@@ -107,18 +107,54 @@ def test_merge_hook_results_flattens_and_converts():
 
 
 def test_reasoning_content_offset_fallback_is_warned_about():
-    # Tokens cover only the answer, so the answer text is found at offset 0 and the
-    # think_end_char fallback (len(reasoning_content)) is a guess over a string the
-    # tokens do not cover: every token would silently be labelled "think".
-    g = assemble_generation(text="ans", reasoning_content="think", tokens=list("ans"),
+    # The answer text appears nowhere in the token stream, so the think_end_char
+    # fallback (len(reasoning_content)) is a guess over a string the tokens do not
+    # cover: every token would silently be labelled "think".
+    g = assemble_generation(text="ans", reasoning_content="think", tokens=list("xyz"),
                             finish_reason="stop", hook_saved=_saved(n_decode=3), capture_layers=LAYERS,
                             probe_layer=PROBE, n_emotions=E, max_tokens=8, seconds=0.1)
     assert g.warnings and any("guess" in w for w in g.warnings)
+    assert g.token_kind == ["think", "think", "think"]
     # The normal case, where the answer really does start after the reasoning tokens.
     ok = assemble_generation(text="ans", reasoning_content="think", tokens=["th", "ink", "ans"],
                              finish_reason="stop", hook_saved=_saved(n_decode=3), capture_layers=LAYERS,
                              probe_layer=PROBE, n_emotions=E, max_tokens=8, seconds=0.1)
     assert ok.warnings == []
+
+
+def test_answer_at_offset_zero_is_zero_think_tokens_not_a_failed_search():
+    """``idx == 0`` means found-at-the-start, not not-found.
+
+    A server whose reasoning parser also strips the reasoning out of the token
+    stream leaves tokens that are all answer. Reading that 0 as a failed search
+    flipped it into "every token is think", plus a warning about a stream that
+    was in fact perfectly readable.
+    """
+    g = assemble_generation(text="ans", reasoning_content="think", tokens=list("ans"),
+                            finish_reason="stop", hook_saved=_saved(n_decode=3), capture_layers=LAYERS,
+                            probe_layer=PROBE, n_emotions=E, max_tokens=8, seconds=0.1)
+    assert g.token_kind == ["answer", "answer", "answer"] and g.n_think == 0
+    assert g.warnings == []
+
+
+def test_reasoning_parser_halves_are_separated_for_display_and_answer_only_in_context():
+    """Reasoning and answer arrive as two fields; gluing them corrupts both uses.
+
+    Display: without a separator the last reasoning line runs into the first
+    answer line. Context: ``text`` fed back would put the chain of thought into
+    the model's own mouth, so ``context_text`` is the answer alone.
+    """
+    g = assemble_generation(text="ans", reasoning_content="think  \n", tokens=["th", "ink", "ans"],
+                            finish_reason="stop", hook_saved=_saved(n_decode=3), capture_layers=LAYERS,
+                            probe_layer=PROBE, n_emotions=E, max_tokens=8, seconds=0.1)
+    assert g.reasoning_from_parser is True
+    assert g.text == "think\n\nans"
+    assert g.context_text == "ans" == g.answer
+    # Off that path the completion is verbatim and goes back verbatim, tags and all.
+    plain = assemble_generation(text="<think>x</think>y", reasoning_content=None, tokens=["<think>", "x", "</think>", "y"],
+                                finish_reason="stop", hook_saved=_saved(n_decode=4), capture_layers=LAYERS,
+                                probe_layer=PROBE, n_emotions=E, max_tokens=8, seconds=0.1)
+    assert plain.reasoning_from_parser is False and plain.context_text == plain.text == "<think>x</think>y"
 
 
 def test_assemble_generation_norm_length_mismatch_is_an_error_not_a_crash():

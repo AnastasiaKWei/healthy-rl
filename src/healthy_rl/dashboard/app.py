@@ -28,6 +28,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 
 from healthy_rl.dashboard import stats
 from healthy_rl.dashboard.chat import ChatSession
+from healthy_rl.dashboard.generation import context_text_of
 from healthy_rl.dashboard.store import SessionStore
 from healthy_rl.dashboard.tasks import TaskConfig, TaskRun
 from healthy_rl.rollouts import SCRATCHPAD_SYSTEM_PROMPT, Vectors, sort_task_ids
@@ -172,10 +173,23 @@ def _queued_first(data: dict, events: Iterator[dict]) -> Iterator[dict]:
     yield from events
 
 
+def _emotion_order_mismatch(rec: dict, vectors: Vectors) -> bool:
+    """Does this record's direction order disagree with the loaded vectors?
+
+    A record's ``proj`` columns are in the order of the ``emotions`` list that
+    was live when it was written. Plotting them against a different order
+    relabels every column silently -- joy drawn as despair -- so the dashboard
+    checks the same way the rollout analysis does (docs/runs.md) and refuses.
+    """
+    return list(rec.get("emotions") or []) != list(vectors.emotions)
+
+
 def _readouts_for(rec: dict, arrays: dict, vectors: Vectors) -> dict:
     """All four readouts x all emotions for one turn; None where unavailable."""
     li = vectors.layer_index(vectors.probe_layer)
     out: dict[str, dict[str, float | None]] = {e: {} for e in vectors.emotions}
+    if _emotion_order_mismatch(rec, vectors):
+        return {e: {r: None for r in stats.READOUTS} for e in vectors.emotions}
     for readout in stats.READOUTS:
         v = _readout_or_none(stats.turn_readout, proj=arrays["proj"], norm=arrays["norm"],
                              proj_prefill=arrays["proj_prefill"], norm_prefill=arrays["norm_prefill"],
@@ -225,6 +239,11 @@ def create_app(state: AppState) -> FastAPI:
         return split
 
     def _problems(split: str, affect: bool) -> dict:
+        # A replay session has no sandbox, and the problem list only exists inside
+        # one. Without this the attribute error on ``None`` surfaces as a 500,
+        # which reads as a broken dashboard rather than a read-only one.
+        if st.sandbox is None:
+            raise HTTPException(409, "replay session is read-only")
         try:
             return st.problems(_split(split), affect)
         except ValueError as exc:  # a sandbox that knows its own splits better than we do
@@ -249,7 +268,8 @@ def create_app(state: AppState) -> FastAPI:
         chat = ChatSession(st.engine, st.store, V, conversation_id=cid, title=recs[0].get("title"),
                            max_tokens=int(cond.get("max_tokens", st.cfg.get("max_tokens", 2048))),
                            temperature=float(cond.get("temperature", st.cfg.get("temperature", 0.0))))
-        chat.messages = [dict(m) for m in last.get("messages_in", [])] + [{"role": "assistant", "content": last.get("text", "")}]
+        chat.messages = ([dict(m) for m in last.get("messages_in", [])]
+                         + [{"role": "assistant", "content": context_text_of(last)}])
         chat.turn = len(recs)
         chat._non_empty = sum(1 for r in recs if r.get("n_generated", 0) > 0)
         st.chats[cid] = chat
@@ -292,6 +312,7 @@ def create_app(state: AppState) -> FastAPI:
         for r in recs:
             t = {k: v for k, v in r.items() if k != "arrays"}
             t["readouts"] = _readouts_for(r, st.store.arrays(r["record_id"]), V)
+            t["emotion_order_mismatch"] = _emotion_order_mismatch(r, V)
             turns.append(t)
         conv = next(c for c in st.store.conversations() if c["conversation_id"] == cid)
         conv["state"] = st.tasks[cid].state if cid in st.tasks else "done"
@@ -439,6 +460,9 @@ def create_app(state: AppState) -> FastAPI:
                 if drop_cap and r.get("at_cap"):
                     excluded += 1
                     seq.append(None)
+                    continue
+                if _emotion_order_mismatch(r, V):
+                    seq.append(None)  # unreadable columns; skipped and counted, never relabelled
                     continue
                 a = st.store.arrays(r["record_id"])
                 if stat == "token":
