@@ -302,7 +302,11 @@ flat at 1.1%; `lcbhard_4 s0` completed genuinely (7 turns of 1.6k–8.5k tokens 
 the timeout was its whole story), while `lcbhard_10 s0` came back at ~62 min as
 a **zero-token record** (`n_turns` 2, `turn_n_generated [0, 0]`, `hook_data`
 false, no residuals) — a request that did not return inside 3600 s, which at
-16–22 tok/s would be more tokens than the 24,576 cap allows. The diagnostic
+16–22 tok/s would be more tokens than the 24,576 cap allows. `hook_data: false`
+is the discriminator: the request never returned hook results at all, as
+opposed to returning empty ones, so this is "server never finished", not
+"server finished with nothing". The flat 1.1% KV is the other observation a
+slow-but-progressing generation does not explain. The diagnostic
 could not reproduce a non-returning request; if this recurs at 3600 s treat it
 as a second fault, otherwise as noise. Whatever the cause, **a timed-out sample
 leaves a record that blocks resume**: to recollect `Qwen3.5-9B/resil6`
