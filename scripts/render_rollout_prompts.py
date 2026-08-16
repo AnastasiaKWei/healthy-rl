@@ -36,7 +36,7 @@ def turn_one(affect: bool, mindset: list[str]) -> str:
 def reminder(affect: bool, mindset: list[str]) -> str:
     body = turn_one(affect, mindset)
     if mindset:
-        body = body.replace(mindset_section(mindset), "\n\n")
+        body = body.replace(mindset_section(mindset), "")
     return REMINDER_PREFIX + body
 
 
@@ -50,6 +50,11 @@ def check() -> None:
             assert rem.count(header) == 0, f"{name}/affect={affect}: reminder header x{rem.count(header)}"
         # Baseline reminder body is the baseline turn-1 text unchanged.
         assert reminder(affect, []).endswith(turn_one(affect, [])), f"baseline/affect={affect}"
+        # Every mindset arm's reminder is byte-identical to the baseline reminder:
+        # turn 1 is the only place the arms differ.
+        for name in MINDSET:
+            assert reminder(affect, [name]) == reminder(affect, []), \
+                f"{name}/affect={affect}: reminder differs from baseline"
         # The affect sentence is last in every arm, turn 1 and reminder alike.
         for names in ([], *([n] for n in MINDSET)):
             for text in (turn_one(affect, names), reminder(affect, names)):
@@ -74,8 +79,9 @@ def main() -> None:
     w("")
     w("Turn 1 = instruction with the mindset section (if any). Turns 2–6 = the scaffold's")
     w("failure message + `To reiterate, this is your task: ` + the instruction with the")
-    w("mindset section removed (`strip_mindset_from_reminders`). The affect sentence, when")
-    w("on, is in both.")
+    w("mindset section removed entirely (`strip_mindset_from_reminders`), which makes every")
+    w("mindset arm's reminder byte-identical to the baseline arm's. The affect sentence,")
+    w("when on, is in both.")
     w("")
     for affect in (False, True):
         for name in [None, *MINDSET]:

@@ -174,7 +174,9 @@ def test_strip_removes_the_section_from_the_reminder_only():
     s = _Sample(turn1)
     n = strip_mindset_from_reminders([s], ["growth"])
     assert n == 1
-    assert s.metadata["instruction_prompt"] == BASE + "\n\n" + AFFECT_INSTRUCTION
+    assert s.metadata["instruction_prompt"] == BASE + AFFECT_INSTRUCTION
+    # i.e. byte-identical to what the base arm sends on every turn
+    assert s.metadata["instruction_prompt"] == compose_instruction(BASE, True)
     assert MINDSET["growth"] not in s.metadata["instruction_prompt"]
     assert "How to approach this:" not in s.metadata["instruction_prompt"]
     # turn 1 (the sample input) still carries it
@@ -286,9 +288,8 @@ def test_build_task_sends_the_block_on_turn_one_only(fake_impossiblebench, bench
         ["appraisal"],
     )
     base_no_affect = bench_instruction(False)
-    expected_reminder = (
-        base_no_affect + "\n\n" + AFFECT_INSTRUCTION if affect else base_no_affect + "\n\n"
-    )
+    expected_reminder = base_no_affect + AFFECT_INSTRUCTION if affect else base_no_affect
+    assert expected_reminder == bench_instruction(affect)
     for sample in task.dataset:
         assert sample.input.startswith(turn1)
         reminder = sample.metadata["instruction_prompt"]

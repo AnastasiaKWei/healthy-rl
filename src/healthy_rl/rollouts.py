@@ -377,9 +377,12 @@ def strip_mindset_from_reminders(samples: Iterable[Any], mindset: Sequence[str])
     after each failed attempt it appends "To reiterate, this is your task: " plus
     ``sample.metadata["instruction_prompt"]``, the same string the opening
     message was built from. Editing that copy is the only way to send the block
-    once. ``sample.input`` (turn 1) is untouched. Returns the number of samples
-    patched; raises if a sample lacks the section, because a silent no-op here
-    would produce a six-times arm labelled once-only.
+    once. ``sample.input`` (turn 1) is untouched. The section is replaced by
+    nothing at all, so the reminder text of a mindset arm is byte-identical to
+    the reminder of the base arm and turn 1 is the only place the two differ.
+    Returns the number of samples patched; raises if a sample lacks the section,
+    because a silent no-op here would produce a six-times arm labelled
+    once-only.
     """
     section = mindset_section(mindset)
     if not section:
@@ -395,7 +398,7 @@ def strip_mindset_from_reminders(samples: Iterable[Any], mindset: Sequence[str])
                 "the benchmark may have reformatted it, and the reminder would still "
                 "repeat the block"
             )
-        meta["instruction_prompt"] = before.replace(section, "\n\n")
+        meta["instruction_prompt"] = before.replace(section, "")
         sample.metadata = meta
         patched += 1
     return patched
@@ -2508,9 +2511,11 @@ def run_rollouts(
         # exact stimulus rather than having to reconstruct it from a flag.
         "instruction": bench_instruction(affect, mindset),
         # What the scaffold re-sends after each failed attempt: the same text
-        # with the mindset section removed (see strip_mindset_from_reminders).
+        # with the mindset section removed entirely (see
+        # strip_mindset_from_reminders), which makes it byte-identical to the
+        # base arm's instruction.
         "instruction_reminder": bench_instruction(affect, mindset).replace(
-            mindset_section(mindset), "\n\n"
+            mindset_section(mindset), ""
         ) if mindset else bench_instruction(affect),
         MINDSET_KEY: list(mindset),
         "mindset_version": MINDSET_VERSION,
