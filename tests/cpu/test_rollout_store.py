@@ -485,3 +485,68 @@ def test_record_without_eval_file(tmp_path):
     st = _store(tmp_path)              # FakeEvalSamples({}) raises FileNotFoundError
     r = st.record("fake-model/appr6/lcbhard_0/s0/t0")
     assert r["messages_in"] == [] and any(".eval" in w for w in r["warnings"])
+
+
+def test_concurrent_reads_and_refresh_do_not_race(tmp_path):
+    """The dashboard's sync routes run in a threadpool: several requests hit one store at once.
+
+    Reads and refreshes are interleaved deliberately -- a shard file grows while other
+    threads are inside ``records()``/``record()``/``arrays()``/``session``/``conversations()``
+    -- because ``refresh()`` rebuilds ``_light``/``_order`` and prunes ``_full`` in place.
+    Unsynchronised this raises (``dictionary changed size during iteration`` in ``refresh``,
+    ``KeyError`` from ``records()`` reading ``_light`` mid-rebuild). The short switch
+    interval is what makes that certain rather than occasional: the tasks are small
+    enough that the default 5 ms rarely preempts a thread inside ``refresh()``.
+    """
+    import os
+    import sys
+    import threading
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    st = _store(tmp_path)
+    rids = [r["record_id"] for r in st.records()]
+    assert len(rids) == 8
+    f = tmp_path / "rollouts" / "fake-model" / "appr6" / "rollouts.shard0of2.jsonl"
+    template = json.loads(f.read_text().splitlines()[0])
+    write_lock = threading.Lock()          # the writer is the pilot job, not a second dashboard
+    n_appended = 20
+
+    def append(i: int) -> None:
+        row = dict(template, task_id=f"lcbhard_new{i}")     # a new rollout: 2 more turns
+        with write_lock:
+            with f.open("a") as fh:
+                fh.write(json.dumps(row) + "\n")
+            os.utime(f, (time.time() + 5 + i, time.time() + 5 + i))   # forward, for coarse mtimes
+
+    def task(i: int) -> None:
+        if i % 10 == 9:
+            append(i // 10)
+        k, rid = i % 5, rids[i % len(rids)]
+        if k == 0:
+            st.records()
+        elif k == 1:
+            st.record(rid)
+        elif k == 2:
+            st.arrays(rid)
+        elif k == 3:
+            st.session
+        else:
+            st.conversations()
+
+    switch = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+    try:
+        with ThreadPoolExecutor(8) as ex:
+            futures = [ex.submit(task, i) for i in range(200)]
+            failures = [repr(fut.exception()) for fut in futures if fut.exception() is not None]
+    finally:
+        sys.setswitchinterval(switch)
+    assert failures == [], f"{len(failures)} worker(s) raised: {failures[:3]}"
+
+    recs = st.records()
+    assert len(recs) == 8 + 2 * n_appended
+    assert len({r["record_id"] for r in recs}) == len(recs)
+    cells = {(c["model"], c["version"]): c for c in st.session["cells"]}
+    assert cells[("fake-model", "appr6")]["n_rollouts"] == 3 + n_appended
+    assert len(st.conversations()) == 4 + n_appended

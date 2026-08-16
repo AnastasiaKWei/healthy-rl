@@ -13,8 +13,10 @@ Loaders are injected so the login-node tests never touch MODEL_DIR/ARTIFACT_DIR.
 from __future__ import annotations
 
 import datetime as _dt
+import functools
 import json
 import os
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -284,8 +286,30 @@ def sample_messages(samples: list[dict], task_id: str, completions: list[str]) -
     return None
 
 
+def _locked(fn):
+    """Run the method holding ``self._lock``. See ``RolloutStore``'s docstring for why."""
+    @functools.wraps(fn)
+    def wrapper(self, *args, **kw):
+        with self._lock:
+            return fn(self, *args, **kw)
+    return wrapper
+
+
 class RolloutStore:
-    """Read-only, ``SessionStore``-shaped view over rollout cells."""
+    """Read-only, ``SessionStore``-shaped view over rollout cells.
+
+    Every entry point takes ``self._lock``. The dashboard's routes are sync, so
+    FastAPI runs them in a threadpool and several requests share one store, whose
+    caches (``_light``/``_order``/``_full``, the tokenizers, vectors and ``.eval``
+    samples) are mutable state that ``refresh()`` rebuilds in place: concurrent
+    ``/api/aggregate`` requests over four models produced a 500 with
+    ``RuntimeError: dictionary changed size during iteration`` in ``refresh()``.
+    The lock is an ``RLock`` because these methods call each other (``record()``
+    calls ``refresh()``, ``arrays()`` calls ``record()``). It is coarse: tokenising
+    one record (~ms per turn) blocks the other requests, and the first tokenizer
+    load for a model (~20 s) blocks them once -- acceptable for a single-user tool,
+    and far cheaper than a torn read.
+    """
 
     def __init__(self, cells: list[Cell], ignored: list[Path], roots: list[Path], *,
                  tokenizer_loader: Callable[[str], Any] | None = None,
@@ -308,6 +332,7 @@ class RolloutStore:
         self._vectors: dict[str, Any] = {}                       # model -> Vectors | None
         self._evals: dict[Path, list[dict] | Exception] = {}     # .eval path -> samples, or why not
         self._session: dict | None = None
+        self._lock = threading.RLock()           # before refresh(): refresh() takes it
         self.refresh()
 
     @classmethod
@@ -318,6 +343,7 @@ class RolloutStore:
         return cls(cells, ignored, [Path(p) for p in paths], **kw)
 
     # ---- growth ---------------------------------------------------------
+    @_locked
     def refresh(self) -> bool:
         """Re-read changed/new shard files. Returns True if anything changed."""
         changed = False
@@ -353,16 +379,18 @@ class RolloutStore:
                             self._order.append(rid)
                         self._light[rid] = rec
             # a rewritten (or vanished) row invalidates its tokenised record; the rest stay cached
-            for rid in [r for r in self._full if not _same_light(self._light.get(r), prev_light.get(r))]:
+            for rid in [r for r in list(self._full) if not _same_light(self._light.get(r), prev_light.get(r))]:
                 del self._full[rid]
             self._session = None
         return changed
 
     # ---- SessionStore interface -----------------------------------------
+    @_locked
     def records(self) -> list[dict]:
         self.refresh()
         return [self._full.get(rid) or self._light[rid] for rid in self._order]
 
+    @_locked
     def record(self, record_id: str) -> dict:
         self.refresh()                    # first: a re-read row drops its stale tokenised record
         full = self._full.get(record_id)
@@ -422,6 +450,7 @@ class RolloutStore:
         self._session = None          # cell table counts changed
         return rec
 
+    @_locked
     def arrays(self, record_id: str) -> dict[str, np.ndarray]:
         rec = self.record(record_id)
         L, E = len(rec["capture_layers"]), len(rec["emotions"])
@@ -450,6 +479,7 @@ class RolloutStore:
                 rec["warnings"].append("vectors missing: start/end readouts unavailable for this cell")
         return out
 
+    @_locked
     def _mark(self, rec: dict, error: str) -> None:
         """Flag a full record misaligned; the page hides the strip and readouts go None.
 
@@ -465,6 +495,7 @@ class RolloutStore:
             rec["error"] = prev + "; " + error
         self._session = None
 
+    @_locked
     def conversations(self) -> list[dict]:
         out: dict[str, dict] = {}
         for r in self.records():
@@ -489,6 +520,7 @@ class RolloutStore:
         return None
 
     # ---- session ---------------------------------------------------------
+    @_locked
     def _has_token_arrays(self, rec: dict) -> bool:
         """Does *any* turn of this rollout carry per-token projections (``t*_proj_L*``)?
 
@@ -558,6 +590,7 @@ class RolloutStore:
         base = sub if sub is not None and sub.is_dir() else cell.path / "inspect-logs"
         return sorted(base.rglob("*.eval"), reverse=True) if base.is_dir() else []
 
+    @_locked
     def _eval_samples(self, path: Path) -> list[dict]:
         """One parse per ``.eval``; an unreadable log is cached as its exception, not retried."""
         if path not in self._evals:
@@ -612,6 +645,7 @@ class RolloutStore:
                 "tokenizer": "ok" if self._tokenizer_for(model, probe=True) else "missing",
                 "vectors": "ok" if vec is not None else "missing"}
 
+    @_locked
     def _tokenizer_for(self, model: str, *, probe: bool = False):
         """The model's tokenizer, or None. ``probe=True`` only reports availability
         without loading (used by session) -- see Task 3 for the loading path."""
@@ -633,6 +667,7 @@ class RolloutStore:
             return True
         return _hf_tokenizer_dir(model) is not None
 
+    @_locked
     def _vectors_for(self, model: str):
         if model not in self._vectors:
             try:
@@ -642,6 +677,7 @@ class RolloutStore:
         return self._vectors[model]
 
     @property
+    @_locked
     def session(self) -> dict:
         self.refresh()
         if self._session is None:
