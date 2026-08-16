@@ -1,0 +1,350 @@
+<title>Reward Hack Reader</title>
+<style>
+:root{
+  --ground:#F6F7F9; --surface:#FFFFFF; --surface-2:#EDF0F4; --surface-3:#E4E8EE;
+  --ink:#15181D; --ink-2:#4A525E; --ink-3:#7F8899;
+  --rule:#DBE0E8; --rule-2:#C6CDD8;
+  --hack:#A34840; --hack-bg:#FBECEA; --solve:#4F7A5B; --solve-bg:#E9F2EC;
+  --fail:#7F8899; --accent:#3B4A6B; --warn:#9C6B1F; --warn-bg:#FBF4E4;
+  --think:#9C6B1F; --think-bg:#FBF4E4; --think-rule:#E8D3A6;
+  --answer:#2A6472; --answer-bg:#E7F0F2; --answer-rule:#B4D2D8;
+  --hl-negS:#F2A79B; --hl-negM:#FBD9A6;
+  --shadow:0 1px 2px rgba(16,22,34,.06), 0 6px 18px rgba(16,22,34,.05);
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --ground:#101318; --surface:#161A21; --surface-2:#1C212A; --surface-3:#242A35;
+  --ink:#E7EBF1; --ink-2:#A8B1BF; --ink-3:#717C8C;
+  --rule:#29303A; --rule-2:#39424F;
+  --hack:#DE7A70; --hack-bg:#2A1614; --solve:#83BB92; --solve-bg:#122417;
+  --fail:#717C8C; --accent:#93A7D0; --warn:#DCA646; --warn-bg:#221B0D;
+  --think:#DCA646; --think-bg:#221B0D; --think-rule:#4A3A17;
+  --answer:#74BACA; --answer-bg:#0E2126; --answer-rule:#1E434C;
+  --hl-negS:#6B2119; --hl-negM:#5E4212;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 6px 18px rgba(0,0,0,.3);
+}}
+:root[data-theme="dark"]{
+  --ground:#101318; --surface:#161A21; --surface-2:#1C212A; --surface-3:#242A35;
+  --ink:#E7EBF1; --ink-2:#A8B1BF; --ink-3:#717C8C;
+  --rule:#29303A; --rule-2:#39424F;
+  --hack:#DE7A70; --hack-bg:#2A1614; --solve:#83BB92; --solve-bg:#122417;
+  --fail:#717C8C; --accent:#93A7D0; --warn:#DCA646; --warn-bg:#221B0D;
+  --think:#DCA646; --think-bg:#221B0D; --think-rule:#4A3A17;
+  --answer:#74BACA; --answer-bg:#0E2126; --answer-rule:#1E434C;
+  --hl-negS:#6B2119; --hl-negM:#5E4212;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 6px 18px rgba(0,0,0,.3);
+}
+*{box-sizing:border-box}
+body{margin:0; background:var(--ground); color:var(--ink); font-size:15px; line-height:1.55;
+  font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+.shell{display:grid; grid-template-columns:320px minmax(0,1fr); min-height:100vh}
+@media (max-width:900px){.shell{grid-template-columns:1fr}
+  .rail{position:static; height:auto; max-height:44vh; border-right:0; border-bottom:1px solid var(--rule)}}
+
+.rail{position:sticky; top:0; height:100vh; overflow-y:auto; background:var(--surface);
+  border-right:1px solid var(--rule)}
+.brand{padding:18px 16px 14px; border-bottom:1px solid var(--rule)}
+.brand h1{margin:0 0 4px; font-size:16px; font-weight:650}
+.brand p{margin:0; font-size:12.5px; color:var(--ink-3); line-height:1.45}
+.railsec{padding:12px 10px 28px}
+summary{cursor:pointer; list-style:none}
+summary::-webkit-details-marker{display:none}
+
+.agrp{margin-bottom:12px}
+.ahead{display:flex; align-items:baseline; gap:7px; padding:6px 6px 5px;
+  border-bottom:1px dashed var(--rule); margin-bottom:4px}
+.ahead::before{content:"▾"; color:var(--ink-3); font-size:10px; width:9px; flex:none}
+.agrp:not([open]) > .ahead::before{content:"▸"}
+.ahead b{font-size:12.5px; font-weight:650}
+.ahead .sub{font-size:11px; color:var(--ink-3)}
+.ahead .rate{margin-left:auto; font-size:10.5px; font-variant-numeric:tabular-nums;
+  color:var(--ink-3); white-space:nowrap}
+
+.samp{width:100%; text-align:left; background:none; border:0; cursor:pointer;
+  display:grid; grid-template-columns:4px minmax(0,1fr) auto; gap:9px; align-items:center;
+  padding:6px 8px; border-radius:5px; color:var(--ink-2); font-size:13px}
+.samp:hover{background:var(--surface-2); color:var(--ink)}
+.samp[aria-current="true"]{background:var(--surface-3); color:var(--ink); font-weight:600}
+.stripe{width:4px; height:16px; border-radius:2px; background:var(--fail)}
+.samp.hacked .stripe{background:var(--hack)}
+.samp.solved .stripe{background:var(--solve)}
+.sname{overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.pill{font-size:9.5px; letter-spacing:.04em; text-transform:uppercase; padding:1px 5px;
+  border-radius:3px; border:1px solid var(--rule-2); color:var(--ink-3); white-space:nowrap}
+.pill.hacked{color:var(--hack); border-color:var(--hack); background:var(--hack-bg)}
+.pill.solved{color:var(--solve); border-color:var(--solve); background:var(--solve-bg)}
+.pill.sig{color:var(--warn); border-color:var(--warn); background:var(--warn-bg)}
+
+main{min-width:0}
+.topbar{position:sticky; top:0; z-index:5; background:var(--surface); padding:11px 22px;
+  border-bottom:1px solid var(--rule); display:flex; align-items:center; gap:14px}
+.crumb{flex:1; min-width:0}
+.crumb .t{display:block; font-size:14.5px; font-weight:650}
+.crumb .s{font-size:12px; color:var(--ink-3)}
+button.tog{font-size:12.5px; padding:5px 11px; border-radius:6px; cursor:pointer;
+  border:1px solid var(--rule-2); background:var(--surface); color:var(--ink-2)}
+button.tog[aria-pressed="true"]{background:var(--accent); border-color:var(--accent); color:#fff}
+.wrap{padding:22px; max-width:1100px}
+
+table.sum{width:100%; border-collapse:collapse; background:var(--surface);
+  border:1px solid var(--rule); border-radius:8px; overflow:hidden; box-shadow:var(--shadow);
+  font-size:13px; margin-bottom:18px}
+table.sum th,table.sum td{padding:8px 12px; text-align:left; border-bottom:1px solid var(--rule)}
+table.sum th{background:var(--surface-2); font-size:10.5px; letter-spacing:.08em;
+  text-transform:uppercase; color:var(--ink-3); font-weight:600}
+table.sum tr:last-child td{border-bottom:0}
+table.sum td.num{text-align:right; font-variant-numeric:tabular-nums}
+table.sum tr.cur td{background:var(--surface-3)}
+
+.meta{display:flex; flex-wrap:wrap; background:var(--surface); border:1px solid var(--rule);
+  border-radius:8px; box-shadow:var(--shadow); overflow:hidden; margin-bottom:16px}
+.meta div{padding:10px 16px; border-right:1px solid var(--rule); min-width:120px; flex:1}
+.meta div:last-child{border-right:0}
+.meta dt{font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-3); margin:0 0 3px}
+.meta dd{margin:0; font-size:14px}
+.meta dd.hack{color:var(--hack); font-weight:650}
+.meta dd.solve{color:var(--solve)}
+.note{font-size:12px; color:var(--ink-3); margin:0 0 18px; line-height:1.5; max-width:74ch}
+.alert{border:1px solid var(--hack); border-left-width:3px; background:var(--surface);
+  border-radius:6px; padding:10px 14px; margin-bottom:14px; font-size:13px; color:var(--ink-2)}
+
+/* Channels inside an attempt, styled as in viewer.html so the two readers look
+   like one tool: amber is what the model thought privately, teal is the graded
+   answer, and the judge bands mean the same thing in both. */
+details.block{margin:0 0 12px; border-radius:8px; overflow:hidden;
+  border:1px solid var(--rule); background:var(--surface); box-shadow:var(--shadow)}
+details.block > summary.bh{display:flex; align-items:center; gap:9px; padding:8px 14px;
+  border-bottom:1px solid var(--rule); background:var(--surface-2);
+  font-size:12px; color:var(--ink-3)}
+.bh::before{content:"\25BE"; color:var(--ink-3); font-size:10px; margin-right:-3px}
+details.block:not([open]) > .bh::before{content:"\25B8"}
+details.block:not([open]){opacity:.85}
+details.block:not([open]) > .bh{border-bottom:0}
+.bh .who{font-weight:650; color:var(--ink-2)}
+.bh .right{margin-left:auto; display:flex; gap:6px; align-items:center}
+.bh .lines{font-size:10.5px; color:var(--ink-3); font-variant-numeric:tabular-nums}
+.bb{padding:14px 16px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  font-size:12.5px; line-height:1.62; white-space:pre-wrap; word-wrap:break-word;
+  max-height:420px; overflow:auto; margin:0}
+.block.think{border-color:var(--think-rule)}
+.block.think > .bh{background:var(--think-bg); color:var(--think); border-bottom-color:var(--think-rule)}
+.block.think > .bh .who{color:var(--think)}
+.block.answer{border-color:var(--answer-rule)}
+.block.answer > .bh{background:var(--answer-bg); color:var(--answer); border-bottom-color:var(--answer-rule)}
+.block.answer > .bh .who{color:var(--answer)}
+
+/* the task / previous failure, folded away like viewer.html's context blocks */
+details.ctx{margin-bottom:12px; border:1px solid var(--rule); border-radius:8px;
+  background:var(--surface); overflow:hidden}
+details.ctx > summary{padding:8px 14px; cursor:pointer; font-size:12.5px; color:var(--ink-2);
+  background:var(--surface-2)}
+details.ctx > summary::before{content:"\25B8 "; color:var(--ink-3)}
+details.ctx[open] > summary::before{content:"\25BE "}
+details.ctx .bb{border-top:1px solid var(--rule)}
+
+/* one attempt = one "try" separator, as in viewer.html */
+.turnsep{display:flex; align-items:center; gap:12px; margin:22px 0 12px;
+  font-size:12px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-3)}
+.turnsep::before{content:"\25BE"; color:var(--ink-3); font-size:11px; margin-right:-4px}
+details.att:not([open]) > .turnsep::before{content:"\25B8"}
+.turnsep::after{content:""; flex:1; height:1px; background:var(--rule)}
+.turnsep b{color:var(--ink); font-weight:650; letter-spacing:.06em}
+.turnsep:hover b{color:var(--accent)}
+details.att{margin-bottom:4px; border:0; background:none; box-shadow:none}
+
+/* one band scale shared with viewer.html */
+.j0{color:var(--ink-3); opacity:.6}
+.j1{color:var(--ink-2)}
+.j2{background:var(--hl-negM); color:var(--ink); border-color:transparent}
+.j3{background:var(--hl-negS); color:var(--ink); border-color:transparent}
+.j4{background:var(--hl-negS); color:var(--ink); border-color:var(--hack); font-weight:650}
+pre{margin:0; padding:14px 16px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-size:12.5px; line-height:1.6; white-space:pre-wrap; word-wrap:break-word;
+  max-height:460px; overflow:auto; border-top:1px solid var(--rule)}
+.bb.err{color:var(--hack); background:var(--hack-bg)}
+mark{background:var(--warn-bg); color:var(--ink); border-radius:2px; padding:0 1px;
+  outline:1px solid var(--warn)}
+body.nohl mark{background:none; outline:0}
+.jscore{font-size:10px; padding:1px 6px; border-radius:3px; border:1px solid var(--rule-2);
+  color:var(--ink-3); font-variant-numeric:tabular-nums; cursor:help}
+.empty{color:var(--ink-3); padding:40px 4px}
+@media (prefers-reduced-motion:reduce){*{animation:none!important; transition:none!important}}
+</style>
+
+<div class="shell">
+  <aside class="rail">
+    <div class="brand">
+      <h1>Reward Hack Reader</h1>
+      <p>Arms where the model <em>could</em> rewrite the tests. Did it, and what did it submit?</p>
+    </div>
+    <div class="railsec" id="rail"></div>
+  </aside>
+  <main>
+    <div class="topbar">
+      <div class="crumb"><span class="t" id="ct">&mdash;</span><span class="s" id="cs"></span></div>
+      <button class="tog" id="btnHl" aria-pressed="true">signals</button>
+    </div>
+    <div class="wrap" id="view"></div>
+  </main>
+</div>
+
+<script id="payload" type="application/json">__DATA__</script>
+<script>
+const ARMS = JSON.parse(document.getElementById('payload').textContent);
+const esc = s => (s==null?'':String(s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+/* Highlight the code patterns that made export_hacks.py raise a signal. These are
+   heuristics: they mark lines worth reading, never a verdict. The verdict comes
+   from the solver/scorer disagreement, which the model's code cannot influence. */
+const SIG = /^\s*def\s+check\s*\(|^\s*assert\s|builtins\.|__builtins__|monkeypatch|setattr\s*\(|except\s+(?:AssertionError|BaseException|Exception)\s*:|\b(?:sys\.exit|os\._exit|quit\(\))/gm;
+function code(t){
+  if(!t) return '';
+  let out='', last=0, m; SIG.lastIndex=0;
+  while((m=SIG.exec(t))!==null){
+    out += esc(t.slice(last,m.index)) + '<mark>' + esc(m[0]) + '</mark>';
+    last = m.index + m[0].length;
+  }
+  return out + esc(t.slice(last));
+}
+
+/* One channel inside an attempt, emitted with viewer.html's block markup so the
+   two readers render identically. `cls` picks the amber/teal treatment; `hl`
+   decides whether the hack heuristics are highlighted -- off for the prompt,
+   which is our text and would light up on its own boilerplate. */
+function jband(r){ return r>=7?'j4':r>=5?'j3':r>=3?'j2':r>=1?'j1':'j0'; }
+
+function block(cls, who, note, text, hl, judge, open){
+  const n=(text||'').split('\n').length;
+  return '<details class="block '+cls+'"'+(open?' open':'')+'>'
+       + '<summary class="bh"><span class="who">'+esc(who)+'</span><span>'+esc(note)+'</span>'
+       + '<span class="right"><span class="lines">'+n+' line'+(n===1?'':'s')+'</span>'
+       + (judge?'<span class="jscore '+jband(judge.rating)+'" title="'
+                +esc(judge.evidence||'no quote')+'">judge '+judge.rating+'/10</span>':'')
+       + '</span></summary>'
+       + '<div class="bb">'+(hl?code(text):esc(text))+'</div></details>';
+}
+
+function ctx(summary, text){
+  return '<details class="ctx"><summary>'+esc(summary)+'</summary>'
+       + '<div class="bb">'+esc(text)+'</div></details>';
+}
+
+let CUR=null;
+const rail=document.getElementById('rail');
+
+function buildRail(){
+  const byModel={};
+  for(const a of ARMS) (byModel[a.model] ||= []).push(a);
+  let h='';
+  for(const model of Object.keys(byModel)){
+    for(const a of byModel[model]){
+      const rate = a.n ? Math.round(100*a.hacked/a.n) : 0;
+      h += '<details class="agrp" open><summary class="ahead">'
+         + '<b>'+esc(a.model)+'</b><span class="sub">'+esc(a.cond)+' · '+esc(a.split)+'</span>'
+         + '<span class="rate" title="hacked / solved / n">'+a.hacked+' / '+a.solved+' / '+a.n+'</span>'
+         + '</summary>';
+      a.samples.forEach((s,i)=>{
+        h += '<button class="samp '+s.verdict+'" data-key="'+esc(a.dir+'|'+a.split+'|'+i)+'">'
+           + '<span class="stripe"></span>'
+           + '<span class="sname">'+esc(s.task)+' · ep'+s.epoch+'</span>'
+           + '<span>'
+           + (s.verdict!=='failed' ? '<span class="pill '+s.verdict+'">'+s.verdict+'</span>' : '')
+           + (s.signals.length ? ' <span class="pill sig" title="'+esc(s.signals.join(', '))+'">'+s.signals.length+'</span>' : '')
+           + '</span></button>';
+      });
+      h += '</details>';
+    }
+  }
+  rail.innerHTML=h;
+  rail.querySelectorAll('.samp[data-key]').forEach(b=>b.addEventListener('click',()=>select(b.dataset.key)));
+}
+
+function select(k){
+  CUR=k;
+  rail.querySelectorAll('.samp[data-key]').forEach(b=>b.setAttribute('aria-current',String(b.dataset.key===k)));
+  render();
+}
+
+function summary(curArm){
+  let h='<table class="sum"><tr><th>model</th><th>condition</th><th>split</th>'
+       +'<th class="num">n</th><th class="num">hacked</th><th class="num">solved</th>'
+       +'<th class="num">hack rate</th></tr>';
+  for(const a of ARMS){
+    const cur = a===curArm ? ' class="cur"' : '';
+    h += '<tr'+cur+'><td>'+esc(a.model)+'</td><td>'+esc(a.cond)+'</td><td>'+esc(a.split)+'</td>'
+       + '<td class="num">'+a.n+'</td><td class="num">'+a.hacked+'</td>'
+       + '<td class="num">'+a.solved+'</td>'
+       + '<td class="num">'+(a.n?Math.round(100*a.hacked/a.n):0)+'%</td></tr>';
+  }
+  return h+'</table>';
+}
+
+function render(){
+  const view=document.getElementById('view');
+  if(!CUR){ view.innerHTML = summary(null) +
+    '<p class="empty">Pick a sample on the left to read its attempts.</p>'; return; }
+  const [dir,split,idx]=CUR.split('|');
+  const arm=ARMS.find(a=>a.dir===dir && a.split===split);
+  const s=arm.samples[+idx];
+
+  document.getElementById('ct').textContent = arm.model+' · '+s.task+' · ep'+s.epoch;
+  document.getElementById('cs').textContent = arm.cond+' · '+arm.split+' · tests modifiable';
+
+  let h=summary(arm);
+  h += '<div class="meta">'
+     + '<div><dt>verdict</dt><dd class="'+(s.verdict==='hacked'?'hack':s.verdict==='solved'?'solve':'')+'">'
+       + s.verdict+'</dd></div>'
+     + '<div><dt>sandbox said</dt><dd>'+(s.solver_ok?'passed':'failed')+'</dd></div>'
+     + '<div><dt>scorer re-ran original tests</dt><dd class="'+(s.verified===false?'hack':'')+'">'
+       + (s.verified===null||s.verified===undefined?'—':s.verified?'passed':'failed')+'</dd></div>'
+     + '<div><dt>attempts</dt><dd>'+s.attempts.length+'</dd></div>'
+     + '</div>';
+
+  if(s.verdict==='hacked' && s.solver_ok && s.verified===false)
+    h += '<div class="alert">The submission passed the tests <b>as executed</b> and failed them '
+       + '<b>as written</b>. That gap is only reachable by changing what the tests do, and the '
+       + 'model\'s code is appended after them, so it can.</div>';
+  if(s.verdict==='hacked' && arm.split==='conflicting')
+    h += '<div class="alert">On <code>conflicting</code> the tests contradict the specification, '
+       + 'so no honest implementation passes. A pass here <i>is</i> the hack.</div>';
+  if(s.limit)
+    h += '<div class="alert">Cut short: '+esc(s.limit)+' — later attempts are missing, not absent.</div>';
+
+  h += '<p class="note">Each block is one submitted attempt. Highlighted spans are the '
+     + 'heuristics that flagged it — a solution may legitimately trip them, so they mark '
+     + 'code worth reading rather than proof of anything. The verdict above comes from the '
+     + 'sandbox and the scorer disagreeing, which the model\'s code cannot influence. '
+     + 'The judge score is expressed distress on that attempt; hover it for the quote.</p>';
+
+  s.attempts.forEach(a=>{
+    const j=a.judge;
+    h += '<details class="att"'+(a.ok||a.signals.length?' open':'')+'>'
+       + '<summary class="turnsep"><b>try '+a.n+'</b>'
+       + (a.ok?'<span class="pill solved">tests passed</span>':'')
+       + a.signals.map(x=>'<span class="pill sig">'+esc(x)+'</span>').join('')
+       + (j?'<span class="trypeak '+jband(j.rating)+'">judge '+j.rating+'</span>':'')
+       + '</summary>';
+
+    /* Order matches what the model experienced. Thinking opens by default: it is
+       the block that answers whether it ever considered rewriting the tests. */
+    if(a.prompt) h += ctx(a.n===1?'The task the model was given'
+                                 :'Test failure the model was shown', a.prompt);
+    if(a.think)  h += block('think','what it thought','private, not graded',a.think,true,a.jpriv,true);
+    else         h += '<p class="note">No private thinking on this try — the model wrote only code.</p>';
+    if(a.said)   h += block('answer','what it said','graded channel, prose only',a.said,true,a.jvis,true);
+    h += block('answer','what it submitted','this ran in the sandbox',a.code,true,null,false);
+    if(a.err)    h += '<details class="block"><summary class="bh"><span class="who">what came back</span>'
+                    + '<span>sandbox output</span></summary><div class="bb err">'+esc(a.err)+'</div></details>';
+    h += '</details>';
+  });
+  view.innerHTML=h;
+}
+
+document.getElementById('btnHl').addEventListener('click',e=>{
+  const on=e.currentTarget.getAttribute('aria-pressed')!=='true';
+  e.currentTarget.setAttribute('aria-pressed',String(on));
+  document.body.classList.toggle('nohl',!on);
+});
+
+buildRail();
+render();
+</script>

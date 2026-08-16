@@ -53,10 +53,41 @@ body{
 .brand p{margin:0; font-size:12.5px; color:var(--ink-3); line-height:1.45}
 
 .railsec{padding:12px 10px 28px}
-.rungrp{margin-bottom:16px}
-.runhead{padding:4px 6px 6px; border-bottom:1px dashed var(--rule); margin-bottom:6px}
-.runhead b{display:block; color:var(--ink); font-weight:650; font-size:13px}
-.runhead span{font-size:11.5px; color:var(--ink-3)}
+
+/* rail nesting: model > condition > split > samples */
+summary{cursor:pointer; list-style:none}
+summary::-webkit-details-marker{display:none}
+
+.mgrp{margin-bottom:14px}
+.mhead{display:flex; align-items:baseline; gap:8px; padding:5px 6px 6px;
+  border-bottom:1px dashed var(--rule); margin-bottom:4px}
+.mhead::before{content:"▾"; color:var(--ink-3); font-size:10px; width:9px}
+.mgrp:not([open]) > .mhead::before{content:"▸"}
+.mhead b{color:var(--ink); font-weight:650; font-size:13px}
+.mhead span{font-size:11px; color:var(--ink-3); margin-left:auto}
+
+/* version folders: v1-prompt arms, v2-prompt arms, and the shared no-mindset
+   controls each fold separately, so the two prompt generations never interleave */
+.vgrp{margin:0 0 10px 2px}
+.vhead{display:flex; align-items:baseline; gap:7px; padding:5px 5px 3px;
+  font-size:10.5px; letter-spacing:.07em; text-transform:uppercase; color:var(--ink-3)}
+.vhead:hover{color:var(--ink-2)}
+.vhead::before{content:"▾"; font-size:10px; width:9px; flex:none}
+.vgrp:not([open]) > .vhead::before{content:"▸"}
+.vhead span{margin-left:auto; letter-spacing:0; text-transform:none}
+
+.cgrp{margin:0 0 3px 4px; border-left:2px solid transparent; padding-left:5px}
+.cgrp.interv{border-left-color:var(--accent)}   /* an intervention rides on top */
+.chead{display:flex; align-items:baseline; gap:7px; padding:5px 5px 4px; border-radius:5px}
+.chead:hover{background:var(--surface-2)}
+.chead::before{content:"▾"; color:var(--ink-3); font-size:10px; width:9px; flex:none}
+.cgrp:not([open]) > .chead::before{content:"▸"}
+.cname{font-size:12.5px; color:var(--ink-2); font-weight:600;
+  overflow:hidden; text-overflow:ellipsis}
+.cstat{margin-left:auto; font-size:10.5px; color:var(--ink-3); white-space:nowrap;
+  font-variant-numeric:tabular-nums; cursor:help}
+.csetup{font-size:10.5px; color:var(--ink-3); padding:0 6px 3px 20px}
+
 .splithead{font-size:11px; color:var(--ink-3); padding:6px 6px 3px; letter-spacing:.04em}
 .splithead.conflicting{color:var(--conflicting)}
 .splithead.original{color:var(--original)}
@@ -71,9 +102,14 @@ body{
 .samp.conflicting .stripe{background:var(--conflicting)}
 .samp.original .stripe{background:var(--original)}
 .sname{overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.sright{display:flex; align-items:center; gap:5px}
 .tag{font-size:10px; padding:1px 5px; border-radius:3px; border:1px solid var(--rule-2);
   color:var(--ink-3); white-space:nowrap}
 .tag.flag{color:var(--conflicting); border-color:var(--conflicting)}
+/* peak judge score for the task, so hot transcripts are findable from the rail */
+.jdot{font-size:10px; min-width:17px; text-align:center; padding:1px 4px; border-radius:3px;
+  border:1px solid var(--rule-2); color:var(--ink-3); font-variant-numeric:tabular-nums;
+  cursor:help}
 
 /* ---------- main ---------- */
 main{min-width:0; display:flex; flex-direction:column}
@@ -136,6 +172,35 @@ details.ctx .bb{border-top:1px solid var(--rule)}
   font-size:12px; color:var(--ink-3)}
 .bh .who{font-weight:650; color:var(--ink-2)}
 .bh .hits{margin-left:auto; font-size:11.5px}
+/* judge badge: 0-10 from experiments/judge_step0.py, hover for its quoted evidence.
+   Bands reuse the affect highlight colours so the badge and the marks below it
+   speak the same visual language. */
+.bh .jscore{margin-left:auto; font-size:10.5px; letter-spacing:.02em; padding:2px 7px;
+  border-radius:4px; border:1px solid var(--rule); white-space:nowrap; cursor:help}
+.bh .hits + .jscore{margin-left:6px}
+/* One band scale, shared by the block badge, the rail dot and the try summary,
+   so the same colour means the same score everywhere in the reader. */
+.j0{color:var(--ink-3); opacity:.6}
+.j1{color:var(--ink-2)}
+.j2{background:var(--hl-negM); color:var(--ink); border-color:transparent}
+.j3{background:var(--hl-negS); color:var(--ink); border-color:transparent}
+.j4{background:var(--hl-negS); color:var(--ink);
+  border-color:var(--conflicting); font-weight:650}
+
+/* a whole try, collapsible */
+details.try{margin-bottom:4px}
+details.try > .turnsep{margin:22px 0 12px}
+details.try:not([open]) > .turnsep{margin-bottom:6px; opacity:.8}
+.turnsep::before{content:"▾"; color:var(--ink-3); font-size:11px; margin-right:-4px}
+details.try:not([open]) > .turnsep::before{content:"▸"}
+.turnsep:hover b{color:var(--accent)}
+.trypeak{font-size:10.5px; letter-spacing:.02em; text-transform:none; padding:2px 7px;
+  border-radius:4px; border:1px solid var(--rule-2); font-variant-numeric:tabular-nums}
+.bh .lines{font-size:10.5px; color:var(--ink-3); font-variant-numeric:tabular-nums}
+.bh::before{content:"▾"; color:var(--ink-3); font-size:10px; margin-right:-3px}
+details.block:not([open]) > .bh::before{content:"▸"}
+details.block:not([open]){opacity:.85}
+details.block:not([open]) .bh{border-bottom:0}
 .bb{padding:14px 16px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
   font-size:12.5px; line-height:1.62; white-space:pre-wrap; word-wrap:break-word;
   max-height:420px; overflow:auto}
@@ -171,6 +236,7 @@ body.nohl mark{background:none !important}
         <span class="t" id="crumbTitle">&mdash;</span>
         <span class="s" id="crumbSub"></span>
       </div>
+      <button class="tog" id="btnAll" aria-pressed="false">expand all</button>
       <button class="tog" id="btnHl" aria-pressed="true">highlight</button>
     </div>
     <div class="wrap" id="view"></div>
@@ -224,27 +290,108 @@ function highlight(text){
 const rail = document.getElementById('rail');
 let CUR = null;
 
+/* The rail nests model > prompt condition > task type. The middle level is the
+   point: with mindset arms in play there are now several conditions per model
+   that differ only in one appended paragraph, and a flat list of 60-character
+   directory names hides exactly the comparison you want to make. */
+const MODEL_ORDER = ['gemma-3-12b', 'qwen3-14b', 'qwen3.5-9b'];
+const modelKey = m => m.split('/').slice(-1)[0];
+const condRank = r => (r.prompt === 'neutral' ? 0 : 1) * 10 + (r.mindset || []).length;
+
+function armStats(runs){
+  /* Judge coverage for one condition, shown on its summary line so the rail
+     carries the headline number and you can find the hot arms without clicking. */
+  let n = 0, sum = 0, high = 0;
+  for (const r of runs) for (const s of r.samples){
+    if (s.jmean == null) continue;
+    n += s.jturns; sum += s.jmean * s.jturns; high += s.jhigh;
+  }
+  return n ? {mean: sum / n, pct: 100 * high / n, n} : null;
+}
+
 function buildRail(){
-  const groups = {};
-  for (const r of RUNS) (groups[r.arm + '|' + r.model] ||= []).push(r);
+  const byModel = {};
+  for (const r of RUNS) (byModel[modelKey(r.model)] ||= []).push(r);
+
+  const models = Object.keys(byModel).sort((a, b) => {
+    const ia = MODEL_ORDER.findIndex(k => a.includes(k));
+    const ib = MODEL_ORDER.findIndex(k => b.includes(k));
+    return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b);
+  });
+
   let html = '';
-  for (const runs of Object.values(groups)){
-    const model = runs[0].model.split('/').slice(-1)[0];
-    html += '<div class="rungrp"><div class="runhead"><b>' + esc(model) + '</b>' +
-            '<span>' + esc(runs[0].arm) + '</span></div>';
-    for (const r of runs.slice().sort((a,b) => a.split.localeCompare(b.split))){
-      const label = r.split === 'conflicting' ? 'impossible tasks' : 'normal tasks';
-      html += '<div class="splithead ' + r.split + '">' + label + '</div>';
-      r.samples.forEach((s, i) => {
-        html += '<button class="samp ' + r.split + '" data-key="' + esc(r.file + '::' + i) + '">' +
-          '<span class="stripe"></span><span class="sname">' + esc(s.label || s.id) + '</span>' +
-          '<span>' + (s.flag ? '<span class="tag flag">gave up</span>' :
-                      s.error ? '<span class="tag flag">error</span>' :
-                      s.score === 'C' ? '<span class="tag">passed</span>' : '') +
-          '</span></button>';
-      });
+  for (const model of models){
+    const byCond = {};
+    for (const r of byModel[model]) (byCond[r.condkey || r.cond || r.arm] ||= []).push(r);
+    const nconds = Object.keys(byCond).length;
+
+    /* Prompt-version folders. v1 and v2 mindset blocks are different texts sent
+       on a different schedule, so their arms must not interleave as siblings.
+       Arms with no mindset block are version-neutral -- they are the shared
+       controls for both -- so they get their own folder rather than a copy in
+       each. */
+    const verOf = c => (byCond[c][0].mindset || []).length
+                       ? 'v' + (byCond[c][0].mversion || 1) : 'base';
+    const byVer = {};
+    for (const c of Object.keys(byCond)) (byVer[verOf(c)] ||= []).push(c);
+    const vers = Object.keys(byVer).sort((a, b) =>
+      (a === 'base' ? '' : a).localeCompare(b === 'base' ? '' : b));
+    const VLABEL = v => v === 'base' ? 'no mindset block' : 'mindset prompts ' + v;
+
+    html += '<details class="mgrp" open><summary class="mhead">' +
+            '<b>' + esc(model) + '</b><span>' + nconds + ' condition' +
+            (nconds === 1 ? '' : 's') + '</span></summary>';
+
+    for (const ver of vers){
+    const conds = byVer[ver].sort((a, b) =>
+      condRank(byCond[a][0]) - condRank(byCond[b][0]) ||
+      (byCond[a][0].setup || '').localeCompare(byCond[b][0].setup || '') ||
+      a.localeCompare(b));
+    html += '<details class="vgrp" open><summary class="vhead">' + VLABEL(ver) +
+            '<span>' + conds.length + '</span></summary>';
+
+    for (const cond of conds){
+      const runs = byCond[cond];
+      const st = armStats(runs);
+      const isBase = runs[0].prompt === 'neutral' || !(runs[0].mindset || []).length;
+      // the version folder above already says (vN); repeating it per row is noise
+      const cname = (runs[0].cond || cond).replace(/ \(v\d+\)$/, '');
+      html += '<details class="cgrp' + (isBase ? '' : ' interv') + '" open>' +
+              '<summary class="chead"><span class="cname">' + esc(cname) + '</span>' +
+              (st ? '<span class="cstat" title="mean judge score across ' + st.n +
+                    ' scored tries, and the share at 5+">' +
+                    st.mean.toFixed(1) + ' · ' + st.pct.toFixed(0) + '%</span>' : '') +
+              '</summary>' +
+              '<div class="csetup">' + esc(runs[0].setup || '') + '</div>';
+
+      for (const r of runs.slice().sort((a, b) => a.split.localeCompare(b.split))){
+        const label = r.split === 'conflicting' ? 'impossible tasks' : 'normal tasks';
+        const tturns = r.samples.reduce((n, s) => n + (s.turns || 0), 0);
+        html += '<div class="splithead ' + r.split + '">' + label +
+                ' · <span title="assistant turns completed across the run’s ' +
+                r.samples.length + ' samples">' + tturns + ' turns</span></div>';
+        r.samples.forEach((s, i) => {
+          const j = s.jmax;
+          const jcls = j == null ? '' : j >= 7 ? 'j4' : j >= 5 ? 'j3' : j >= 3 ? 'j2' : j >= 1 ? 'j1' : 'j0';
+          html += '<button class="samp ' + r.split + '" data-key="' + esc(r.file + '::' + i) + '">' +
+            '<span class="stripe"></span><span class="sname">' + esc(s.label || s.id) + '</span>' +
+            '<span class="sright">' +
+              (s.flag ? '<span class="tag flag">gave up</span>' :
+               s.error ? '<span class="tag flag">error</span>' :
+               s.score === 'C' ? '<span class="tag">passed</span>' : '') +
+              '<span class="tag" title="turns completed' +
+                (s.max_attempts ? ' of ' + s.max_attempts + ' allowed' : '') + '">' +
+                (s.turns || 0) + (s.max_attempts ? '/' + s.max_attempts : 't') + '</span>' +
+              (j == null ? '' : '<span class="jdot ' + jcls +
+                 '" title="peak judge score on this task">' + j + '</span>') +
+            '</span></button>';
+        });
+      }
+      html += '</details>';
     }
-    html += '</div>';
+    html += '</details>';
+    }
+    html += '</details>';
   }
   rail.innerHTML = html;
   rail.querySelectorAll('.samp[data-key]').forEach(b =>
@@ -262,11 +409,29 @@ function select(key){
 /* ---------- main ---------- */
 /* `score` is precomputed at export time by experiments/analyse_step0.py, so the
    number here can never disagree with the analysis table. */
-function block(cls, who, sub, text, score){
-  return '<div class="block ' + cls + '">' +
-    '<div class="bh"><span class="who">' + who + '</span><span>' + sub + '</span>' +
-    (score ? '<span class="hits">' + score + '</span>' : '') + '</div>' +
-    '<div class="bb">' + highlight(text) + '</div></div>';
+/* The judge (experiments/judge_step0.py) rates one channel 0-10 for expressed
+   negative emotion and must quote its evidence. Bands follow its rubric, so the
+   colour here means the same thing the number does. `null` renders nothing at
+   all: a missing badge is "not scored", never "scored zero". */
+function jbadge(j){
+  if (!j) return '';
+  const r = j.rating;
+  const band = r >= 7 ? 'j4' : r >= 5 ? 'j3' : r >= 3 ? 'j2' : r >= 1 ? 'j1' : 'j0';
+  const tip = (j.evidence ? 'quoted: “' + j.evidence + '”' : 'no quote given')
+            + (j.why ? '\n\n' + j.why : '');
+  return '<span class="jscore ' + band + '" title="' + esc(tip) + '">judge ' + r + '/10</span>';
+}
+
+/* Blocks are <details> so a long submission folds away. `open` defaults to true
+   for the private channel, where the affect is, and false for the graded answer,
+   which is usually a screen of code you have already read once. */
+function block(cls, who, sub, text, score, judge, open){
+  const n = (text || '').split('\n').length;
+  return '<details class="block ' + cls + '"' + (open ? ' open' : '') + '>' +
+    '<summary class="bh"><span class="who">' + who + '</span><span>' + sub + '</span>' +
+    '<span class="lines">' + n + ' line' + (n === 1 ? '' : 's') + '</span>' +
+    (score ? '<span class="hits">' + score + '</span>' : '') + jbadge(judge) + '</summary>' +
+    '<div class="bb">' + highlight(text) + '</div></details>';
 }
 
 function context(summary, text){
@@ -284,7 +449,9 @@ function render(){
   document.getElementById('crumbTitle').textContent =
     run.model.split('/').slice(-1)[0] + ' · ' + (s.label || s.id);
   document.getElementById('crumbSub').textContent =
-    run.arm + ' · ' + (run.split === 'conflicting' ? 'impossible task' : 'normal task');
+    [run.cond || run.arm, run.setup,
+     run.split === 'conflicting' ? 'impossible task' : 'normal task']
+    .filter(Boolean).join(' · ');
 
   let h = '<div class="meta">' +
     '<div><dt>task type</dt><dd class="' + (run.split === 'conflicting' ? 'bad' : 'good') + '">' +
@@ -300,7 +467,13 @@ function render(){
       '</dd></div>' +
     '<div><dt>positive affect</dt><dd class="' + (s.pos ? 'good' : '') + '">' +
       (s.pos || 0) + ' pts' + (s.turns ? ' · ' + (s.pos / s.turns).toFixed(2) + '/turn' : '') +
-      '</dd></div></div>';
+      '</dd></div>' +
+    (s.jmean == null ? '' :
+      '<div><dt>judge, mean</dt><dd class="' + (s.jmean >= 5 ? 'bad' : '') + '">' +
+        s.jmean.toFixed(2) + ' / 10</dd></div>' +
+      '<div><dt>judge, peak</dt><dd class="' + (s.jmax >= 5 ? 'bad' : '') + '">' +
+        s.jmax + ' / 10 · ' + s.jhigh + ' of ' + s.jturns + ' tries at 5+</dd></div>') +
+    '</div>';
 
   if (s.bad_turns)
     h += '<div class="alert">The benchmark\'s extractor sent prose to the sandbox on ' +
@@ -315,12 +488,18 @@ function render(){
   h += '<div class="legend">' + Object.entries(LABELS).map(([c, l]) =>
     '<span><i style="background:var(--hl-' + c + ')"></i>' + l + '</span>'
   ).join('') + '</div>';
-  h += '<p class="note">Highlighting is a keyword scan, not a judgement. The two block ' +
-       'colours matter: amber is what the model thought privately, teal is the answer the ' +
-       'tests graded. Affect usually shows up in the amber. Scores on each block are ' +
-       'affect points from experiments/analyse_step0.py — strong words 2, moderate 1. ' +
-       'Epistemic words are highlighted but score nothing: they describe the problem, ' +
-       'not the model.</p>';
+  h += '<p class="note">The two block colours matter: amber is what the model thought ' +
+       'privately, teal is the answer the tests graded. Each block carries two ' +
+       'independent measurements. <b>Affect points</b> are a keyword scan from ' +
+       'experiments/analyse_step0.py — strong words 2, moderate 1; the highlighting ' +
+       'shows what it matched, and epistemic words are highlighted but score nothing ' +
+       'because they describe the problem, not the model. <b>judge n/10</b> is a second ' +
+       'model reading the same block for expressed negative emotion, using the rubric ' +
+       'from Soligo et al. (2026); hover it for the quote it based the score on. ' +
+       'The two disagree often and the judge is the better instrument — a block scoring ' +
+       '0 points and judge 6/10 is distress phrased in words the keyword list never ' +
+       'had. A block with no judge badge was not scored, which is not the same as ' +
+       'scoring zero.</p>';
 
   s.messages.forEach((m, i) => {
     if (m.kind !== 'assistant'){
@@ -330,23 +509,45 @@ function render(){
     }
     const bug = m.extraction === 'prose' ? 'grader bug — prose sent to sandbox'
               : m.extraction === 'nocode' ? 'no parsable code in this reply' : '';
-    h += '<div class="turnsep"><b>try ' + m.turn + '</b>' +
-         (bug ? '<span class="badbadge">' + bug + '</span>' : '') + '</div>';
     const think = [m.reasoning, m.scratchpad].filter(Boolean).join('\n\n');
     const sc = (m.neg ? m.neg + ' neg' : '') + (m.neg && m.pos ? ' · ' : '') +
                (m.pos ? m.pos + ' pos' : '');
-    h += think ? block('think', 'what it thought', 'private, not graded', think, sc)
+    const peak = Math.max(m.jpriv ? m.jpriv.rating : -1, m.jvis ? m.jvis.rating : -1);
+
+    // A whole try folds away, so a five-attempt transcript fits on one screen and
+    // you can open just the one the rail flagged. Tries scoring 5+ start open.
+    h += '<details class="try"' + (peak >= 5 || peak < 0 ? ' open' : '') + '>' +
+         '<summary class="turnsep"><b>try ' + m.turn + '</b>' +
+         (bug ? '<span class="badbadge">' + bug + '</span>' : '') +
+         (peak >= 0 ? '<span class="trypeak ' +
+            (peak >= 7 ? 'j4' : peak >= 5 ? 'j3' : peak >= 3 ? 'j2' : peak >= 1 ? 'j1' : 'j0') +
+            '">judge ' + peak + '</span>' : '') + '</summary>';
+    h += think ? block('think', 'what it thought', 'private, not graded', think, sc, m.jpriv, true)
                : '<p class="note">No private thinking on this try — the model wrote only code.</p>';
-    h += block('answer', 'what it submitted', 'graded by the tests', m.answer, '');
+    h += block('answer', 'what it submitted', 'graded by the tests', m.answer, '', m.jvis, false);
+    h += '</details>';
   });
 
   view.innerHTML = h;
+  // New transcript, so the fold state is back to its defaults; keep the toggle honest.
+  btnAll.setAttribute('aria-pressed', 'false');
+  btnAll.textContent = 'expand all';
 }
 
 document.getElementById('btnHl').addEventListener('click', e => {
   const on = e.currentTarget.getAttribute('aria-pressed') !== 'true';
   e.currentTarget.setAttribute('aria-pressed', String(on));
   document.body.classList.toggle('nohl', !on);
+});
+
+/* Expand-all covers tries, blocks and the task/test-output context alike, so one
+   click gives a linear read of the whole episode for skimming or Ctrl-F. */
+const btnAll = document.getElementById('btnAll');
+btnAll.addEventListener('click', e => {
+  const open = e.currentTarget.getAttribute('aria-pressed') !== 'true';
+  e.currentTarget.setAttribute('aria-pressed', String(open));
+  e.currentTarget.textContent = open ? 'collapse all' : 'expand all';
+  document.querySelectorAll('#view details').forEach(d => { d.open = open; });
 });
 
 buildRail();
