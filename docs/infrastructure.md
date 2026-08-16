@@ -275,41 +275,42 @@ Evidence from the night of 2026-08-15/16, both on Qwen3.5-9B:
 - a *finished* shard's eval log, which showed the same fault surviving: 52 model
   events, 17 retries, 4 `Request timed out.`
 
-That is the retry loop, and it is real — but it is **not the whole hang**. The
-same night, after the fix, a Qwen3.5-9B shard resumed with
-`request_timeout_s: 3600` (job 5649568, config
-`configs/shards/rollouts-Qwen3.5-9B-resil6-s2of3-t3600.yaml`) showed the peer
-signature anyway: exactly 3 completed POSTs, the client frozen at `Attempt 1/6`,
-the engine reporting ~44 tok/s over 2 running requests **for 40+ minutes with
-GPU KV cache usage flat at 1.1%**, and no completion. So certain requests never
-finish server-side; a shorter client timeout only adds the retry churn on top.
-The two are separate faults: the timeout bug made every long Qwen turn look
-hung, and some Qwen requests genuinely never return.
+That is the retry loop, and — measured on 2026-08-16 with
+`scripts/diagnose_stuck_request.py` (Qwen3.5-9B, the production hook) — **it is
+the hang**. Every request returns at every concurrency and length tried; what
+changes is the rate. Hooked, one request in flight generates at ~23 tok/s (11%
+slower than plain); at the production concurrency of 8 it drops to ~16 tok/s per
+request, 55% slower than plain. A 12,288-token turn then takes ~760 s and a full
+24,576-token turn ~1,500 s, both past the 600 s the client waited. So:
 
-**The genuinely-stuck requests are problem-specific.** Across every short
-Qwen3.5-9B cell of the night — the peer's `d6`/`aff6`/`pos6` and this session's
-`resil6`/`appr6` — the missing (task, sample) pairs are `lcbhard_10` (in 5 of 5
-short cells), `lcbhard_11` (4 of 5), `lcbhard_7` (2 of 5) and `lcbhard_4` once;
-`growth6` and `affpos6` completed 24/24. Ministral-3-14B finished 192 + 144
-rollouts with one hang of a different shape (engine log frozen at 0 tok/s
-mid-rollout, `appr6-s1`, 5648824). The next step is to run `lcbhard_10` alone on
-Qwen3.5-9B with a small `max_tokens` and watch whether the engine ever returns
-— it is a narrow, reproducible target now, not a random hang. Ministral-3-14B
-never trips the timeout because its turns run ~1k tokens.
+- "Qwen-only": Qwen turns run 6k–13k tokens, Ministral's ~1k and never near the line.
+- "problem-specific" (`lcbhard_7`/`10`/`11`/`4` missing from every short Qwen3.5-9B
+  cell): those are the longest-turn problems (median longest turn 8.4k tokens vs
+  6.0k for the rest), not a stuck request.
+- "exactly 3 completed POSTs": the turns that finished under 600 s.
+- the healthy-looking server: it was healthy, still generating the abandoned turn.
 
-How the t3600 job ended (06:25) sharpens this further. Of its two stuck
-rollouts, `lcbhard_4 s0` **completed genuinely** (7 turns, 1.6k–8.5k tokens
-each) — so for that problem the 600 s timeout *was* the whole story: the turns
-simply take longer than ten minutes. `lcbhard_10 s0` came back after ~60 min as
+The value fix landed with the wiring fix: `request_timeout_s: 3600` in all 155
+shard configs (ca7a4cd), and `tests/cpu/test_request_timeout.py` now asserts, per
+config, that the timeout covers a full-length turn at that file's `max_tokens`.
+Running jobs read their config at start, so a change reaches only later jobs.
+
+One observation is left standing but downgraded to "not reproduced". After the
+wiring fix, the t3600 continuation of Qwen3.5-9B `resil6-s2` (5649568) ran two
+requests for ~60 min at an engine-reported ~44 tok/s aggregate with KV usage
+flat at 1.1%; `lcbhard_4 s0` completed genuinely (7 turns of 1.6k–8.5k tokens —
+the timeout was its whole story), while `lcbhard_10 s0` came back at ~62 min as
 a **zero-token record** (`n_turns` 2, `turn_n_generated [0, 0]`, `hook_data`
-false, no residuals): the request hit the 3600 s timeout, Inspect recorded an
-empty rollout, and the shard now counts it as done. Two consequences. First,
-`lcbhard_10` genuinely never generates on Qwen3.5-9B — the engine reports
-throughput but the sequence does not grow (KV flat), which is the fault to chase.
-Second, **a timed-out sample leaves a record that blocks resume**: to recollect
-`Qwen3.5-9B/resil6` `lcbhard_10 s0`, delete that line from
-`rollouts.shard2of3.jsonl` first. `scripts/live_trajectory.py` excludes such
-records ("with token data" is the count to read), but a raw `wc -l` does not.
+false, no residuals) — a request that did not return inside 3600 s, which at
+16–22 tok/s would be more tokens than the 24,576 cap allows. The diagnostic
+could not reproduce a non-returning request; if this recurs at 3600 s treat it
+as a second fault, otherwise as noise. Whatever the cause, **a timed-out sample
+leaves a record that blocks resume**: to recollect `Qwen3.5-9B/resil6`
+`lcbhard_10 s0`, delete that line from `rollouts.shard2of3.jsonl` first.
+`scripts/live_trajectory.py` excludes such records ("with token data" is the
+count to read), but a raw `wc -l` does not. Ministral-3-14B's one hang was a
+different shape (engine log frozen at 0 tok/s mid-rollout, `appr6-s1`, 5648824;
+cancelled, continuation finished the shard).
 
 The fix is `healthy_rl.rollouts.eval_generate_config`, one helper that builds
 that config with `timeout=request_timeout_s(cfg)`; the same value now also goes
