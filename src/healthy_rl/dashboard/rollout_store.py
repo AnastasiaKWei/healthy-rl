@@ -91,6 +91,14 @@ def _now_iso(ts: float) -> str:
     return _dt.datetime.fromtimestamp(ts, _dt.timezone.utc).isoformat(timespec="seconds")
 
 
+def _same_light(a: dict | None, b: dict | None) -> bool:
+    """Did a re-read leave this light record alone? ``created_at`` does not count: it is the
+    shard file's mtime, which moves for every row of the file each time the file grows."""
+    if a is None or b is None:
+        return a is b
+    return {k: v for k, v in a.items() if k != "created_at"} == {k: v for k, v in b.items() if k != "created_at"}
+
+
 def records_from_row(row: dict, *, model: str, version: str, max_tokens: int | None, created_at: str) -> list[dict]:
     """One light record per turn of a rollout row (spec §3.1, minus the lazy fields)."""
     n_turns = int(row.get("n_turns") or len(row.get("turn_completion") or []))
@@ -247,7 +255,7 @@ class RolloutStore:
                             self._order.append(rid)
                         self._light[rid] = rec
             # a rewritten (or vanished) row invalidates its tokenised record; the rest stay cached
-            for rid in [r for r in self._full if self._light.get(r) != prev_light.get(r)]:
+            for rid in [r for r in self._full if not _same_light(self._light.get(r), prev_light.get(r))]:
                 del self._full[rid]
             self._session = None
         return changed

@@ -125,7 +125,7 @@ def test_duplicate_row_is_collapsed_and_counted(tmp_path):
     row = json.loads(f.read_text().splitlines()[0])       # lcbhard_0/s0 again: a re-run after a crash
     row["passed"] = True                                  # the later row is the one that should win
     stale = st.record("fake-model/appr6/lcbhard_0/s0/t0")  # tokenised from the row about to be replaced
-    untouched = st.record("fake-model/d6/lcbhard_0/s0/t0")   # a different shard file: not rewritten
+    untouched = st.record("fake-model/appr6/lcbhard_0/s1/t0")  # same shard file, a rollout nobody rewrote
     assert stale["passed"] is False
     with f.open("a") as fh:
         fh.write(json.dumps(row) + "\n")
@@ -133,7 +133,7 @@ def test_duplicate_row_is_collapsed_and_counted(tmp_path):
     os.utime(f, (time.time() + 5, time.time() + 5))
     fresh = st.record("fake-model/appr6/lcbhard_0/s0/t0")
     assert fresh is not stale and fresh["passed"] is True and fresh["tokenised"] is True
-    assert st.record("fake-model/d6/lcbhard_0/s0/t0") is untouched
+    assert st.record("fake-model/appr6/lcbhard_0/s1/t0") is untouched   # the file's new mtime alone is not a change
     recs = st.records()
     assert len(recs) == 8 and len({r["record_id"] for r in recs}) == 8
     assert next(r for r in recs if r["record_id"] == "fake-model/appr6/lcbhard_0/s0/t0")["passed"] is True
