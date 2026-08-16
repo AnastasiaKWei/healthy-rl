@@ -37,7 +37,17 @@ CELLS = {
     ("Ministral-3-14B-Reasoning-2512", "affgrowth6"): ("aff6", ["growth"], 4000),
     ("Ministral-3-14B-Reasoning-2512", "affresil6"): ("aff6", ["resilience"], 4000),
     ("Ministral-3-14B-Reasoning-2512", "affappr6"): ("aff6", ["appraisal"], 4000),
+    ("gemma-3-12b-it", "spgrowth6"): ("sp6", ["growth"], 0),
+    ("gemma-3-12b-it", "spresil6"): ("sp6", ["resilience"], 0),
+    ("gemma-3-12b-it", "spappr6"): ("sp6", ["appraisal"], 0),
+    ("gemma-3-12b-it", "affgrowth6"): ("aff6", ["growth"], 2000),
+    ("gemma-3-12b-it", "affresil6"): ("aff6", ["resilience"], 2000),
+    ("gemma-3-12b-it", "affappr6"): ("aff6", ["appraisal"], 2000),
 }
+# Every count below is derived from CELLS, so adding a row here is the only edit a
+# new cell needs: 3 shards a cell, 3 jobs a shard.
+SHARDS = 3 * len(CELLS)
+SBATCH_LINES = 3 * SHARDS
 
 RESOURCES = "--gres=gpu:A100-40G:2 --mem=96G --cpus-per-task=16"
 FIRST_STUB_ID = 900001
@@ -201,7 +211,7 @@ def test_dry_run_never_invokes_sbatch(dry_run):
 
 def test_submit_records_one_sbatch_per_job(submit_run):
     _, calls = submit_run
-    assert len(calls) == 3 * 3 * len(CELLS) == 81
+    assert len(calls) == SBATCH_LINES
     names = [re.search(r"--job-name=(\S+)", c).group(1) for c in calls]
     expected = {f"{model}-{version}-s{i}{suffix}"
                 for model, version in CELLS for i in range(3)
@@ -228,7 +238,7 @@ def test_submit_prints_a_table_row_per_shard(submit_run):
     stdout, _ = submit_run
     rows = [l for l in stdout.splitlines()
             if l.startswith("| ") and not l.startswith("| model ")]
-    assert len(rows) == 3 * len(CELLS) == 27
+    assert len(rows) == SHARDS
     header = stdout.splitlines().index("| model | version | shard | primary | continuations |")
     assert stdout.splitlines()[header + 1] == "|---|---|---|---|---|"
     for row in rows:
@@ -274,3 +284,48 @@ def test_submit_leaves_the_ids_it_already_queued_on_screen_when_sbatch_fails(tmp
     assert len(rows) == 3, proc.stdout
     assert "| model | version | shard | primary | continuations |" in proc.stdout
     assert [r.split("|")[4].strip() for r in rows] == ["900001", "900004", "900007"]
+
+
+def test_only_model_restricts_both_phases_to_that_model(tmp_path):
+    """A re-run after some cells are already queued must not touch the others: with
+    ONLY_MODEL set, the filter has to apply to the config writing as well as the
+    submission, or the second run would rewrite (or refuse to rewrite) configs whose
+    jobs are in the queue."""
+    only = "gemma-3-12b-it"
+    n_cells = sum(1 for model, _v in CELLS if model == only)
+    assert n_cells == 6, "this test is about the gemma cells"
+
+    env, log = _stubbed_env(tmp_path)
+    out = tmp_path / "shards"
+    env["SHARD_DIR"] = str(out)
+    env["ONLY_MODEL"] = only
+    proc = subprocess.run(["bash", str(SCRIPT), "--dry-run"], cwd=REPO, env=env,
+                          capture_output=True, text=True, timeout=120)
+    assert proc.returncode == 0, proc.stderr
+    assert only in proc.stderr.splitlines()[0]
+
+    written = sorted(pth.name for pth in out.iterdir())
+    assert len(written) == 3 * n_cells == 18, written
+    assert all(name.startswith(f"rollouts-{only}-") for name in written), written
+    expected = {f"rollouts-{only}-{version}-s{i}of3.yaml"
+                for model, version in CELLS if model == only for i in range(3)}
+    assert set(written) == expected
+
+    lines = [l for l in proc.stdout.splitlines() if l.startswith("sbatch --parsable")]
+    assert len(lines) == proc.stdout.count("\n") == 3 * 3 * n_cells == 54
+    assert all(only in l for l in lines)
+    assert not [l for l in lines if "Ministral" in l or "Qwen" in l]
+    assert not log.exists() or log.read_text() == ""
+
+
+def test_only_model_that_matches_nothing_is_an_error(tmp_path):
+    """A typo'd model name would otherwise be a silent no-op run."""
+    env, log = _stubbed_env(tmp_path)
+    env["SHARD_DIR"] = str(tmp_path / "shards")
+    env["ONLY_MODEL"] = "gemma-3-12b"  # a real name, minus the -it
+    proc = subprocess.run(["bash", str(SCRIPT), "--submit"], cwd=REPO, env=env,
+                          capture_output=True, text=True, timeout=60)
+    assert proc.returncode != 0
+    assert "matches no row" in proc.stderr
+    assert "nothing submitted" in proc.stderr
+    assert not log.exists() or log.read_text() == ""
