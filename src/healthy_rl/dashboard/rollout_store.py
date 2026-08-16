@@ -13,8 +13,10 @@ Loaders are injected so the login-node tests never touch MODEL_DIR/ARTIFACT_DIR.
 from __future__ import annotations
 
 import datetime as _dt
+import functools
 import json
 import os
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -47,6 +49,7 @@ def _is_cell(p: Path) -> bool:
 
 
 def _cell_at(p: Path) -> Cell:
+    p = Path(p).resolve()          # model/version are read off the path, so "." must be named first
     manifest: dict = {}
     mp = p / "manifest.json"
     if mp.is_file():
@@ -61,15 +64,29 @@ def _cell_at(p: Path) -> Cell:
 def discover_cells(paths: Sequence[str | os.PathLike[str]]) -> tuple[list[Cell], list[Path]]:
     """Cells under each path (a cell, a model, or a root), and the directories skipped.
 
-    Deduped by path, ordered by (model, version). A directory is a cell when it
-    holds ``rollouts*.jsonl``; a model is walked one level, a root two.
+    Deduped by ``(model, version)``, ordered by it. A directory is a cell when it
+    holds ``rollouts*.jsonl``; a model is walked one level, a root two. Two
+    directories that resolve to the same ``(model, version)`` -- the same cell
+    staged under two roots -- cannot both be kept: the key is what every record
+    resolves its npz and its ``.eval`` through, so the second would read the
+    first's arrays under its own label. The first wins; the later path is
+    ignored, and the startup line names it.
     """
-    found: dict[Path, Cell] = {}
+    found: dict[tuple[str, str], Cell] = {}
+    seen: set[Path] = set()
     ignored: list[Path] = []
 
     def visit(p: Path, depth: int) -> None:
         if _is_cell(p):
-            found.setdefault(p.resolve(), _cell_at(p))
+            rp = p.resolve()
+            if rp in seen:              # the same directory reached twice (a root and the cell itself)
+                return
+            seen.add(rp)
+            cell = _cell_at(p)
+            if cell.key in found:
+                ignored.append(rp)
+            else:
+                found[cell.key] = cell
             return
         if depth == 0 or not p.is_dir():
             ignored.append(p)
@@ -109,6 +126,12 @@ def records_from_row(row: dict, *, model: str, version: str, max_tokens: int | N
     sample = int(row.get("sample", 0))
     task_id = str(row.get("task_id"))
     cid = f"{model}/{version}/{task_id}/s{sample}"
+    # A steering sweep re-runs one (task, sample) once per condition; without the condition in
+    # the id the rows collapse onto each other last-writer-wins (Olmo-3.1-32B-Think/v1: 172 rows
+    # over 36 pairs). "readout" is the unsteered arm every ordinary cell writes, so it stays bare.
+    condition = row.get("condition_name")
+    if condition not in (None, "", "readout"):
+        cid += f"/c{condition}"
     base = {
         "conversation_id": cid, "source": SOURCE, "model": model, "version": version,
         "mindset": list(row.get("mindset") or []), "mindset_version": int(row.get("mindset_version") or 0),
@@ -197,12 +220,26 @@ def _project_residual(h: np.ndarray, directions: np.ndarray) -> tuple[np.ndarray
     return directions @ h, n
 
 
-def arrays_from_npz(z, *, turn: int, capture_layers: list[int], probe_layer: int, n_emotions: int, vectors=None
-                    ) -> tuple[dict[str, np.ndarray], list[str]]:
+def arrays_from_npz(z, *, turn: int, capture_layers: list[int], probe_layer: int, n_emotions: int,
+                    emotions: list[str] | None = None, vectors=None) -> tuple[dict[str, np.ndarray], list[str]]:
     """Dashboard-shaped arrays for one turn of a rollout npz (spec §3.2, §3.4)."""
     L, files = len(capture_layers), set(z.files)
     problems: list[str] = []
     E = int(n_emotions)
+    if vectors is not None:
+        # The artifact names the columns the page labels, so a disagreement with the record is a
+        # problem for the record, not something to paper over by reordering or relabelling columns.
+        mismatch: list[str] = []
+        if vectors.probe_layer != probe_layer:
+            mismatch.append(f"vectors probe layer L{vectors.probe_layer} differs from the record's L{probe_layer}")
+        vem = list(vectors.emotions)
+        if len(vem) != E:
+            mismatch.append(f"vectors list {len(vem)} emotions, record lists {E}")
+        elif emotions is not None and list(emotions) != vem:
+            mismatch.append("vectors emotion order differs from the record's")
+        if mismatch:
+            problems += mismatch
+            vectors = None                     # never project with an artifact that disagrees
     per_layer: list[tuple[np.ndarray, np.ndarray, np.ndarray] | None] = []
     for layer in capture_layers:
         k = f"t{turn}_proj_L{layer}"
@@ -250,8 +287,62 @@ def arrays_from_npz(z, *, turn: int, capture_layers: list[int], probe_layer: int
     return out, problems
 
 
+def sample_messages(samples: list[dict], task_id: str, completions: list[str], epoch: int | None = None
+                    ) -> tuple[list[dict] | None, str | None]:
+    """``(messages, rule)`` for the sample that produced these completions.
+
+    Several samples share a task id at Inspect epoch 1 (resumed shards restart the
+    numbering), so the id alone is ambiguous; the completion text is not -- the
+    ``.eval``'s assistant messages equal ``turn_completion`` verbatim. Turns that
+    generated nothing wrote no assistant message, so both sides drop the empties.
+
+    Cells written before the mindset merge (2026-08-16) store no ``turn_completion``
+    at all, so there is no text to match on for any of their rollouts. There the
+    ``.eval``'s ``epoch`` is tried instead (``epoch == sample + 1``), and only when
+    exactly one candidate carries it. ``rule`` names which of the three matched
+    (``"completion"``, ``"epoch"``, ``"id"``) so the caller can say so on the page.
+    """
+    want = [c for c in completions if c]
+    cands = [s for s in samples if str(s.get("id")) == str(task_id)]
+    if not want:
+        # No text to be matched on, but the prompt (and, for an old cell, the completions
+        # themselves) are still worth recovering: the epoch first, then an unambiguous id.
+        if epoch is not None:
+            by_epoch = [s for s in cands if int(s.get("epoch") or 1) == int(epoch)]
+            if len(by_epoch) == 1:
+                return list(by_epoch[0]["messages"]), "epoch"
+        return (list(cands[0]["messages"]), "id") if len(cands) == 1 else (None, None)
+    for s in cands:
+        got = [m["content"] for m in s.get("messages", []) if m.get("role") == "assistant" and m["content"]]
+        if got[:len(want)] == want:
+            return list(s["messages"]), "completion"
+    return None, None
+
+
+def _locked(fn):
+    """Run the method holding ``self._lock``. See ``RolloutStore``'s docstring for why."""
+    @functools.wraps(fn)
+    def wrapper(self, *args, **kw):
+        with self._lock:
+            return fn(self, *args, **kw)
+    return wrapper
+
+
 class RolloutStore:
-    """Read-only, ``SessionStore``-shaped view over rollout cells."""
+    """Read-only, ``SessionStore``-shaped view over rollout cells.
+
+    Every entry point takes ``self._lock``. The dashboard's routes are sync, so
+    FastAPI runs them in a threadpool and several requests share one store, whose
+    caches (``_light``/``_order``/``_full``, the tokenizers, vectors and ``.eval``
+    samples) are mutable state that ``refresh()`` rebuilds in place: concurrent
+    ``/api/aggregate`` requests over four models produced a 500 with
+    ``RuntimeError: dictionary changed size during iteration`` in ``refresh()``.
+    The lock is an ``RLock`` because these methods call each other (``record()``
+    calls ``refresh()``, ``arrays()`` calls ``record()``). It is coarse: tokenising
+    one record (~ms per turn) blocks the other requests, and the first tokenizer
+    load for a model (~20 s) blocks them once -- acceptable for a single-user tool,
+    and far cheaper than a torn read.
+    """
 
     def __init__(self, cells: list[Cell], ignored: list[Path], roots: list[Path], *,
                  tokenizer_loader: Callable[[str], Any] | None = None,
@@ -272,7 +363,10 @@ class RolloutStore:
         self._full: dict[str, dict] = {}                         # record_id -> tokenised record (Task 3)
         self._tokenizers: dict[str, Any] = {}                    # model -> tokenizer | None
         self._vectors: dict[str, Any] = {}                       # model -> Vectors | None
+        self._evals: dict[Path, list[dict] | Exception] = {}     # .eval path -> samples, or why not
+        self._hta: dict[Path, bool] = {}                         # npz path -> any per-token arrays
         self._session: dict | None = None
+        self._lock = threading.RLock()           # before refresh(): refresh() takes it
         self.refresh()
 
     @classmethod
@@ -283,6 +377,7 @@ class RolloutStore:
         return cls(cells, ignored, [Path(p) for p in paths], **kw)
 
     # ---- growth ---------------------------------------------------------
+    @_locked
     def refresh(self) -> bool:
         """Re-read changed/new shard files. Returns True if anything changed."""
         changed = False
@@ -318,16 +413,19 @@ class RolloutStore:
                             self._order.append(rid)
                         self._light[rid] = rec
             # a rewritten (or vanished) row invalidates its tokenised record; the rest stay cached
-            for rid in [r for r in self._full if not _same_light(self._light.get(r), prev_light.get(r))]:
+            for rid in [r for r in list(self._full) if not _same_light(self._light.get(r), prev_light.get(r))]:
                 del self._full[rid]
+            self._hta.clear()         # a growing npz can gain per-token arrays between reads
             self._session = None
         return changed
 
     # ---- SessionStore interface -----------------------------------------
+    @_locked
     def records(self) -> list[dict]:
         self.refresh()
         return [self._full.get(rid) or self._light[rid] for rid in self._order]
 
+    @_locked
     def record(self, record_id: str) -> dict:
         self.refresh()                    # first: a re-read row drops its stale tokenised record
         full = self._full.get(record_id)
@@ -341,41 +439,88 @@ class RolloutStore:
         n_decode, problem = self._decode_rows(rec)
         rec["n_decode"] = n_decode
         rec["has_token_arrays"] = n_decode is not None
+        # The .eval is read before the text is tokenised: an old cell stores no turn_completion,
+        # so the text being tokenised may be the one recovered from the log just below.
+        msgs, why, rule = self._messages_for(rec)
+        t = rec["turn_index"]
+        rec["messages_in"], rec["feedback"], rec["text_source"] = [], None, "record"
+        if msgs is None:
+            warnings.append(f"transcript context unavailable: {why}")
+        else:
+            if rule == "epoch":
+                warnings.append("context matched by epoch: the record stores no completion text")
+            # A turn that generated nothing wrote no assistant message, so the .eval's assistant
+            # messages line up with the *non-empty* turns, not with turn_index.
+            turns = self._conversation_records(rec)
+            idx = [i for i, m in enumerate(msgs) if m.get("role") == "assistant"]
+            n_non_empty = sum(1 for r in turns if r["n_generated"] > 0)
+            if len(idx) != n_non_empty:
+                warnings.append(f".eval has {len(idx)} assistant messages, "
+                                f"record has {n_non_empty} non-empty turns")
+            k = rec["non_empty_turn_index"]
+            if k is None:
+                # an empty turn: its context is everything up to the next assistant message there is
+                k = sum(1 for r in turns[:t] if r["n_generated"] > 0)
+                rec["messages_in"] = [dict(m) for m in msgs[:idx[k] if k < len(idx) else len(msgs)]]
+            elif k < len(idx):
+                i = idx[k]
+                rec["messages_in"] = [dict(m) for m in msgs[:i]]
+                nxt = msgs[i + 1] if i + 1 < len(msgs) else None
+                rec["feedback"] = nxt["content"] if nxt is not None and nxt.get("role") == "user" else None
+                text = msgs[i].get("content") or ""
+                if not rec["text"] and rec["n_generated"] > 0 and text:
+                    # An old cell wrote the token count but not the text. The .eval has it, so the
+                    # bubble is filled from there and labelled: this is the log's copy, not the row's.
+                    rec["text"] = text
+                    rec["reasoning"], rec["answer"], _ = split_reasoning(text)
+                    rec["text_source"] = "eval"
+                    warnings.append("completion text taken from the .eval log (not stored in the record)")
         tok = self._tokenizer_for(rec["model"])
         if tok is None:
             rec.update(tokens=[], token_kind=[], n_think=0, misaligned=True, error=f"no tokenizer for {rec['model']}")
             warnings.append("tokenizer missing: text and turn readouts only")
         else:
+            # Recovered text is never aligned against arrays: an old cell has none, so n_decode is
+            # None and align_tokens leaves the record aligned whatever the re-tokenised count is.
             _, _, think_end = split_reasoning(rec["text"])
             toks, starts = tokenise(rec["text"], tok)
             toks, kinds, mis, err = align_tokens(toks, starts, think_end, n_decode)
             rec.update(tokens=toks, token_kind=kinds, n_think=sum(1 for k in kinds if k == "think"),
                        misaligned=mis, error=err)
-        if problem is not None and rec["error"] is None:
-            # the text and the turn readouts are still good; only the token strip is not
-            rec.update(misaligned=True, error=problem, has_token_arrays=False)
-        # messages_in / feedback: Task 5
+        if problem is not None:
+            # the text and the turn readouts are still good; only the token strip is not.
+            # A model with no tokenizer already put its own error here: keep both.
+            prev = rec.get("error")
+            rec.update(misaligned=True, has_token_arrays=False,
+                       error=problem if not prev else f"{prev}; {problem}")
+        last = t == rec["n_turns_total"] - 1
+        # a turn that drew feedback failed the tests; only the last turn's verdict is the rollout's
+        rec["passed"] = False if rec["feedback"] is not None else (rec["passed"] if last else None)
         rec["warnings"] = warnings
         rec["tokenised"] = True
         self._full[record_id] = rec
         self._session = None          # cell table counts changed
         return rec
 
+    @_locked
     def arrays(self, record_id: str) -> dict[str, np.ndarray]:
         rec = self.record(record_id)
         L, E = len(rec["capture_layers"]), len(rec["emotions"])
         empty = {"proj": np.zeros((0, L, E), np.float32), "norm": np.zeros((0, L), np.float32),
                  "proj_prefill": np.full((L, E), np.nan, np.float32), "norm_prefill": np.full(L, np.nan, np.float32)}
         path = self._npz_path(rec)
-        if path is None or not path.is_file():
+        if path is None:
+            return empty       # the row names no residuals file: array-less, like _decode_rows reads it
+        if not path.is_file():
             self._mark(rec, f"npz missing: {path}")
             return empty
         vec = self._vectors_for(rec["model"])
         try:
             with np.load(path) as z:
                 out, problems = arrays_from_npz(z, turn=rec["turn_index"], capture_layers=rec["capture_layers"],
-                                                probe_layer=rec["probe_layer"], n_emotions=E, vectors=vec)
-        except (OSError, ValueError) as exc:
+                                                probe_layer=rec["probe_layer"], n_emotions=E,
+                                                emotions=rec["emotions"], vectors=vec)
+        except Exception as exc:          # BadZipFile from a half-written npz has no narrower base
             self._mark(rec, f"npz unreadable: {exc}")
             return empty
         if problems:
@@ -386,6 +531,7 @@ class RolloutStore:
                 rec["warnings"].append("vectors missing: start/end readouts unavailable for this cell")
         return out
 
+    @_locked
     def _mark(self, rec: dict, error: str) -> None:
         """Flag a full record misaligned; the page hides the strip and readouts go None.
 
@@ -401,6 +547,7 @@ class RolloutStore:
             rec["error"] = prev + "; " + error
         self._session = None
 
+    @_locked
     def conversations(self) -> list[dict]:
         out: dict[str, dict] = {}
         for r in self.records():
@@ -409,7 +556,9 @@ class RolloutStore:
             if c is None:
                 c = out[cid] = {"conversation_id": cid, "source": SOURCE, "model": r["model"], "version": r["version"],
                                 "bench_split": r["bench_split"], "task_id": r["task_id"], "sample": r["sample"],
-                                "epoch": r["epoch"], "mindset": r["mindset"], "passed": r["passed"], "title": None,
+                                "epoch": r["epoch"], "mindset": r["mindset"], "title": None,
+                                "condition_name": r["condition_name"],
+                                "passed": self._light[r["record_id"]]["passed"],  # per-turn on a full record
                                 "n_turns": 0, "has_token_arrays": self._has_token_arrays(r), "n_misaligned": 0,
                                 "last_created_at": r["created_at"]}
             c["n_turns"] += 1
@@ -424,6 +573,7 @@ class RolloutStore:
         return None
 
     # ---- session ---------------------------------------------------------
+    @_locked
     def _has_token_arrays(self, rec: dict) -> bool:
         """Does *any* turn of this rollout carry per-token projections (``t*_proj_L*``)?
 
@@ -431,9 +581,7 @@ class RolloutStore:
         tables. The record-level ``has_token_arrays`` is the stricter per-turn question
         -- see ``_decode_rows``.
         """
-        cache = getattr(self, "_hta", None)
-        if cache is None:
-            cache = self._hta = {}
+        cache = self._hta
         rel = rec.get("residuals")
         if not rel:
             return False
@@ -442,8 +590,8 @@ class RolloutStore:
             try:
                 with np.load(path) as z:
                     cache[path] = any(k.startswith("t") and "_proj_L" in k for k in z.files)
-            except (OSError, ValueError):
-                cache[path] = False
+            except Exception:                 # a truncated npz is not "no arrays" to the page, but
+                cache[path] = False           # it must not take /api/session down either
         return cache[path]
 
     def _npz_path(self, rec: dict) -> Path | None:
@@ -478,8 +626,75 @@ class RolloutStore:
                 return int((np.asarray(z[kind]).reshape(-1) == 0).sum()), None
         except FileNotFoundError:
             return None, f"npz missing: {path}"     # same wording as arrays() so the page dedupes
-        except (OSError, ValueError) as exc:
+        except Exception as exc:              # BadZipFile, EOFError, UnpicklingError, ...
             return None, f"npz unreadable: {exc}"
+
+    def _eval_files(self, rec: dict) -> list[Path]:
+        """The cell's ``.eval`` logs for this rollout's shard, newest name first."""
+        cell = self._cell_of(rec)
+        shard = str(rec.get("shard") or "")
+        sub = None
+        if "/" in shard:
+            a, b = shard.split("/", 1)
+            if a.isdigit() and b.isdigit():
+                sub = cell.path / "inspect-logs" / f"shard{a}of{b}"
+        base = sub if sub is not None and sub.is_dir() else cell.path / "inspect-logs"
+        return sorted(base.rglob("*.eval"), reverse=True) if base.is_dir() else []
+
+    @_locked
+    def _eval_samples(self, path: Path) -> list[dict]:
+        """One parse per ``.eval``; an unreadable log is cached as its exception, not retried."""
+        if path not in self._evals:
+            try:
+                self._evals[path] = self._eval_loader(path)
+            except Exception as exc:          # unreadable log: no messages, and say so
+                self._evals[path] = exc
+        v = self._evals[path]
+        if isinstance(v, Exception):
+            raise v
+        return v
+
+    def _messages_for(self, rec: dict) -> tuple[list[dict] | None, str | None, str | None]:
+        """(messages, warning, rule) -- the sample's whole message list, or None + why."""
+        files = self._eval_files(rec)
+        if not files:
+            return None, "no .eval log under inspect-logs for this shard", None
+        comps = self._completions_of(rec)
+        errors = 0
+        weak: list[tuple[list[dict], str]] = []
+        for f in files:
+            try:
+                samples = self._eval_samples(f)
+            except Exception:
+                errors += 1
+                continue
+            m, rule = sample_messages(samples, rec["task_id"], comps, epoch=int(rec["sample"]) + 1)
+            if m is None:
+                continue
+            if rule == "completion":
+                return m, None, rule          # the text is its own proof: the first match is the match
+            # The id and the epoch are only unique *within* one log. A steering sweep runs the
+            # same shard once per condition and writes one log per run, so several of them hold a
+            # sample with this id and epoch -- and nothing in the row says which run it came from.
+            # Taking the first would put another arm's completion in this rollout's bubble.
+            weak.append((m, rule))
+            if len(weak) > 1:
+                return None, (f"{len(files)} .eval logs in this shard hold a sample with this id"
+                              " and epoch, and the record stores no completion text to tell them apart"), None
+        if len(weak) == 1:
+            return weak[0][0], None, weak[0][1]
+        if errors == len(files):
+            return None, "the .eval log(s) could not be read", None
+        return None, "no .eval sample matches this rollout's completions", None
+
+    def _conversation_records(self, rec: dict) -> list[dict]:
+        """The light records of every turn of this rollout, in turn order."""
+        cid = rec["conversation_id"]
+        return [self._light[rid] for rid in self._order if self._light[rid]["conversation_id"] == cid]
+
+    def _completions_of(self, rec: dict) -> list[str]:
+        """This rollout's ``turn_completion``, in turn order."""
+        return [r["text"] for r in self._conversation_records(rec)]
 
     def _cell_of(self, rec: dict) -> Cell:
         return next(c for c in self.cells if c.key == (rec["model"], rec["version"]))
@@ -494,6 +709,7 @@ class RolloutStore:
                 "tokenizer": "ok" if self._tokenizer_for(model, probe=True) else "missing",
                 "vectors": "ok" if vec is not None else "missing"}
 
+    @_locked
     def _tokenizer_for(self, model: str, *, probe: bool = False):
         """The model's tokenizer, or None. ``probe=True`` only reports availability
         without loading (used by session) -- see Task 3 for the loading path."""
@@ -515,6 +731,7 @@ class RolloutStore:
             return True
         return _hf_tokenizer_dir(model) is not None
 
+    @_locked
     def _vectors_for(self, model: str):
         if model not in self._vectors:
             try:
@@ -524,6 +741,7 @@ class RolloutStore:
         return self._vectors[model]
 
     @property
+    @_locked
     def session(self) -> dict:
         self.refresh()
         if self._session is None:

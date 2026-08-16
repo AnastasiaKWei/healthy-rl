@@ -724,3 +724,33 @@ the bug the published mockup shipped with, and it is why the spec says the mocku
 is a reference rather than a drop-in. Every fixed-size flex child in
 `src/healthy_rl/dashboard/static/index.html` carries the same declaration — status
 dots, rail markers, legend swatches.
+
+### `RolloutStore` is shared across threads, and its caches are not atomic
+
+The dashboard's routes are sync `def`, so FastAPI runs each in the threadpool and
+several requests share one store. `RolloutStore.refresh()` rebuilds `_light` and
+`_order` in place on every listing call, so two `/api/aggregate` requests over
+four models answered at once came back as a 500 with `RuntimeError: dictionary
+changed size during iteration` — one thread iterating the record index while the
+other cleared it. Every entry point now takes a `threading.RLock` (an RLock
+because the methods call each other: `record()` calls `refresh()`, `arrays()`
+calls `record()`). It is coarse — the first tokenizer load for a model, ~20 s,
+blocks the other requests once — and that is the right trade for a single-user
+read-only tool. The page also queues its rollouts-mode aggregate requests one at a
+time, which keeps the npz reads serial as well.
+
+### An empty turn writes no assistant message, so `.eval` alignment is by non-empty turn
+
+Zero-token turns exist in the rollout records (docs/measurement.md, "Turn
+indexing"). A turn that generated nothing also **wrote nothing into the eval
+log**, so the `.eval` sample's assistant messages line up with the rollout's
+*non-empty* turns, not with `turn_index`. Indexing the messages by `turn_index`
+puts every turn after the empty one against the previous turn's context — a
+transcript that is wrong by one turn everywhere and looks perfectly reasonable.
+The record carries `non_empty_turn_index` for exactly this; an empty turn is shown
+with the context that precedes the next assistant message there is.
+
+The same `.eval` reading has one more trap: the sync `read_eval_log` raises "no
+running event loop" as soon as a log actually has samples, so the store uses
+`read_eval_log_async` under its own `asyncio.run` (as `scripts/_read_transcript.py`
+does).

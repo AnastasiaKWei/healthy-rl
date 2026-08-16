@@ -38,6 +38,24 @@ STATIC = Path(__file__).parent / "static"
 NO_HEALTH = {"ok": True, "last_ok_at": None, "last_error": None}
 
 
+@dataclass(frozen=True)
+class VectorsMeta:
+    """Enough of a ``Vectors`` to read stored projections: order, layers, probe layer.
+
+    A rollouts session has no single loaded ``Vectors``: each cell was captured
+    with its own directions, layers and probe layer, and the numbers already
+    live in the record. This carries just the fields the readouts need, per
+    record, so nothing is read at one model's probe layer and labelled with
+    another's emotion order.
+    """
+    emotions: tuple[str, ...]
+    capture_layers: tuple[int, ...]
+    probe_layer: int | None
+
+    def layer_index(self, layer: int) -> int:
+        return self.capture_layers.index(layer)
+
+
 class HealthMonitor:
     """Background poll of the served model's ``/health``, for the top-bar chip."""
 
@@ -79,10 +97,11 @@ class AppState:
     engine: Any
     sandbox: Any
     store: SessionStore
-    vectors: Vectors
+    vectors: Vectors | None
     cfg: dict
     health: HealthMonitor | None = None
     read_only: bool = False
+    mode: str = "live"
     job: dict | None = None
     chats: dict[str, ChatSession] = field(default_factory=dict)
     tasks: dict[str, TaskRun] = field(default_factory=dict)
@@ -176,28 +195,34 @@ def _queued_first(data: dict, events: Iterator[dict]) -> Iterator[dict]:
     yield from events
 
 
-def _emotion_order_mismatch(rec: dict, vectors: Vectors) -> bool:
-    """Does this record's direction order disagree with the loaded vectors?
+def _emotion_order_mismatch(rec: dict, meta: Vectors | VectorsMeta) -> bool:
+    """Does this record's direction order disagree with the reference order?
 
     A record's ``proj`` columns are in the order of the ``emotions`` list that
     was live when it was written. Plotting them against a different order
     relabels every column silently -- joy drawn as despair -- so the dashboard
     checks the same way the rollout analysis does (docs/runs.md) and refuses.
     """
-    return list(rec.get("emotions") or []) != list(vectors.emotions)
+    return list(rec.get("emotions") or []) != list(meta.emotions)
 
 
-def _readouts_for(rec: dict, arrays: dict, vectors: Vectors) -> dict:
+def _readouts_for(rec: dict, arrays: dict, meta: Vectors | VectorsMeta) -> dict:
     """All four readouts x all emotions for one turn; None where unavailable."""
-    li = vectors.layer_index(vectors.probe_layer)
-    out: dict[str, dict[str, float | None]] = {e: {} for e in vectors.emotions}
-    if _emotion_order_mismatch(rec, vectors):
-        return {e: {r: None for r in stats.READOUTS} for e in vectors.emotions}
+    none_for_all = {e: {r: None for r in stats.READOUTS} for e in meta.emotions}
+    # A rollout cell whose probe layer was not captured (or is unknown) has no
+    # column to read: better an empty readout than one taken at another layer.
+    if meta.probe_layer is None or meta.probe_layer not in meta.capture_layers:
+        return none_for_all
+    li = meta.layer_index(meta.probe_layer)
+    out: dict[str, dict[str, float | None]] = {e: {} for e in meta.emotions}
+    if _emotion_order_mismatch(rec, meta):
+        return none_for_all
     for readout in stats.READOUTS:
         v = _readout_or_none(stats.turn_readout, proj=arrays["proj"], norm=arrays["norm"],
                              proj_prefill=arrays["proj_prefill"], norm_prefill=arrays["norm_prefill"],
+                             proj_end=arrays.get("proj_end"), norm_end=arrays.get("norm_end"),
                              token_kind=rec.get("token_kind", []), layer_index=li, readout=readout)
-        for i, e in enumerate(vectors.emotions):
+        for i, e in enumerate(meta.emotions):
             out[e][readout] = None if v is None else float(v[i])
     return out
 
@@ -218,20 +243,54 @@ def _readout_or_none(fn, **kw):
 def create_app(state: AppState) -> FastAPI:
     app = FastAPI(title="Affect Scope")
     st = state
-    V = st.vectors
+    V = st.vectors            # None in rollouts mode
+    ROLL = st.mode == "rollouts"
 
     def _health() -> dict:
         return st.health.status() if st.health else dict(NO_HEALTH)
 
-    def _layer(layer: int | None) -> int:
-        layer = V.probe_layer if layer is None else layer
-        if layer not in V.capture_layers:
-            raise HTTPException(400, f"layer must be one of {V.capture_layers}")
+    def _meta(rec: dict | None = None) -> Vectors | VectorsMeta:
+        """The direction metadata to read ``rec`` with: the record's own in rollouts mode.
+
+        The reference emotion order is the *model's* (the vectors artifact when
+        there is one, else the first row seen), so a record whose own order
+        disagrees is caught by ``_emotion_order_mismatch`` rather than silently
+        relabelled. Layers and probe layer come from the record itself.
+        """
+        if not ROLL:
+            return V
+        models = st.store.session.get("models", {})
+        m = models.get(rec["model"], {}) if rec else {}
+        emotions = m.get("emotions") or (rec or {}).get("emotions") or []
+        layers = (rec or {}).get("capture_layers", [])
+        return VectorsMeta(tuple(emotions), tuple(int(l) for l in layers), (rec or {}).get("probe_layer"))
+
+    def _first_meta() -> Vectors | VectorsMeta:
+        """Session-level emotions/layers for the page's boot: the first model's in rollouts mode."""
+        if not ROLL:
+            return V
+        first = next(iter(st.store.session.get("models", {}).values()), {})
+        return VectorsMeta(tuple(first.get("emotions", [])), tuple(first.get("capture_layers", [])),
+                           first.get("probe_layer"))
+
+    def _known_emotions() -> list[str]:
+        """Every direction name the session can serve; the union across models in rollouts mode."""
+        if not ROLL:
+            return list(V.emotions)
+        names = [e for m in st.store.session.get("models", {}).values() for e in m.get("emotions", [])]
+        return list(dict.fromkeys(names))
+
+    def _layer(layer: int | None, rec: dict | None = None) -> int:
+        meta = _meta(rec)
+        layer = meta.probe_layer if layer is None else layer
+        if layer not in meta.capture_layers:
+            raise HTTPException(400, f"layer must be one of {list(meta.capture_layers)}"
+                                     + (f" for {rec['model']}" if rec and ROLL else ""))
         return layer
 
     def _writable() -> None:
-        if st.read_only:
-            raise HTTPException(409, "replay session is read-only")
+        if st.read_only or ROLL:
+            raise HTTPException(409, "session is read-only")
 
     def _split(split: str) -> str:
         """Reject an unknown split here rather than let the sandbox 500 on it."""
@@ -297,38 +356,52 @@ def create_app(state: AppState) -> FastAPI:
 
     @app.get("/api/session")
     def session():
+        meta = _first_meta()
         return _clean({"session": st.store.session, "health": _health(), "read_only": st.read_only,
-                       "job": st.job or {}, "emotions": V.emotions, "capture_layers": V.capture_layers,
-                       "probe_layer": V.probe_layer, "n_records": len(st.store.records()),
-                       "defaults": st.cfg, "records_dir": str(st.store.root)})
+                       "mode": st.mode, "job": st.job or {}, "emotions": meta.emotions,
+                       "capture_layers": meta.capture_layers, "probe_layer": meta.probe_layer,
+                       "n_records": len(st.store.records()), "defaults": st.cfg,
+                       "records_dir": str(st.store.root)})
 
     @app.get("/api/health")
     def health():
         return _health()
 
     @app.get("/api/conversations")
-    def conversations():
+    def conversations(model: list[str] = Query(default=[]), version: list[str] = Query(default=[])):
         live = {cid: t.state for cid, t in st.tasks.items()}
         convs = st.store.conversations()
+        if model:
+            convs = [c for c in convs if c.get("model") in model]
+        if version:
+            convs = [c for c in convs if c.get("version") in version]
         for c in convs:
             c["state"] = live.get(c["conversation_id"], "done")
         return _clean({"conversations": convs})
 
-    @app.get("/api/conversations/{cid}")
+    # A rollout conversation id is "model/version/task/sN", so the id spans path segments.
+    @app.get("/api/conversations/{cid:path}")
     def conversation(cid: str, emotion: str | None = None, readout: str = "start"):
-        emotion = V.emotions[0] if emotion is None else emotion
-        if emotion not in V.emotions:
-            raise HTTPException(400, f"emotion must be one of {list(V.emotions)}")
+        known = _known_emotions()
+        emotion = (known[0] if known else None) if emotion is None else emotion
+        if emotion not in known:
+            raise HTTPException(400, f"emotion must be one of {known}")
         if readout not in stats.READOUTS:
             raise HTTPException(400, f"readout must be one of {list(stats.READOUTS)}")
         recs = [r for r in st.store.records() if r["conversation_id"] == cid]
         if not recs:
             raise HTTPException(404, f"no conversation {cid}")
+        if ROLL:
+            recs = [st.store.record(r["record_id"]) for r in recs]   # tokens, context, feedback
         turns = []
         for r in recs:
+            # Read the arrays first: doing so can append a warning to the record and
+            # mark it misaligned, and the copy below has to carry that, not precede it.
+            arrays = st.store.arrays(r["record_id"])
+            meta = _meta(r)
             t = {k: v for k, v in r.items() if k != "arrays"}
-            t["readouts"] = _readouts_for(r, st.store.arrays(r["record_id"]), V)
-            t["emotion_order_mismatch"] = _emotion_order_mismatch(r, V)
+            t["readouts"] = _readouts_for(r, arrays, meta)
+            t["emotion_order_mismatch"] = _emotion_order_mismatch(r, meta)
             turns.append(t)
         conv = next(c for c in st.store.conversations() if c["conversation_id"] == cid)
         conv["state"] = st.tasks[cid].state if cid in st.tasks else "done"
@@ -397,6 +470,7 @@ def create_app(state: AppState) -> FastAPI:
 
     @app.post("/api/task/{cid}/continue")
     async def task_continue(cid: str, request: Request):
+        _writable()
         run = st.tasks.get(cid)
         if run is None:
             raise HTTPException(404, f"no live task {cid}")
@@ -409,35 +483,110 @@ def create_app(state: AppState) -> FastAPI:
 
     @app.post("/api/task/{cid}/stop")
     def task_stop(cid: str):
+        _writable()
         run = st.tasks.get(cid)
         if run is None:
             raise HTTPException(404, f"no live task {cid}")
         run.stop()
         return {"state": run.state}
 
-    @app.get("/api/records/{rid}/tokens")
+    @app.get("/api/records/{rid:path}/tokens")
     def tokens(rid: str, layer: int | None = None, smooth: int = 1):
         try:
             rec = st.store.record(rid)
         except KeyError:
             raise HTTPException(404, f"no record {rid}")
-        layer = _layer(layer)
+        meta = _meta(rec)
+        layer = _layer(layer, rec)
         arrays = st.store.arrays(rid)
-        cos = stats.token_cosine(arrays["proj"], arrays["norm"], V.layer_index(layer))
+        cos = stats.token_cosine(arrays["proj"], arrays["norm"], meta.layer_index(layer))
         if smooth > 1 and cos.size:
             cos = np.stack([stats.moving_mean(cos[:, e], smooth) for e in range(cos.shape[1])], axis=1)
         kinds = rec.get("token_kind", [])
         think = [i for i, k in enumerate(kinds) if k == "think"]
         answer = [i for i, k in enumerate(kinds) if k == "answer"]
         return _clean({"tokens": rec.get("tokens", []), "token_kind": kinds, "cosine": cos, "layer": layer,
-                       "emotions": V.emotions, "norm": arrays["norm"][:, V.layer_index(layer)], "smooth": smooth,
+                       "emotions": meta.emotions, "norm": arrays["norm"][:, meta.layer_index(layer)], "smooth": smooth,
                        "markers": {"think_end": think[-1] if think else None,
                                    "answer_start": answer[0] if answer else None}})
 
+    def _aggregate_group(recs: list[dict], *, meta: Vectors | VectorsMeta, layer: int, position: str,
+                         stat: str, segment: str, drop_cap: bool) -> dict:
+        """One cell's by-turn series and paired delta, read at ``layer`` in its own emotion order."""
+        li = meta.layer_index(layer)
+        by_conv: dict[str, list] = {}
+        for r in recs:
+            by_conv.setdefault(r["conversation_id"], []).append(r)
+        seqs, excluded = [], 0
+        for rows in by_conv.values():
+            rows.sort(key=lambda r: r["turn_index"])
+            seq = []
+            for r in rows:
+                if r.get("n_generated", 0) == 0:
+                    continue  # an empty turn holds no position among non-empty turns
+                if drop_cap and r.get("at_cap"):
+                    excluded += 1
+                    seq.append(None)
+                    continue
+                if _emotion_order_mismatch(r, meta):
+                    seq.append(None)  # unreadable columns; skipped and counted, never relabelled
+                    continue
+                a = st.store.arrays(r["record_id"])
+                if stat == "token":
+                    v = _readout_or_none(stats.turn_readout, proj=a["proj"], norm=a["norm"],
+                                         proj_prefill=a["proj_prefill"], norm_prefill=a["norm_prefill"],
+                                         proj_end=a.get("proj_end"), norm_end=a.get("norm_end"),
+                                         token_kind=r.get("token_kind", []), layer_index=li, readout=position)
+                else:
+                    v = _readout_or_none(stats.turn_mean, proj=a["proj"], norm=a["norm"],
+                                         token_kind=r.get("token_kind", []), layer_index=li, segment=segment)
+                seq.append(v)
+            if seq:
+                seqs.append(seq)
+        E = len(meta.emotions)
+        bt = stats.by_turn_index(seqs, n_emotions=E)
+        return {"emotions": list(meta.emotions), "layer": layer, "n_conversations": len(seqs),
+                "n_records": len(recs), "excluded_cap": excluded,
+                "skipped": int(np.asarray(bt["skipped"]).sum()),
+                "by_turn": bt, "delta": stats.paired_delta(seqs, n_emotions=E)}
+
+    def _widen(group: dict, emotions: list[str]) -> dict:
+        """Re-index a group's per-emotion columns onto the union order; NaN where the model lacks one.
+
+        Two models need not carry the same directions, and column ``k`` of one is
+        not column ``k`` of the other. The page draws every group against one
+        legend, so the columns are moved onto the union order here rather than
+        lined up by position downstream.
+        """
+        idx = [group["emotions"].index(e) if e in group["emotions"] else None for e in emotions]
+
+        def cols(a):
+            a = np.asarray(a, dtype=np.float64)
+            out = np.full(a.shape[:-1] + (len(emotions),), np.nan)
+            for j, i in enumerate(idx):
+                if i is not None:
+                    out[..., j] = a[..., i]
+            return out
+
+        bt, de = group["by_turn"], group["delta"]
+        group["by_turn"] = {**bt, "mean": cols(bt["mean"]), "sem": cols(bt["sem"])}
+        group["delta"] = {**de, "mean": cols(de["mean"]), "sem": cols(de["sem"]), "p": cols(de["p"])}
+        # The key names the columns it ships with, so it moves with them.
+        group["emotions"] = list(emotions)
+        return group
+
     @app.get("/api/aggregate")
     def aggregate(source: str = "task", split: str | None = None, position: str = "start", stat: str = "token",
-                  segment: str = "all", include_cap: bool = False, layer: int | None = None):
-        """By-turn series and paired last-minus-first delta over one source.
+                  segment: str = "all", include_cap: bool = False, layer: str | None = None,
+                  model: list[str] = Query(default=[]), version: list[str] = Query(default=[])):
+        """By-turn series and paired last-minus-first delta over one source, by group.
+
+        In rollouts mode the groups are ``(model, version)`` cells and ``layer``
+        is either ``probe`` -- each group read at its own model's probe layer --
+        or an integer that every selected model must have captured. A live or
+        replay session is one group of one model. Each group carries its own
+        emotion order; ``emotions`` at the top level is the union the page draws
+        against, and every group's columns are widened onto it.
 
         ``position`` names the readout when ``stat="token"``; ``segment`` names
         the span when ``stat="mean"``. Each is inert under the other stat.
@@ -455,58 +604,72 @@ def create_app(state: AppState) -> FastAPI:
         recovers is one flagged ``at_cap`` that finished on ``stop`` exactly at
         the cap, which still has its last row.
         """
-        if source not in ("task", "chat"):
-            raise HTTPException(400, "source must be 'task' or 'chat'")
+        if source not in ("task", "chat", "rollout"):
+            raise HTTPException(400, "source must be 'task', 'chat' or 'rollout'")
         if position not in stats.READOUTS or stat not in ("token", "mean") or segment not in stats.SEGMENTS:
             raise HTTPException(400, "bad position/stat/segment")
-        if split is not None:
+        if split is not None and source != "rollout":
             _split(split)
-        layer = _layer(layer)
-        li = V.layer_index(layer)
+        want_layer: int | None = None
+        if layer not in (None, "", "probe"):
+            try:
+                want_layer = int(layer)
+            except ValueError:
+                raise HTTPException(400, "layer must be 'probe' or an integer") from None
         recs = [r for r in st.store.records() if r.get("source") == source]
-        if source == "task":
+        if source == "rollout":
+            # A rollouts session has no sandbox to name the splits, so the rollouts on
+            # disk do: a typo would otherwise come back as an empty aggregate.
+            known = {r.get("bench_split") for r in recs}
+            if split is not None and split not in known:
+                raise HTTPException(400, f"split must be one of {sorted(known)}")
+            if model:
+                recs = [r for r in recs if r["model"] in model]
+            if version:
+                recs = [r for r in recs if r["version"] in version]
+        if source in ("task", "rollout"):
             splits = {r.get("bench_split") for r in recs}
             if split is None and len(splits) > 1:
                 raise HTTPException(400, "choose a split; conflicting and original cannot be pooled")
             if split is not None:
                 recs = [r for r in recs if r.get("bench_split") == split]
-        by_conv: dict[str, list] = {}
-        for r in recs:
-            by_conv.setdefault(r["conversation_id"], []).append(r)
+        if source == "rollout":
+            # Only now, once the selection is narrowed: a full record tokenises its turn,
+            # and the split the caller did not ask for should not pay for that.
+            recs = [st.store.record(r["record_id"]) for r in recs]
         # The cap only contaminates the end readout: it is the position that moves to
         # wherever the budget ran out. A segment mean over the same turn is still fine.
         drop_cap = stat == "token" and position == "end" and not include_cap
-        seqs, excluded = [], 0
-        for rows in by_conv.values():
-            rows.sort(key=lambda r: r["turn_index"])
-            seq = []
-            for r in rows:
-                if r.get("n_generated", 0) == 0:
-                    continue  # an empty turn holds no position among non-empty turns
-                if drop_cap and r.get("at_cap"):
-                    excluded += 1
-                    seq.append(None)
-                    continue
-                if _emotion_order_mismatch(r, V):
-                    seq.append(None)  # unreadable columns; skipped and counted, never relabelled
-                    continue
-                a = st.store.arrays(r["record_id"])
-                if stat == "token":
-                    v = _readout_or_none(stats.turn_readout, proj=a["proj"], norm=a["norm"],
-                                         proj_prefill=a["proj_prefill"], norm_prefill=a["norm_prefill"],
-                                         token_kind=r.get("token_kind", []), layer_index=li, readout=position)
-                else:
-                    v = _readout_or_none(stats.turn_mean, proj=a["proj"], norm=a["norm"],
-                                         token_kind=r.get("token_kind", []), layer_index=li, segment=segment)
-                seq.append(v)
-            if seq:
-                seqs.append(seq)
-        E = len(V.emotions)
-        return _clean({"emotions": V.emotions,
-                       "by_turn": stats.by_turn_index(seqs, n_emotions=E),
-                       "delta": stats.paired_delta(seqs, n_emotions=E),
-                       "n_conversations": len(seqs), "n_records": len(recs), "excluded_cap": excluded,
+        groups_in: dict[tuple, list[dict]] = {}
+        for r in recs:
+            key = (r["model"], r["version"]) if source == "rollout" else (st.store.session.get("model"), None)
+            groups_in.setdefault(key, []).append(r)
+        if not groups_in and source != "rollout":
+            # A live session with nothing recorded yet is still one group, so the page's
+            # single-group consumers get an empty table rather than an undefined one.
+            groups_in[(st.store.session.get("model"), None)] = []
+        groups = []
+        for (m, v), rs in sorted(groups_in.items(), key=lambda kv: (str(kv[0][0]), str(kv[0][1]))):
+            meta = _meta(rs[0]) if rs else _first_meta()
+            lyr = meta.probe_layer if want_layer is None else want_layer
+            if lyr not in meta.capture_layers:
+                raise HTTPException(400, f"layer L{lyr} is not a capture layer of {m} "
+                                         f"(has {list(meta.capture_layers)})")
+            g = _aggregate_group(rs, meta=meta, layer=lyr, position=position, stat=stat, segment=segment,
+                                 drop_cap=drop_cap)
+            g.update(model=m, version=v, bench_split=(rs[0].get("bench_split") if rs else split),
+                     mindset=(rs[0].get("mindset") if rs else None))
+            groups.append(g)
+        emotions: list[str] = []
+        for g in groups:
+            for e in g["emotions"]:
+                if e not in emotions:
+                    emotions.append(e)
+        groups = [_widen(g, emotions) for g in groups]
+        return _clean({"groups": groups, "emotions": emotions,
                        "params": {"source": source, "split": split, "position": position, "stat": stat,
-                                  "segment": segment, "include_cap": include_cap, "layer": layer}})
+                                  "segment": segment, "include_cap": include_cap,
+                                  "layer": "probe" if want_layer is None else want_layer,
+                                  "model": model, "version": version}})
 
     return app

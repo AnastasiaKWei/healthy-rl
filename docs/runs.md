@@ -727,7 +727,34 @@ scripts/rescore_transcripts.py --model Qwen3.5-9B --version d6
 
 # pipeline status
 scripts/pilot_status.sh
+
+# transcripts + per-token emotion strips + cross-cell aggregates, in the browser
+.venv/bin/python -m healthy_rl.dashboard --rollouts $ARTIFACT_DIR/rollouts/gemma-3-12b-it --port 8765
+# then from your machine:  ssh -L 8765:localhost:8765 <login-host>   and open http://localhost:8765
 ```
+
+`--rollouts` takes a cell (`<rollouts>/<model>/<version>`), a model, or the whole
+root, and opens them read-only in the Affect Scope dashboard: transcript, token
+strip, per-turn trajectory, and an aggregate that puts several cells side by side.
+Per-token strips exist only for records that carry `t0_proj_L*` — written after
+the mindset merge (2026-08-16) — and the startup table says how many rollouts per
+cell have them; older cells show only the `start` and `end` readouts computed from
+the boundary residuals, which needs `$ARTIFACT_DIR/vectors/<model>/v1` for that
+model. Older rows carry no `turn_completion` either (the two keys arrived
+together: of the 1645 rows on disk on 2026-08-16, the same 1031 have both and no
+row has one without the other), so for those cells the viewer takes the assistant
+text out of the `.eval` log instead: the sample is matched by `(task_id, epoch)`
+with `epoch == sample + 1`, the bubble is filled and split into thinking/answer as
+usual, and both the turn header (`· text from .eval`) and the record's warnings say
+where the text came from. Nothing is aligned against arrays there — there are none.
+That pair only identifies a sample **within one log**, so it is used only when a
+single `.eval` in the rollout's shard carries it. A steering sweep runs its shard
+once per condition and writes a log per run, all holding the same ids and epochs
+(`Olmo-3.1-32B-Think/v1`: 9–13 logs per shard), and nothing in the row says which
+run it came from — those turns keep their empty bubbles and say `N .eval logs in
+this shard hold a sample with this id and epoch`. Checked on 2026-08-16 over
+every old cell on disk by re-tokenising the recovered text against the row's own
+`turn_n_generated` (see [measurement.md](measurement.md#rollout-token-strips)).
 
 ## Record fields worth knowing
 

@@ -375,3 +375,65 @@ Which of the other readouts survive depends on where the cap landed:
 One stored-field caveat for anyone reading the npz directly: `res_end_L{probe}` on
 a capped turn is the residual at token n−1, not token n. The hook overwrites that
 key on every decode pass, so it holds the last row that existed; nothing pads it.
+
+### Rollout token strips
+
+The same dashboard reads pilot rollouts (`--rollouts`, docs/runs.md "Reading a
+run"). A rollout's npz stores the projections but not the tokens, so the strip is
+built by **re-tokenising `turn_completion`** with that model's HF tokenizer from
+`$MODEL_DIR/<model>`. Token strings come from the fast tokenizer's offset mapping
+rather than from decoding each id: the strings are slices of the completion, they
+tile it exactly (`"".join(tokens) == text`), and a strip cell is therefore
+literally a piece of the text the model wrote, byte-level markers and all.
+
+Alignment is then checked against the npz's decode rows, per turn, with the EOS
+rule: `N == D` is aligned; `N + 1 == D` is aligned and the extra row is the
+end-of-sequence token, which the completion text does not contain — a cell reading
+`<eos>` is appended so the strip has one cell per row and `end` stays the row it
+always was. **Any other count withholds the strip rather than shifting it**: the
+turn is marked `misaligned`, the two counts are shown, and its `start` readout
+(read at the prefill row, before any token) still stands. A shifted strip would be
+a picture of the wrong tokens and would look entirely plausible.
+
+Measured on 2026-08-16 over the cells the gate touched: Ministral-3-14B appr6, 1
+misaligned turn of 144; Qwen3.5-9B growth6, 5 of 160; gemma-3-12b-it spappr6, 0 of
+144; Nemotron d6 and Olmo v1, no per-token arrays to check. Every misalignment
+seen was a **small deficit on a very long turn** — 8324 tokens against 8326 rows,
+9784 against 9788 — i.e. re-tokenising the completion text does not always
+reproduce the ids that were sampled, which is a tokenizer round-trip property and
+not an engine fault. Reasoning models whose completions omit the reasoning span
+would misalign systematically; none of the pilot's do. The Settings cell table reports `n_misaligned` **among the records
+tokenised so far** (`n_tokenised`), because tokenisation is lazy — the number grows
+as you read, and is not a share of the cell until the cell has been read.
+
+A rollout's identity here is `(task_id, sample)`, not `(task_id, epoch)`: a cell
+holds several samples of each task, all at Inspect epoch 1, and a resumed shard
+restarts the numbering. A steering sweep re-runs each pair once per condition, so
+a row whose `condition_name` is neither absent nor `readout` carries it in the id
+too (`Olmo-3.1-32B-Think/v1`: all 172 rows show as 172 rollouts over 36 pairs, 0
+`n_duplicate_rows`, the condition on the rail line).
+
+The surrounding messages come from the cell's `.eval` log, and the sample is
+matched **by completion text**, not by id — ids repeat within one log. Cells
+written before the mindset merge store no `turn_completion` at all, so there is no
+text to match on; those fall back to `(task_id, epoch)` with `epoch == sample + 1`,
+and the assistant message is used as the turn's text (flagged `text from .eval`).
+That pair is unique only inside one log, so it is used only when a single `.eval`
+in the shard carries it — a sweep writes one log per condition, all repeating the
+same ids and epochs, and nothing in the row says which run wrote it, so those turns
+keep empty bubbles and name the ambiguity. Verified on 2026-08-16 by re-tokenising
+every recovered completion against the row's own `turn_n_generated`, over all 21
+cells on disk that store no `turn_completion`: 2212 turns recovered, 395 refused
+(356 of them the Olmo sweep), and the largest disagreement anywhere was 8 tokens
+— 1.2% — which is the same round-trip deficit the strips show. A wrong sample
+would not be off by 3 tokens in 3000. One consequence more: a turn that generated
+nothing wrote no assistant message, so `.eval` messages line up with the non-empty
+turns.
+
+The cross-cell aggregate draws each group **at its own model's probe layer**
+(`layer=probe`; an explicit integer must be a capture layer of every selected
+model, else 400). Cosines from different models are different quantities measured
+against differently-fitted directions, and nothing here makes them commensurable:
+the chart puts the lines side by side, labels each with its model and layer, and
+leaves the comparison to the reader. Within one model, comparing a mindset arm
+against its own base cell is the comparison the tool is for.

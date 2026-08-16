@@ -8,7 +8,9 @@ import pytest
 
 from rollout_cell import EMOTIONS, FakeEvalSamples, GappedTokenizer, WhitespaceTokenizer, make_cell
 from healthy_rl.dashboard.generation import split_reasoning
-from healthy_rl.dashboard.rollout_store import RolloutStore, align_tokens, discover_cells, records_from_row, tokenise
+from healthy_rl.dashboard.rollout_store import (RolloutStore, align_tokens, discover_cells, records_from_row,
+                                                sample_messages, tokenise)
+from healthy_rl.rollouts import Vectors
 
 ROWS = [
     {"task_id": "lcbhard_0", "sample": 0, "completions": ["a b c", "[THINK]x y[/THINK] z"], "passed": False},
@@ -39,8 +41,45 @@ def test_discover_cells_from_root_model_and_cell(tmp_path):
 
 def test_discover_cells_dedupes_and_reads_missing_manifest(tmp_path):
     c = make_cell(tmp_path / "r", "m1", "d6", rows=ROWS[:1], max_tokens=None)
-    cells, _ = discover_cells([tmp_path / "r", c])
+    cells, ignored = discover_cells([tmp_path / "r", c])
     assert len(cells) == 1 and cells[0].max_tokens is None
+    assert ignored == []                       # the same directory twice is not a second cell
+
+
+def test_discover_cells_keeps_one_path_per_model_version(tmp_path):
+    """Two roots holding the same cell: the key is what every record resolves its npz through,
+    so keeping both would serve root A's arrays under root B's label."""
+    a = make_cell(tmp_path / "A", "m", "v1", rows=ROWS[:1])
+    b = make_cell(tmp_path / "B", "m", "v1", rows=ROWS[:1])
+    cells, ignored = discover_cells([tmp_path / "A", tmp_path / "B"])
+    assert len(cells) == 1 and cells[0].path == a.resolve()
+    assert ignored == [b.resolve()]
+
+
+def test_discover_cells_names_a_relative_cell_path(tmp_path, monkeypatch):
+    """``--rollouts .`` from inside a cell: model/version come off the path, so resolve first."""
+    c = make_cell(tmp_path / "r", "m1", "d6", rows=ROWS[:1])
+    monkeypatch.chdir(c)
+    cells, _ = discover_cells(["."])
+    assert [(x.model, x.version) for x in cells] == [("m1", "d6")]
+    assert cells[0].path == c.resolve()
+
+
+def test_a_truncated_npz_does_not_break_the_store(tmp_path):
+    """A half-written npz raises zipfile.BadZipFile, whose only base is Exception: every np.load
+    site has to survive it, or one partial file under the root takes the whole dashboard down."""
+    st = _store(tmp_path)
+    npz = tmp_path / "rollouts" / "fake-model" / "appr6" / "residuals" / "lcbhard_0_s0.npz"
+    npz.write_bytes(npz.read_bytes()[:100])
+    st = RolloutStore.open([tmp_path / "rollouts"], tokenizer_loader=lambda m: WhitespaceTokenizer(),
+                           vectors_loader=lambda m: None, eval_loader=FakeEvalSamples({}))
+    assert st.session["cells"] and len(st.records()) == 8      # session reads every rollout's npz
+    assert len(st.conversations()) == 4
+    r = st.record("fake-model/appr6/lcbhard_0/s0/t0")
+    assert r["misaligned"] is True and "npz unreadable" in r["error"]
+    assert st.arrays("fake-model/appr6/lcbhard_0/s0/t0")["proj"].shape[0] == 0
+    ok = st.record("fake-model/appr6/lcbhard_0/s1/t0")         # the neighbouring rollout is untouched
+    assert ok["misaligned"] is False and ok["error"] is None
 
 
 def test_records_from_row_shape(tmp_path):
@@ -126,19 +165,20 @@ def test_duplicate_row_is_collapsed_and_counted(tmp_path):
     f = cell / "rollouts.shard0of2.jsonl"
     row = json.loads(f.read_text().splitlines()[0])       # lcbhard_0/s0 again: a re-run after a crash
     row["passed"] = True                                  # the later row is the one that should win
-    stale = st.record("fake-model/appr6/lcbhard_0/s0/t0")  # tokenised from the row about to be replaced
+    # the last turn is the one whose `passed` is the rollout's verdict, so it shows which row was read
+    stale = st.record("fake-model/appr6/lcbhard_0/s0/t1")  # tokenised from the row about to be replaced
     untouched = st.record("fake-model/appr6/lcbhard_0/s1/t0")  # same shard file, a rollout nobody rewrote
     assert stale["passed"] is False
     with f.open("a") as fh:
         fh.write(json.dumps(row) + "\n")
     import os, time
     os.utime(f, (time.time() + 5, time.time() + 5))
-    fresh = st.record("fake-model/appr6/lcbhard_0/s0/t0")
+    fresh = st.record("fake-model/appr6/lcbhard_0/s0/t1")
     assert fresh is not stale and fresh["passed"] is True and fresh["tokenised"] is True
     assert st.record("fake-model/appr6/lcbhard_0/s1/t0") is untouched   # the file's new mtime alone is not a change
     recs = st.records()
     assert len(recs) == 8 and len({r["record_id"] for r in recs}) == 8
-    assert next(r for r in recs if r["record_id"] == "fake-model/appr6/lcbhard_0/s0/t0")["passed"] is True
+    assert next(r for r in recs if r["record_id"] == "fake-model/appr6/lcbhard_0/s0/t1")["passed"] is True
     convs = {c["conversation_id"]: c for c in st.conversations()}
     assert len(convs) == 4 and convs["fake-model/appr6/lcbhard_0/s0"]["n_turns"] == 2
     cells = {(c["model"], c["version"]): c for c in st.session["cells"]}
@@ -341,3 +381,325 @@ def test_arrays_layer_mismatch_marks_misaligned(tmp_path):
     assert a["proj"].shape == (0, 2, 3)      # nothing usable is served under the wrong layer list
     r = st.record("fake-model/appr6/lcbhard_0/s0/t0")
     assert r["misaligned"] is True and "L30" in r["error"]
+
+
+def _fake_vectors(*, emotions=EMOTIONS, probe_layer=20, capture_layers=(10, 20), d=8):
+    """A vectors artifact whose probe-layer directions read the first ``E`` residual components."""
+    E, L = len(emotions), len(capture_layers)
+    dirs = np.zeros((E, L, d), np.float32)
+    dirs[:, list(capture_layers).index(probe_layer), :E] = np.eye(E)
+    return Vectors(directions=dirs, emotions=list(emotions), capture_layers=list(capture_layers),
+                   probe_layer=probe_layer, mean_residual_norm={l: 1.0 for l in capture_layers}, path=Path("fake"))
+
+
+def _old_cell_store(tmp_path, vec):
+    """One old cell (boundary residuals only), with ``vec`` as the model's vectors artifact."""
+    make_cell(tmp_path / "rollouts", "fake-model", "d6", rows=ROWS[:1], token_arrays=False)
+    return RolloutStore.open([tmp_path / "rollouts"], tokenizer_loader=lambda m: WhitespaceTokenizer(),
+                             vectors_loader=lambda m: vec, eval_loader=FakeEvalSamples({}))
+
+
+def test_arrays_for_row_without_a_residuals_file(tmp_path):
+    cell = make_cell(tmp_path / "rollouts", "fake-model", "d6", rows=ROWS[:1], token_arrays=False)
+    f = cell / "rollouts.shard0of2.jsonl"
+    row = json.loads(f.read_text()); row["residuals"] = None; f.write_text(json.dumps(row) + "\n")
+    st = RolloutStore.open([tmp_path / "rollouts"], tokenizer_loader=lambda m: WhitespaceTokenizer(),
+                           vectors_loader=lambda m: None, eval_loader=FakeEvalSamples({}))
+    a = st.arrays("fake-model/d6/lcbhard_0/s0/t0")
+    assert a["proj"].shape == (0, 2, 3) and np.isnan(a["norm_prefill"]).all() and np.isnan(a["proj_prefill"]).all()
+    r = st.record("fake-model/d6/lcbhard_0/s0/t0")
+    assert r["misaligned"] is False and r["error"] is None    # no npz to be missing: an honest array-less row
+
+
+def test_arrays_rejects_vectors_from_a_different_probe_layer(tmp_path):
+    st = _old_cell_store(tmp_path, _fake_vectors(capture_layers=(10, 30), probe_layer=30))
+    a = st.arrays("fake-model/d6/lcbhard_0/s0/t0")
+    assert a["proj"].shape == (0, 2, 3) and np.isnan(a["proj_prefill"]).all()
+    assert "proj_end" not in a and "res_start_L20" not in a   # nothing is served off the wrong artifact
+    r = st.record("fake-model/d6/lcbhard_0/s0/t0")
+    assert r["misaligned"] is True and "vectors probe layer L30 differs from the record's L20" in r["error"]
+
+
+def test_arrays_rejects_vectors_with_a_different_emotion_count(tmp_path):
+    st = _old_cell_store(tmp_path, _fake_vectors(emotions=(*EMOTIONS, "calm")))
+    a = st.arrays("fake-model/d6/lcbhard_0/s0/t0")
+    assert a["proj"].shape == (0, 2, 3) and np.isnan(a["proj_prefill"]).all() and "proj_end" not in a
+    r = st.record("fake-model/d6/lcbhard_0/s0/t0")
+    assert r["misaligned"] is True and "vectors list 4 emotions, record lists 3" in r["error"]
+
+
+def test_arrays_rejects_vectors_whose_emotion_order_differs(tmp_path):
+    st = _old_cell_store(tmp_path, _fake_vectors(emotions=(EMOTIONS[1], EMOTIONS[0], EMOTIONS[2])))
+    a = st.arrays("fake-model/d6/lcbhard_0/s0/t0")
+    assert a["proj"].shape == (0, 2, 3) and np.isnan(a["proj_prefill"]).all() and "proj_end" not in a
+    r = st.record("fake-model/d6/lcbhard_0/s0/t0")
+    assert r["misaligned"] is True and "vectors emotion order differs from the record's" in r["error"]
+
+
+def test_records_from_row_separates_steering_conditions(tmp_path):
+    """A steering sweep re-runs one (task, sample) once per condition; the rows are different
+    rollouts and must not collapse onto each other."""
+    cell = make_cell(tmp_path / "r", "m1", "v1", rows=ROWS[:1])
+    row = json.loads((cell / "rollouts.shard0of2.jsonl").read_text().splitlines()[0])
+    kw = dict(model="m1", version="v1", max_tokens=4, created_at="2026-08-16T00:00:00+00:00")
+    base = records_from_row(dict(row, condition_name="readout"), **kw)
+    steer = records_from_row(dict(row, condition_name="calm+0.1"), **kw)
+    assert base[0]["conversation_id"] == "m1/v1/lcbhard_0/s0"
+    assert steer[0]["conversation_id"] == "m1/v1/lcbhard_0/s0/ccalm+0.1"
+    assert steer[0]["record_id"] == "m1/v1/lcbhard_0/s0/ccalm+0.1/t0"
+    assert records_from_row(dict(row, condition_name=None), **kw)[0]["conversation_id"] == base[0]["conversation_id"]
+
+
+def test_store_keeps_a_steering_sweeps_conditions_apart(tmp_path):
+    cell = make_cell(tmp_path / "r", "m1", "v1", rows=ROWS[:1])
+    f = cell / "rollouts.shard0of2.jsonl"
+    row = json.loads(f.read_text().splitlines()[0])
+    f.write_text("".join(json.dumps(dict(row, condition_name=c)) + "\n" for c in ("readout", "calm+0.1")))
+    st = RolloutStore.open([tmp_path / "r"], tokenizer_loader=lambda m: WhitespaceTokenizer(),
+                           vectors_loader=lambda m: None, eval_loader=FakeEvalSamples({}))
+    convs = st.conversations()
+    assert len(convs) == 2 and len({c["conversation_id"] for c in convs}) == 2
+    assert sorted(c["condition_name"] for c in convs) == ["calm+0.1", "readout"]
+    assert st.session["cells"][0]["n_duplicate_rows"] == 0
+
+
+SAMPLES = [
+    {"id": "lcbhard_0", "epoch": 1, "messages": [
+        {"role": "user", "content": "PROBLEM"}, {"role": "assistant", "content": "a b c"},
+        {"role": "user", "content": "Your previous attempt failed the tests. FAIL1"},
+        {"role": "assistant", "content": "[THINK]x y[/THINK] z"},
+        {"role": "user", "content": "Your previous attempt failed the tests. FAIL2"}]},
+    {"id": "lcbhard_0", "epoch": 1, "messages": [
+        {"role": "user", "content": "PROBLEM"}, {"role": "assistant", "content": "p q"},
+        {"role": "user", "content": "FAILP"}, {"role": "assistant", "content": "r s t u"}]},
+    # ROWS[2]: turn 0 generated nothing, so the .eval holds one assistant message for two turns
+    {"id": "lcbhard_1", "epoch": 1, "messages": [
+        {"role": "user", "content": "PROBLEM"}, {"role": "assistant", "content": "k l m"},
+        {"role": "user", "content": "Your previous attempt failed the tests. FAILK"}]},
+]
+
+EMPTY_ROW = {"task_id": "lcbhard_2", "sample": 0, "completions": ["", ""], "n_generated": [0, 0], "passed": False}
+EMPTY_SAMPLE = {"id": "lcbhard_2", "epoch": 1, "messages": [{"role": "user", "content": "PROBLEM"}]}
+
+
+def _eval_store(tmp_path, samples, rows=ROWS, **kw):
+    """A one-cell store whose shard holds exactly one .eval, carrying ``samples``."""
+    make_cell(tmp_path / "rollouts", "fake-model", "appr6", rows=rows, **kw)
+    log = tmp_path / "rollouts" / "fake-model" / "appr6" / "inspect-logs" / "shard0of2" / "x.eval"
+    evals = FakeEvalSamples({str(log): samples})
+    st = RolloutStore.open([tmp_path / "rollouts"], tokenizer_loader=lambda m: WhitespaceTokenizer(),
+                           vectors_loader=lambda m: None, eval_loader=evals)
+    return st, evals
+
+
+def test_sample_messages_matches_by_completion():
+    m, rule = sample_messages(SAMPLES, "lcbhard_0", ["p q", "r s t u"])
+    assert m[1]["content"] == "p q" and rule == "completion"
+    assert sample_messages(SAMPLES, "lcbhard_0", ["a b c", "[THINK]x y[/THINK] z"])[0][3]["content"].endswith(" z")
+    assert sample_messages(SAMPLES, "lcbhard_0", ["nope"]) == (None, None)
+    assert sample_messages(SAMPLES, "lcbhard_7", ["a b c"]) == (None, None)
+    # a rollout whose first turn generated nothing matches on its first non-empty completion
+    assert sample_messages(SAMPLES, "lcbhard_0", ["", "p q"])[0] is not None
+    # nothing generated at all: no completion to match on, so the id alone -- if it is unambiguous
+    assert sample_messages([EMPTY_SAMPLE], "lcbhard_2", ["", ""])[0][0]["content"] == "PROBLEM"
+    assert sample_messages([EMPTY_SAMPLE, EMPTY_SAMPLE], "lcbhard_2", ["", ""]) == (None, None)
+
+
+OLD_SAMPLES = [
+    {"id": "lcbhard_5", "epoch": 1, "messages": [
+        {"role": "user", "content": "PROBLEM ep1"}, {"role": "assistant", "content": "a b c"},
+        {"role": "user", "content": "FAIL ep1"}, {"role": "assistant", "content": "d e f g"}]},
+    {"id": "lcbhard_5", "epoch": 2, "messages": [
+        {"role": "user", "content": "PROBLEM ep2"}, {"role": "assistant", "content": "[THINK]x y[/THINK] z"},
+        {"role": "user", "content": "FAIL ep2"}, {"role": "assistant", "content": "q r s t"}]},
+]
+
+# an old cell (before the mindset merge, 2026-08-16): token counts but no turn_completion, no arrays
+OLD_ROW = {"task_id": "lcbhard_5", "sample": 1, "completions": ["", ""], "n_generated": [3, 4], "passed": False}
+
+
+def test_sample_messages_matches_an_old_cell_by_epoch():
+    """No completion text anywhere, and two samples share the id: the epoch tells them apart."""
+    m, rule = sample_messages(OLD_SAMPLES, "lcbhard_5", ["", ""], epoch=2)
+    assert rule == "epoch" and m[0]["content"] == "PROBLEM ep2"
+    assert sample_messages(OLD_SAMPLES, "lcbhard_5", ["", ""], epoch=1)[0][0]["content"] == "PROBLEM ep1"
+    assert sample_messages(OLD_SAMPLES, "lcbhard_5", ["", ""], epoch=3) == (None, None)   # ambiguous id
+    assert sample_messages(OLD_SAMPLES, "lcbhard_5", ["", ""]) == (None, None)
+    # one candidate and no epoch of its own: the id rule still answers
+    assert sample_messages([OLD_SAMPLES[0]], "lcbhard_5", ["", ""], epoch=9)[1] == "id"
+
+
+def test_record_recovers_an_old_cells_text_from_the_eval(tmp_path):
+    """d6/aff6/sp6/v1 rows store turn_n_generated but not turn_completion. The text is in the
+    .eval log; it is put in the bubble and flagged, never aligned against arrays (there are none)."""
+    st, _ = _eval_store(tmp_path, OLD_SAMPLES, rows=[OLD_ROW], token_arrays=False)
+    t0 = st.record("fake-model/appr6/lcbhard_5/s1/t0")
+    t1 = st.record("fake-model/appr6/lcbhard_5/s1/t1")
+    assert t0["text"] == "[THINK]x y[/THINK] z" and t0["text_source"] == "eval"     # epoch 2, not epoch 1
+    assert t0["reasoning"] == "x y" and t0["answer"] == "z"
+    assert t0["has_token_arrays"] is False and t0["misaligned"] is False and t0["error"] is None
+    assert t0["messages_in"] == [{"role": "user", "content": "PROBLEM ep2"}]
+    assert t0["feedback"] == "FAIL ep2"
+    assert any("matched by epoch" in w for w in t0["warnings"])
+    assert any("taken from the .eval log" in w for w in t0["warnings"])
+    assert t1["text"] == "q r s t" and t1["answer"] == "q r s t" and t1["text_source"] == "eval"
+    assert [m["role"] for m in t1["messages_in"]] == ["user", "assistant", "user"]
+
+
+def test_record_of_a_new_cell_keeps_its_own_text(tmp_path):
+    st, _ = _eval_store(tmp_path, SAMPLES)
+    r = st.record("fake-model/appr6/lcbhard_0/s0/t0")
+    assert r["text"] == "a b c" and r["text_source"] == "record"
+
+
+def _two_log_store(tmp_path, x_samples, y_samples, rows, **kw):
+    """A cell whose shard holds two .eval logs -- what a steering sweep writes, one run per arm."""
+    make_cell(tmp_path / "rollouts", "fake-model", "appr6", rows=rows, **kw)
+    d = tmp_path / "rollouts" / "fake-model" / "appr6" / "inspect-logs" / "shard0of2"
+    (d / "y.eval").write_bytes(b"")
+    evals = FakeEvalSamples({str(d / "x.eval"): x_samples, str(d / "y.eval"): y_samples})
+    return RolloutStore.open([tmp_path / "rollouts"], tokenizer_loader=lambda m: WhitespaceTokenizer(),
+                             vectors_loader=lambda m: None, eval_loader=evals)
+
+
+def test_an_old_cell_refuses_a_rollout_two_eval_logs_could_both_be(tmp_path):
+    """The id and the epoch are unique inside one log, not across a shard's logs. Olmo-3.1-32B-Think/v1
+    is a 9-condition sweep with 9-13 logs per shard, all carrying the same (id, epoch): taking the
+    first put another arm's completion in this rollout's bubble."""
+    other = [{"id": "lcbhard_5", "epoch": 2, "messages": [
+        {"role": "user", "content": "PROBLEM other arm"}, {"role": "assistant", "content": "not this rollout"}]}]
+    st = _two_log_store(tmp_path, OLD_SAMPLES, other, [OLD_ROW], token_arrays=False)
+    r = st.record("fake-model/appr6/lcbhard_5/s1/t0")
+    assert r["text"] == "" and r["text_source"] == "record" and r["messages_in"] == []
+    assert any("tell them apart" in w for w in r["warnings"])
+
+
+def test_a_new_cells_completion_text_still_picks_its_log_out(tmp_path):
+    """Text equality is its own proof, so the strong rule is unaffected by a second log."""
+    st = _two_log_store(tmp_path, [], SAMPLES, ROWS)
+    r = st.record("fake-model/appr6/lcbhard_0/s0/t0")
+    assert r["text"] == "a b c" and r["text_source"] == "record"
+    assert r["messages_in"] == [{"role": "user", "content": "PROBLEM"}] and r["feedback"].endswith("FAIL1")
+
+
+def test_record_of_an_old_cell_the_eval_cannot_identify(tmp_path):
+    """Neither the epoch nor the id picks a sample out: no context, no text, and it says so."""
+    st, _ = _eval_store(tmp_path, OLD_SAMPLES, rows=[dict(OLD_ROW, sample=7)], token_arrays=False)
+    r = st.record("fake-model/appr6/lcbhard_5/s7/t0")
+    assert r["messages_in"] == [] and r["text"] == "" and r["text_source"] == "record"
+    assert any("no .eval sample matches" in w for w in r["warnings"])
+
+
+def test_record_messages_in_and_feedback(tmp_path):
+    st, evals = _eval_store(tmp_path, SAMPLES)
+    r0 = st.record("fake-model/appr6/lcbhard_0/s0/t0"); r1 = st.record("fake-model/appr6/lcbhard_0/s0/t1")
+    assert r0["messages_in"] == [{"role": "user", "content": "PROBLEM"}]
+    assert r0["feedback"].endswith("FAIL1") and r0["passed"] is False
+    assert [m["role"] for m in r1["messages_in"]] == ["user", "assistant", "user"]
+    assert r1["feedback"].endswith("FAIL2") and r1["passed"] is False           # last turn, rollout failed
+    s1 = st.record("fake-model/appr6/lcbhard_0/s1/t1")
+    assert s1["feedback"] is None and s1["passed"] is True                       # last turn, rollout passed
+    assert st.record("fake-model/appr6/lcbhard_0/s1/t0")["passed"] is False
+    assert evals.calls == 1                                                      # one parse per file
+
+
+def test_record_maps_turns_past_an_empty_turn(tmp_path):
+    """A turn that generated nothing wrote no assistant message, so later turns must not shift."""
+    st, _ = _eval_store(tmp_path, SAMPLES)
+    t0 = st.record("fake-model/appr6/lcbhard_1/s0/t0")       # generated 0 tokens
+    t1 = st.record("fake-model/appr6/lcbhard_1/s0/t1")
+    assert t0["messages_in"] == [{"role": "user", "content": "PROBLEM"}]   # what the empty turn was given
+    assert t0["feedback"] is None and t0["passed"] is None
+    assert t1["messages_in"] == [{"role": "user", "content": "PROBLEM"}]   # not the next turn's context
+    assert t1["feedback"].endswith("FAILK") and t1["passed"] is False
+    assert [w for w in t0["warnings"] + t1["warnings"] if "assistant messages" in w] == []
+
+
+def test_record_of_a_rollout_that_generated_nothing(tmp_path):
+    st, _ = _eval_store(tmp_path, [EMPTY_SAMPLE], rows=[EMPTY_ROW])
+    for rid in ("fake-model/appr6/lcbhard_2/s0/t0", "fake-model/appr6/lcbhard_2/s0/t1"):
+        r = st.record(rid)
+        assert r["messages_in"] == [{"role": "user", "content": "PROBLEM"}]   # the prompt is still recovered
+        assert r["feedback"] is None and r["misaligned"] is False
+        # sample 0 <-> epoch 1: the epoch rule answers before the id rule does, and says so
+        assert [w for w in r["warnings"] if "matched by epoch" not in w] == []
+    assert st.record("fake-model/appr6/lcbhard_2/s0/t1")["passed"] is False    # last turn: the rollout's verdict
+
+
+def test_record_when_the_eval_does_not_identify_the_rollout(tmp_path):
+    """Two samples share the id and nothing was generated: nothing tells them apart."""
+    st, _ = _eval_store(tmp_path, [EMPTY_SAMPLE, EMPTY_SAMPLE], rows=[EMPTY_ROW])
+    r = st.record("fake-model/appr6/lcbhard_2/s0/t0")
+    assert r["messages_in"] == [] and r["feedback"] is None and r["misaligned"] is False
+    assert any("no .eval sample matches" in w for w in r["warnings"])
+
+
+def test_record_without_eval_file(tmp_path):
+    st = _store(tmp_path)              # FakeEvalSamples({}) raises FileNotFoundError
+    r = st.record("fake-model/appr6/lcbhard_0/s0/t0")
+    assert r["messages_in"] == [] and any(".eval" in w for w in r["warnings"])
+
+
+def test_concurrent_reads_and_refresh_do_not_race(tmp_path):
+    """The dashboard's sync routes run in a threadpool: several requests hit one store at once.
+
+    Reads and refreshes are interleaved deliberately -- a shard file grows while other
+    threads are inside ``records()``/``record()``/``arrays()``/``session``/``conversations()``
+    -- because ``refresh()`` rebuilds ``_light``/``_order`` and prunes ``_full`` in place.
+    Unsynchronised this raises (``dictionary changed size during iteration`` in ``refresh``,
+    ``KeyError`` from ``records()`` reading ``_light`` mid-rebuild). The short switch
+    interval is what makes that certain rather than occasional: the tasks are small
+    enough that the default 5 ms rarely preempts a thread inside ``refresh()``.
+    """
+    import os
+    import sys
+    import threading
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    st = _store(tmp_path)
+    rids = [r["record_id"] for r in st.records()]
+    assert len(rids) == 8
+    f = tmp_path / "rollouts" / "fake-model" / "appr6" / "rollouts.shard0of2.jsonl"
+    template = json.loads(f.read_text().splitlines()[0])
+    write_lock = threading.Lock()          # the writer is the pilot job, not a second dashboard
+    n_appended = 20
+
+    def append(i: int) -> None:
+        row = dict(template, task_id=f"lcbhard_new{i}")     # a new rollout: 2 more turns
+        with write_lock:
+            with f.open("a") as fh:
+                fh.write(json.dumps(row) + "\n")
+            os.utime(f, (time.time() + 5 + i, time.time() + 5 + i))   # forward, for coarse mtimes
+
+    def task(i: int) -> None:
+        if i % 10 == 9:
+            append(i // 10)
+        k, rid = i % 5, rids[i % len(rids)]
+        if k == 0:
+            st.records()
+        elif k == 1:
+            st.record(rid)
+        elif k == 2:
+            st.arrays(rid)
+        elif k == 3:
+            st.session
+        else:
+            st.conversations()
+
+    switch = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+    try:
+        with ThreadPoolExecutor(8) as ex:
+            futures = [ex.submit(task, i) for i in range(200)]
+            failures = [repr(fut.exception()) for fut in futures if fut.exception() is not None]
+    finally:
+        sys.setswitchinterval(switch)
+    assert failures == [], f"{len(failures)} worker(s) raised: {failures[:3]}"
+
+    recs = st.records()
+    assert len(recs) == 8 + 2 * n_appended
+    assert len({r["record_id"] for r in recs}) == len(recs)
+    cells = {(c["model"], c["version"]): c for c in st.session["cells"]}
+    assert cells[("fake-model", "appr6")]["n_rollouts"] == 3 + n_appended
+    assert len(st.conversations()) == 4 + n_appended

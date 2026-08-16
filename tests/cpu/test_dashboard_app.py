@@ -45,6 +45,7 @@ def test_index_and_session(client):
     s = client.get("/api/session").json()
     assert s["session"]["model"] == "fake" and "health" in s and s["read_only"] is False
     assert s["emotions"] == ["desperate", "frustrated", "joyful"] and s["probe_layer"] == 20
+    assert s["mode"] == "live"
 
 
 def test_chat_roundtrip_and_conversation_readouts(client):
@@ -103,10 +104,11 @@ def test_aggregate_shapes_and_split_guard(client):
         with client.stream("POST", "/api/task/start", json={"split": "original", "task_id": tid, "attempts": 2, "auto_continue": True}) as r:
             _sse(r)
     a = client.get("/api/aggregate", params={"source": "task", "split": "original", "position": "start", "stat": "token", "segment": "all"}).json()
-    assert a["emotions"] == ["desperate", "frustrated", "joyful"] and a["n_conversations"] == 2
-    assert len(a["by_turn"]["mean"]) >= 1 and len(a["by_turn"]["mean"][0]) == 3 and a["delta"]["n"] == 2
+    g = a["groups"][0]
+    assert a["emotions"] == ["desperate", "frustrated", "joyful"] and g["n_conversations"] == 2
+    assert len(g["by_turn"]["mean"]) >= 1 and len(g["by_turn"]["mean"][0]) == 3 and g["delta"]["n"] == 2
     m = client.get("/api/aggregate", params={"source": "task", "split": "original", "position": "end", "stat": "mean", "segment": "answer"}).json()
-    assert m["delta"]["n"] == 2
+    assert m["groups"][0]["delta"]["n"] == 2
     with client.stream("POST", "/api/task/start", json={"split": "conflicting", "task_id": "lcbhard_0", "attempts": 1, "auto_continue": True}) as r:
         _sse(r)
     assert client.get("/api/aggregate", params={"source": "task"}).status_code == 400
@@ -125,15 +127,15 @@ def test_at_cap_turns_are_excluded_from_the_end_readout_unless_asked(client):
     with client.stream("POST", "/api/task/start", json={"split": "original", "task_id": "lcbhard_0", "attempts": 2, "auto_continue": True}) as r:
         _sse(r)
     p = {"source": "task", "split": "original", "position": "end", "stat": "token"}
-    excluded = client.get("/api/aggregate", params=p).json()
+    excluded = client.get("/api/aggregate", params=p).json()["groups"][0]
     assert excluded["excluded_cap"] == 2 and excluded["delta"]["n"] == 0
     assert len(excluded["delta"]["mean"]) == 3  # width held even with nothing to average
-    kept = client.get("/api/aggregate", params={**p, "include_cap": "true"}).json()
+    kept = client.get("/api/aggregate", params={**p, "include_cap": "true"}).json()["groups"][0]
     # Asking for them back stops the exclusion, but a capped turn's last token was
     # never fed back through the model, so "end" has no residual row to read either.
     assert kept["excluded_cap"] == 0 and kept["delta"]["n"] == 0
     # The same turns are readable at a position the cap did not eat.
-    start = client.get("/api/aggregate", params={**p, "position": "start"}).json()
+    start = client.get("/api/aggregate", params={**p, "position": "start"}).json()["groups"][0]
     assert start["excluded_cap"] == 0 and start["delta"]["n"] == 1
 
 
@@ -193,7 +195,7 @@ def test_a_misaligned_record_is_unreadable_not_a_500(tmp_path):
     assert isinstance(conv["turns"][1]["readouts"]["desperate"]["start"], float)  # prefill needs no kinds
     a = client.get("/api/aggregate", params={"source": "chat", "position": "end", "stat": "token",
                                              "include_cap": "true"}).json()
-    assert a["by_turn"]["skipped"] == [0, 1]
+    assert a["groups"][0]["by_turn"]["skipped"] == [0, 1]
 
 
 def test_health_monitor_reports_the_failure_it_saw():
@@ -314,7 +316,7 @@ def test_a_record_written_under_a_different_emotion_order_is_refused_not_relabel
     assert all(v is None for v in turns[1]["readouts"]["desperate"].values())
     # And it is skipped-and-counted in the aggregate, never quietly relabelled.
     a = client.get("/api/aggregate", params={"source": "chat", "position": "start"}).json()
-    assert a["by_turn"]["skipped"] == [0, 1]
+    assert a["groups"][0]["by_turn"]["skipped"] == [0, 1]
 
 
 def test_rehydrated_chat_replays_the_answer_when_the_server_parsed_the_reasoning(client, state):
@@ -369,3 +371,154 @@ def test_task_start_carries_the_mindset_into_the_condition(client):
         rec = [d for n, d in _sse(r) if n == "turn"][0]["record"]
     assert rec["condition"]["mindset"] == ["growth"]
     assert rec["condition"]["mindset_version"] == MINDSET_VERSION
+
+
+from rollout_cell import EMOTIONS, FakeEvalSamples, WhitespaceTokenizer, make_cell
+
+from healthy_rl.dashboard.rollout_store import RolloutStore
+
+RROWS = [
+    {"task_id": "lcbhard_0", "sample": 0, "completions": ["a b c", "[THINK]x y[/THINK] z"], "passed": False},
+    {"task_id": "lcbhard_0", "sample": 1, "completions": ["p q", "r s t u"], "passed": True, "bench_split": "original"},
+]
+
+
+def _rollout_client(tmp_path):
+    make_cell(tmp_path / "r", "m-a", "appr6", rows=RROWS[:1])
+    make_cell(tmp_path / "r", "m-a", "d6", rows=RROWS[:1], token_arrays=False)
+    make_cell(tmp_path / "r", "m-b", "appr6", rows=RROWS, capture_layers=(5, 15), probe_layer=15)
+    store = RolloutStore.open([tmp_path / "r"], tokenizer_loader=lambda m: WhitespaceTokenizer(),
+                              vectors_loader=lambda m: None, eval_loader=FakeEvalSamples({}))
+    st = AppState(engine=None, sandbox=None, store=store, vectors=None, cfg={}, read_only=True, mode="rollouts")
+    return TestClient(create_app(st))
+
+
+def test_rollouts_session_and_conversations(tmp_path):
+    c = _rollout_client(tmp_path)
+    s = c.get("/api/session").json()
+    assert s["mode"] == "rollouts" and s["read_only"] is True
+    assert set(s["session"]["models"]) == {"m-a", "m-b"} and s["session"]["models"]["m-b"]["probe_layer"] == 15
+    assert len(s["session"]["cells"]) == 3 and s["emotions"] == list(EMOTIONS)
+    convs = c.get("/api/conversations").json()["conversations"]
+    assert len(convs) == 4 and all(x["source"] == "rollout" for x in convs)
+    assert len(c.get("/api/conversations", params={"model": "m-b"}).json()["conversations"]) == 2
+    assert len(c.get("/api/conversations", params={"model": "m-a", "version": "d6"}).json()["conversations"]) == 1
+
+
+def test_rollouts_conversation_readouts_at_own_probe_layer(tmp_path):
+    c = _rollout_client(tmp_path)
+    conv = c.get("/api/conversations/m-b/appr6/lcbhard_0/s0").json()
+    t = conv["turns"][1]
+    assert t["probe_layer"] == 15 and t["has_token_arrays"] is True and t["misaligned"] is False
+    assert isinstance(t["readouts"]["desperate"]["start"], float) and isinstance(t["readouts"]["desperate"]["think_end"], float)
+    assert t["tokens"][-1] == "<eos>" and t["emotion_order_mismatch"] is False
+    old = c.get("/api/conversations/m-a/d6/lcbhard_0/s0").json()["turns"][0]
+    assert old["has_token_arrays"] is False and old["readouts"]["desperate"]["start"] is None   # no vectors loaded
+    assert any("vectors" in w for w in old["warnings"])
+    assert c.get("/api/conversations/nope").status_code == 404
+
+
+def test_rollouts_tokens_route_validates_record_layers(tmp_path):
+    c = _rollout_client(tmp_path)
+    rid = "m-b/appr6/lcbhard_0/s0/t1"
+    p = c.get(f"/api/records/{rid}/tokens").json()
+    assert p["layer"] == 15 and len(p["tokens"]) == 4 and len(p["cosine"]) == 4 and p["markers"]["think_end"] == 1
+    assert c.get(f"/api/records/{rid}/tokens", params={"layer": 5}).status_code == 200
+    assert c.get(f"/api/records/{rid}/tokens", params={"layer": 20}).status_code == 400
+    assert c.get("/api/records/nope/tokens").status_code == 404
+
+
+def test_rollouts_routes_survive_a_truncated_npz(tmp_path):
+    """One half-written npz under the opened root used to 500 /api/session, so the page never
+    booted and nothing said which file did it."""
+    make_cell(tmp_path / "r", "m-a", "appr6", rows=RROWS)
+    npz = tmp_path / "r" / "m-a" / "appr6" / "residuals" / "lcbhard_0_s0.npz"
+    npz.write_bytes(npz.read_bytes()[:100])
+    store = RolloutStore.open([tmp_path / "r"], tokenizer_loader=lambda m: WhitespaceTokenizer(),
+                              vectors_loader=lambda m: None, eval_loader=FakeEvalSamples({}))
+    st = AppState(engine=None, sandbox=None, store=store, vectors=None, cfg={}, read_only=True, mode="rollouts")
+    c = TestClient(create_app(st), raise_server_exceptions=False)
+    assert c.get("/api/session").status_code == 200
+    assert c.get("/api/conversations").status_code == 200
+    conv = c.get("/api/conversations/m-a/appr6/lcbhard_0/s0")
+    assert conv.status_code == 200
+    t = conv.json()["turns"][0]
+    assert t["misaligned"] is True and "npz unreadable" in t["error"]
+    assert c.get("/api/aggregate", params={"source": "rollout", "split": "conflicting"}).status_code == 200
+
+
+def test_rollouts_mode_refuses_generation(tmp_path):
+    c = _rollout_client(tmp_path)
+    assert c.post("/api/chat/new/send", json={"text": "x"}).status_code == 409
+    assert c.post("/api/task/start", json={"split": "original", "task_id": "lcbhard_0"}).status_code == 409
+    assert c.post("/api/task/x/continue", json={}).status_code == 409     # read-only before "no such task"
+    assert c.post("/api/task/x/stop").status_code == 409
+    assert c.get("/api/problems").status_code == 409
+
+
+def test_aggregate_live_is_a_single_group(client):
+    # Even with nothing recorded yet: the page reads groups[0] unconditionally.
+    empty = client.get("/api/aggregate", params={"source": "chat"}).json()
+    assert len(empty["groups"]) == 1 and empty["groups"][0]["n_records"] == 0
+    with client.stream("POST", "/api/chat/new/send", json={"text": "hello"}) as r:
+        r.read()
+    a = client.get("/api/aggregate", params={"source": "chat"}).json()
+    assert len(a["groups"]) == 1 and a["groups"][0]["n_conversations"] == 1
+    g = a["groups"][0]
+    assert g["model"] == "fake" and g["version"] is None and g["layer"] == 20
+    assert "mean" in g["by_turn"] and "mean" in g["delta"] and a["emotions"] == ["desperate", "frustrated", "joyful"]
+
+
+def test_aggregate_rollout_groups(tmp_path):
+    c = _rollout_client(tmp_path)
+    a = c.get("/api/aggregate", params={"source": "rollout", "split": "conflicting"}).json()
+    keys = {(g["model"], g["version"]) for g in a["groups"]}
+    assert keys == {("m-a", "appr6"), ("m-a", "d6"), ("m-b", "appr6")}
+    gb = next(g for g in a["groups"] if g["model"] == "m-b")
+    assert gb["layer"] == 15 and gb["n_conversations"] == 1 and gb["bench_split"] == "conflicting"
+    ga = next(g for g in a["groups"] if (g["model"], g["version"]) == ("m-a", "appr6"))
+    assert ga["layer"] == 20 and len(ga["by_turn"]["mean"]) == 2 and ga["skipped"] == 0
+    old = next(g for g in a["groups"] if g["version"] == "d6")
+    assert old["skipped"] == 2                                     # no vectors: both turns None, counted
+    # filters
+    a = c.get("/api/aggregate", params={"source": "rollout", "split": "conflicting", "model": ["m-b"]}).json()
+    assert [(g["model"], g["version"]) for g in a["groups"]] == [("m-b", "appr6")]
+    a = c.get("/api/aggregate", params={"source": "rollout", "split": "conflicting", "model": ["m-a"], "version": ["d6"]}).json()
+    assert [(g["model"], g["version"]) for g in a["groups"]] == [("m-a", "d6")]
+    # layer must exist for every selected model
+    assert c.get("/api/aggregate", params={"source": "rollout", "split": "conflicting", "layer": 20}).status_code == 400
+    assert "m-b" in c.get("/api/aggregate", params={"source": "rollout", "split": "conflicting", "layer": 20}).json()["detail"]
+    assert c.get("/api/aggregate", params={"source": "rollout", "split": "conflicting", "model": ["m-a"], "layer": 10}).status_code == 200
+    # splits are never pooled, and one that no rollout carries is a bad request
+    assert c.get("/api/aggregate", params={"source": "rollout"}).status_code == 400
+    assert c.get("/api/aggregate", params={"source": "rollout", "split": "original"}).json()["groups"][0]["model"] == "m-b"
+    bad = c.get("/api/aggregate", params={"source": "rollout", "split": "nope"})
+    assert bad.status_code == 400 and "split must be one of" in bad.json()["detail"]
+
+
+def test_aggregate_widens_groups_onto_the_union_of_directions(tmp_path):
+    """Column k of one model is not column k of another, so groups are re-indexed, not lined up.
+
+    ``m-c`` carries ``joyful`` and ``calm``; the others carry the three in
+    ``EMOTIONS``. Every group ships the union order and NaN (None over JSON) in
+    the columns its own model never measured.
+    """
+    make_cell(tmp_path / "r", "m-a", "appr6", rows=RROWS[:1])
+    make_cell(tmp_path / "r", "m-c", "appr6", rows=RROWS[:1], emotions=("joyful", "calm"))
+    store = RolloutStore.open([tmp_path / "r"], tokenizer_loader=lambda m: WhitespaceTokenizer(),
+                              vectors_loader=lambda m: None, eval_loader=FakeEvalSamples({}))
+    c = TestClient(create_app(AppState(engine=None, sandbox=None, store=store, vectors=None, cfg={},
+                                       read_only=True, mode="rollouts")))
+    a = c.get("/api/aggregate", params={"source": "rollout", "split": "conflicting"}).json()
+    assert a["emotions"] == ["desperate", "frustrated", "joyful", "calm"]   # first seen, in group order
+    gc = next(g for g in a["groups"] if g["model"] == "m-c")
+    assert gc["emotions"] == a["emotions"]
+    row = gc["by_turn"]["mean"][0]
+    assert row[0] is None and row[1] is None                               # m-c never measured these
+    assert isinstance(row[2], float) and isinstance(row[3], float)         # joyful, calm: its own two
+    d = gc["delta"]["mean"]
+    assert d[0] is None and d[1] is None and isinstance(d[2], float) and isinstance(d[3], float)
+    ga = next(g for g in a["groups"] if g["model"] == "m-a")
+    assert ga["emotions"] == a["emotions"]
+    assert ga["by_turn"]["mean"][0][3] is None and ga["delta"]["mean"][3] is None    # m-a has no calm
+    assert all(isinstance(v, float) for v in ga["by_turn"]["mean"][0][:3])
