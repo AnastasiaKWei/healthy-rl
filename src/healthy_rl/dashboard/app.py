@@ -571,6 +571,8 @@ def create_app(state: AppState) -> FastAPI:
         bt, de = group["by_turn"], group["delta"]
         group["by_turn"] = {**bt, "mean": cols(bt["mean"]), "sem": cols(bt["sem"])}
         group["delta"] = {**de, "mean": cols(de["mean"]), "sem": cols(de["sem"]), "p": cols(de["p"])}
+        # The key names the columns it ships with, so it moves with them.
+        group["emotions"] = list(emotions)
         return group
 
     @app.get("/api/aggregate")
@@ -616,18 +618,25 @@ def create_app(state: AppState) -> FastAPI:
                 raise HTTPException(400, "layer must be 'probe' or an integer") from None
         recs = [r for r in st.store.records() if r.get("source") == source]
         if source == "rollout":
+            # A rollouts session has no sandbox to name the splits, so the rollouts on
+            # disk do: a typo would otherwise come back as an empty aggregate.
+            known = {r.get("bench_split") for r in recs}
+            if split is not None and split not in known:
+                raise HTTPException(400, f"split must be one of {sorted(known)}")
             if model:
                 recs = [r for r in recs if r["model"] in model]
             if version:
                 recs = [r for r in recs if r["version"] in version]
-            # Only now, once the selection is narrowed: a full record tokenises its turn.
-            recs = [st.store.record(r["record_id"]) for r in recs]
         if source in ("task", "rollout"):
             splits = {r.get("bench_split") for r in recs}
             if split is None and len(splits) > 1:
                 raise HTTPException(400, "choose a split; conflicting and original cannot be pooled")
             if split is not None:
                 recs = [r for r in recs if r.get("bench_split") == split]
+        if source == "rollout":
+            # Only now, once the selection is narrowed: a full record tokenises its turn,
+            # and the split the caller did not ask for should not pay for that.
+            recs = [st.store.record(r["record_id"]) for r in recs]
         # The cap only contaminates the end readout: it is the position that moves to
         # wherever the budget ran out. A segment mean over the same turn is still fine.
         drop_cap = stat == "token" and position == "end" and not include_cap

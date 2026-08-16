@@ -432,6 +432,8 @@ def test_rollouts_mode_refuses_generation(tmp_path):
     c = _rollout_client(tmp_path)
     assert c.post("/api/chat/new/send", json={"text": "x"}).status_code == 409
     assert c.post("/api/task/start", json={"split": "original", "task_id": "lcbhard_0"}).status_code == 409
+    assert c.post("/api/task/x/continue", json={}).status_code == 409     # read-only before "no such task"
+    assert c.post("/api/task/x/stop").status_code == 409
     assert c.get("/api/problems").status_code == 409
 
 
@@ -468,6 +470,36 @@ def test_aggregate_rollout_groups(tmp_path):
     assert c.get("/api/aggregate", params={"source": "rollout", "split": "conflicting", "layer": 20}).status_code == 400
     assert "m-b" in c.get("/api/aggregate", params={"source": "rollout", "split": "conflicting", "layer": 20}).json()["detail"]
     assert c.get("/api/aggregate", params={"source": "rollout", "split": "conflicting", "model": ["m-a"], "layer": 10}).status_code == 200
-    # splits are never pooled
+    # splits are never pooled, and one that no rollout carries is a bad request
     assert c.get("/api/aggregate", params={"source": "rollout"}).status_code == 400
     assert c.get("/api/aggregate", params={"source": "rollout", "split": "original"}).json()["groups"][0]["model"] == "m-b"
+    bad = c.get("/api/aggregate", params={"source": "rollout", "split": "nope"})
+    assert bad.status_code == 400 and "split must be one of" in bad.json()["detail"]
+
+
+def test_aggregate_widens_groups_onto_the_union_of_directions(tmp_path):
+    """Column k of one model is not column k of another, so groups are re-indexed, not lined up.
+
+    ``m-c`` carries ``joyful`` and ``calm``; the others carry the three in
+    ``EMOTIONS``. Every group ships the union order and NaN (None over JSON) in
+    the columns its own model never measured.
+    """
+    make_cell(tmp_path / "r", "m-a", "appr6", rows=RROWS[:1])
+    make_cell(tmp_path / "r", "m-c", "appr6", rows=RROWS[:1], emotions=("joyful", "calm"))
+    store = RolloutStore.open([tmp_path / "r"], tokenizer_loader=lambda m: WhitespaceTokenizer(),
+                              vectors_loader=lambda m: None, eval_loader=FakeEvalSamples({}))
+    c = TestClient(create_app(AppState(engine=None, sandbox=None, store=store, vectors=None, cfg={},
+                                       read_only=True, mode="rollouts")))
+    a = c.get("/api/aggregate", params={"source": "rollout", "split": "conflicting"}).json()
+    assert a["emotions"] == ["desperate", "frustrated", "joyful", "calm"]   # first seen, in group order
+    gc = next(g for g in a["groups"] if g["model"] == "m-c")
+    assert gc["emotions"] == a["emotions"]
+    row = gc["by_turn"]["mean"][0]
+    assert row[0] is None and row[1] is None                               # m-c never measured these
+    assert isinstance(row[2], float) and isinstance(row[3], float)         # joyful, calm: its own two
+    d = gc["delta"]["mean"]
+    assert d[0] is None and d[1] is None and isinstance(d[2], float) and isinstance(d[3], float)
+    ga = next(g for g in a["groups"] if g["model"] == "m-a")
+    assert ga["emotions"] == a["emotions"]
+    assert ga["by_turn"]["mean"][0][3] is None and ga["delta"]["mean"][3] is None    # m-a has no calm
+    assert all(isinstance(v, float) for v in ga["by_turn"]["mean"][0][:3])
