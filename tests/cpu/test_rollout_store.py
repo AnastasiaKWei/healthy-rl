@@ -114,3 +114,25 @@ def test_light_records_do_not_load_tokenizer(tmp_path):
                            vectors_loader=lambda m: None, eval_loader=FakeEvalSamples({}))
     st.records(); st.conversations(); st.session
     assert calls == []
+
+
+def test_duplicate_row_is_collapsed_and_counted(tmp_path):
+    st = _store(tmp_path)
+    assert len(st.records()) == 8
+    cell = tmp_path / "rollouts" / "fake-model" / "appr6"
+    f = cell / "rollouts.shard0of2.jsonl"
+    row = json.loads(f.read_text().splitlines()[0])       # lcbhard_0/s0 again: a re-run after a crash
+    row["passed"] = True                                  # the later row is the one that should win
+    with f.open("a") as fh:
+        fh.write(json.dumps(row) + "\n")
+    import os, time
+    os.utime(f, (time.time() + 5, time.time() + 5))
+    recs = st.records()
+    assert len(recs) == 8 and len({r["record_id"] for r in recs}) == 8
+    assert next(r for r in recs if r["record_id"] == "fake-model/appr6/lcbhard_0/s0/t0")["passed"] is True
+    convs = {c["conversation_id"]: c for c in st.conversations()}
+    assert len(convs) == 4 and convs["fake-model/appr6/lcbhard_0/s0"]["n_turns"] == 2
+    cells = {(c["model"], c["version"]): c for c in st.session["cells"]}
+    assert cells[("fake-model", "appr6")]["n_duplicate_rows"] == 1
+    assert cells[("fake-model", "appr6")]["n_rollouts"] == 3
+    assert cells[("fake-model", "d6")]["n_duplicate_rows"] == 0

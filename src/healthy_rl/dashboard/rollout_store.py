@@ -147,6 +147,7 @@ class RolloutStore:
         self._rows_by_file: dict[Path, list[dict]] = {}
         self._light: dict[str, dict] = {}                        # record_id -> light record
         self._order: list[str] = []
+        self._duplicate_rows: dict[tuple[str, str], int] = {}     # cell key -> rows re-using a rollout id
         self._full: dict[str, dict] = {}                         # record_id -> tokenised record (Task 3)
         self._tokenizers: dict[str, Any] = {}                    # model -> tokenizer | None
         self._vectors: dict[str, Any] = {}                       # model -> Vectors | None
@@ -177,14 +178,23 @@ class RolloutStore:
                 self._rows_by_file[f] = [(cell, r) for r in read_jsonl(f)]
                 changed = True
         if changed:
-            self._light.clear(); self._order.clear()
+            self._light.clear(); self._order.clear(); self._duplicate_rows.clear()
+            seen_rollouts: set[str] = set()
             for f in sorted(self._rows_by_file):
                 created = _now_iso(self._files[f][0])
                 for cell, row in self._rows_by_file[f]:
-                    for rec in records_from_row(row, model=cell.model, version=cell.version,
-                                                max_tokens=cell.max_tokens, created_at=created):
-                        self._light[rec["record_id"]] = rec
-                        self._order.append(rec["record_id"])
+                    recs = records_from_row(row, model=cell.model, version=cell.version,
+                                            max_tokens=cell.max_tokens, created_at=created)
+                    if recs:
+                        cid = recs[0]["conversation_id"]
+                        if cid in seen_rollouts:   # a re-run row, or a second epoch of one sample
+                            self._duplicate_rows[cell.key] = self._duplicate_rows.get(cell.key, 0) + 1
+                        seen_rollouts.add(cid)
+                    for rec in recs:
+                        rid = rec["record_id"]
+                        if rid not in self._light:      # order holds each id once; the row read last wins
+                            self._order.append(rid)
+                        self._light[rid] = rec
             self._session = None
         return changed
 
@@ -300,6 +310,7 @@ class RolloutStore:
                               "n_rollouts": len(convs),
                               "n_with_token_arrays": sum(1 for r in convs.values() if self._has_token_arrays(r)),
                               "n_tokenised": len(tokd), "n_misaligned": sum(1 for r in tokd if r.get("misaligned")),
+                              "n_duplicate_rows": self._duplicate_rows.get(c.key, 0),
                               "max_tokens": c.max_tokens})
             self._session = {"mode": "rollouts", "model": ", ".join(models), "roots": [str(p) for p in self.roots],
                              "ignored": [str(p) for p in self.ignored],
