@@ -21,6 +21,7 @@ versions encode the condition:
 | `growth6`, `resil6`, `appr6` | 6 | mindset block (growth / resilience / appraisal, v2), otherwise `d6`: no affect prompt, conflicting split. Block sent on turn 1 only. Compare against `d6` |
 | `affgrowth6`, `affresil6`, `affappr6` | 6 | same blocks with the affect prompt on, otherwise `aff6`. Compare against `aff6` |
 | `spgrowth6`, `spresil6`, `spappr6` | 6 | gemma-3-12b-it only: the same blocks on the `sp6` base (scratchpad on, no affect prompt). Compare against `sp6` |
+| `growth6b`, `resil6b`, `appr6b`, `affgrowth6b`, `affresil6b`, `affappr6b`, `spgrowth6b`, `spresil6b`, `spappr6b`, `spaffgrowth6b`, `spaffresil6b`, `spaffappr6b` | 6 | the same 18 mindset cells re-run with the **trigger-fixed** v2 text (Anastasia's `7d6fd07`, 2026-08-16): "Your first attempt is just the code. Open every attempt after that with …" instead of "Whenever a test fails, run this …", which is inert once the block is sent on turn 1 only. Same version number (2); the two texts are told apart by `mindset_hash`. Same bases as the un-suffixed cells; the per-token comparison cell is `<base>r` (or `spaff6`) |
 | `spaff6` | 6 | gemma-3-12b-it only: scratchpad on **and** affect prompt on — a new base cell (2026-08-16); per-token arrays present. Compare mindset arms `spaffgrowth6`/`spaffresil6`/`spaffappr6` against it |
 | `d6r`, `sp6r`, `aff6r`, `pos6r`, `affpos6r` | 6 | **re-runs** of the same-named base cells (gemma: d6/sp6/aff6; Ministral: d6/aff6/pos6/affpos6), fresh samples at temperature 1.0 written 2026-08-16 with the per-token arrays and `max_tokens` 24576. The per-token control for that model's mindset arms; also an independent replicate of the boundary readouts |
 
@@ -106,6 +107,22 @@ and summary, with the exact turn-1 `instruction` and the stripped
 `instruction_reminder` on the summary; resume refuses to mix arms or prompt
 versions.
 
+**Two v2 texts exist.** The un-suffixed cells (`growth6` …, submitted 2026-08-16
+02:11) carry the v2 text of her commit `9d6615a` (2026-08-15 21:05), whose
+procedure was triggered by "Whenever a test fails, run this … before writing any
+new code". With the block sent on turn 1 only that trigger is inert — at turn 1
+no test has failed and by turn 2 the instruction is gone; her smoke run measured
+0/12 compliance. Her `7d6fd07` (2026-08-16 08:14) rephrases it as a standing
+rule — "Your first attempt is just the code. Open every attempt after that with
+these two lines, before any new code" — and scored 12/12. She left
+`MINDSET_VERSION` at 2, so the number no longer identifies the text; every
+record and summary written since carries `mindset_hash`, the first 12 hex of
+sha256 over the exact section text, and resume refuses a hash-less mindset
+record or a different hash (see
+[measurement.md](measurement.md#the-mindset-arms-send-once-mechanism)). The
+`…6b` cells are the same 18 cells with the `7d6fd07` text; the un-suffixed cells
+are the `9d6615a` text and are **not** to be pooled with them.
+
 Everything else is the base cell's shard config byte for byte except
 `max_tokens`, `out_dir` and the appended `mindset:` key. Ministral `d6` used
 `max_tokens` 16384; the mindset cells use 24576, the 2x2 value; the cap never
@@ -121,12 +138,15 @@ comparison uses the boundary residuals both sides have; a per-token comparison
 needs a base cell re-run (not queued tonight).
 
 Shard configs and submission are one script, `scripts/mindset_cells.sh` —
-dry-run by default, `--submit` to act. It writes the 27 shard configs
-(`configs/shards/rollouts-<model>-<version>-s{0,1,2}of3.yaml`) from the base
-cell's, then submits per shard a primary job plus `-cont` and `-cont2` chained
-with `--dependency=afterany`, and prints the job-id table for the section below.
-The 27 configs are already committed and the script refuses to overwrite one
-that exists with different content, so re-running the config phase is a no-op.
+dry-run by default, `--submit` to act. It writes the shard configs
+(`configs/shards/rollouts-<model>-<version>-s{0,1,2}of3.yaml`, 3 per cell, 36
+cells: the 18 `9d6615a`-text rows and their 18 `…6b` trigger-fixed mirrors) from
+the base cell's, then submits per shard a primary job plus `-cont` and `-cont2`
+chained with `--dependency=afterany`, and prints the job-id table for the
+section below. `ONLY_TEXT=orig|fixed` selects one text, composing with
+`ONLY_MODEL`/`ONLY_BASE`. All configs are committed and the script refuses to
+overwrite one that exists with different content, so re-running the config
+phase is a no-op.
 Priority is carried by `--nice`: Ministral `growth6`/`resil6`/`appr6` first,
 with no `--nice` flag (slurm default 0), then Qwen3.5-9B's three at
 `--nice=2000`, then Ministral's affect-on three at `--nice=4000`. Qwen3-14B was
@@ -409,6 +429,10 @@ Each JSONL row is one rollout:
   zero everywhere so far, with the caveat in
   [findings.md](findings.md#hack-rate-is-zero-everywhere-and-the-number-means-less-than-it-looks).
   On `original`, true means the model solved the problem. Never pool the two.
+- `mindset_hash` — first 12 hex of sha256 over the exact mindset section text
+  (`""` for no mindset). Present on records written after 2026-08-16 ~14:00;
+  the un-suffixed mindset cells predate it and are the `9d6615a` text, the
+  `…6b` cells carry it and are the `7d6fd07` text. Resume compares it.
 - `mindset`, `mindset_version` — which mindset blocks the turn-1 instruction
   carried, as a list in prompt order (growth, resilience, appraisal), and the
   version of the block text (2). Records written before the mindset merge have

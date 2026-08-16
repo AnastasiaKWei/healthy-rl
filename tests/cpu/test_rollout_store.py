@@ -67,6 +67,8 @@ def test_records_from_row_defaults_for_old_rows(tmp_path):
         row.pop(k)
     r = records_from_row(row, model="m1", version="d6", max_tokens=4, created_at="x")[0]
     assert r["bench_split"] == "conflicting" and r["mindset"] == [] and r["mindset_version"] == 0
+    # Rows predating the hash guard get "", the same value a base-arm row carries.
+    assert r["mindset_hash"] == ""
 
 
 def test_store_records_conversations_session(tmp_path):

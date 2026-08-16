@@ -112,6 +112,7 @@ def records_from_row(row: dict, *, model: str, version: str, max_tokens: int | N
     base = {
         "conversation_id": cid, "source": SOURCE, "model": model, "version": version,
         "mindset": list(row.get("mindset") or []), "mindset_version": int(row.get("mindset_version") or 0),
+        "mindset_hash": str(row.get("mindset_hash") or ""),
         "scratchpad_reasoning": bool(row.get("scratchpad_reasoning")), "affect_prompt": bool(row.get("affect_prompt")),
         "bench_split": row.get("bench_split") or "conflicting", "task_id": task_id, "sample": sample,
         "epoch": int(row.get("epoch") or 1), "passed": row.get("passed"), "shard": row.get("shard"),
