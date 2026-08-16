@@ -330,6 +330,16 @@ records ("with token data" is the count to read), but a raw `wc -l` does not.
 Ministral-3-14B's one hang was a different shape (engine log frozen at 0 tok/s
 mid-rollout, `appr6-s1`, 5648824; cancelled, continuation finished the shard).
 
+Closed 2026-08-16 13:20 by the peer session's validation: the same `lcbhard_10`
+sample that had come back zero-token completed as a genuine 6-turn rollout under
+694d74d (72k tokens, 55 min), as did the other stranded long-turn problems. Two
+sizing consequences now that turns are no longer killed at 600 s: a single
+long-problem rollout can take ~2.5 h (`lcbhard_10` #0, 9 turns, 146 min), so three
+8-rollout shards in a 4 h window can be tight; and turns can now reach the
+24,576-token cap — the first cap hits in the pilot are in Ministral `aff6r` /
+`affpos6r`. Check `turn_n_generated` against the cap before reading a trajectory,
+as [the token-budget section](#token-budget) has always said.
+
 `request_timeout_s` still feeds `eval_generate_config` and the preflight
 `LensClient`; `client_timeout` is what the rollout transport obeys, and
 `tests/cpu/test_request_timeout.py` now pins both — the earlier test passed while
