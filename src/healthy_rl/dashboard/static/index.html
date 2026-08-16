@@ -96,6 +96,17 @@ h1,h2,h3{margin:0;font-weight:600;text-wrap:balance}
 .rail .foot code{font-family:ui-monospace,Menlo,monospace;color:var(--ink-2)}
 .rail .foot b.late{color:var(--crit)}
 
+/* rollouts mode: no generation controls, no server to poll, one filter over many cells */
+body.rollouts .rail .actions,body.rollouts #healthChip,body.rollouts #composer textarea,body.rollouts #composer .row{display:none}
+body.rollouts #composer{padding:6px 16px}
+body.rollouts #railFilter{display:block}
+.railfilter{display:none;width:calc(100% - 16px);margin:8px;padding:4px 6px;font-size:12px;background:var(--surface);color:var(--ink);border:1px solid var(--line-2);border-radius:4px}
+details.cell{border-bottom:1px solid var(--line)}
+details.cell summary{cursor:pointer;padding:5px 10px;font-size:12px;color:var(--ink-2)}
+details.cell summary:hover{background:var(--wash)}
+details.cell summary .meta{color:var(--muted);font-size:11px}
+details.cell[open] summary{background:var(--wash)}
+
 /* conversation */
 .conv{display:grid;grid-template-rows:auto 1fr auto;min-height:0;min-width:0;position:relative}
 .conv-head{display:flex;align-items:center;gap:10px;padding:10px 16px;border-bottom:1px solid var(--line);flex-wrap:wrap}
@@ -235,6 +246,7 @@ table.agg .sw{display:inline-block;width:8px;height:8px;border-radius:2px;margin
         <button class="btn primary" id="newChatBtn">+ Chat</button>
         <button class="btn" id="newTaskBtn">+ Task</button>
       </div>
+      <input id="railFilter" class="railfilter" placeholder="filter task / cell" autocomplete="off">
       <div class="list" id="railList"></div>
       <div class="foot" id="railFoot"></div>
     </aside>
@@ -272,7 +284,7 @@ table.agg .sw{display:inline-block;width:8px;height:8px;border-radius:2px;margin
         </div>
       </div>
 
-      <div class="composer">
+      <div class="composer" id="composer">
         <textarea id="composerText" placeholder="Send a message, or intervene before the next attempt (leave empty to feed the test result back unchanged)"></textarea>
         <div class="row">
           <label>temperature <select id="cTemp"></select></label>
@@ -362,6 +374,11 @@ table.agg .sw{display:inline-block;width:8px;height:8px;border-radius:2px;margin
         <div class="card"><div class="ch"><h3>Server</h3></div><dl class="kv2" id="setServer"></dl></div>
         <div class="card"><div class="ch"><h3>Measurement</h3></div><dl class="kv2" id="setMeasure"></dl></div>
         <div class="card"><div class="ch"><h3>Session</h3></div><dl class="kv2" id="setSession"></dl></div>
+        <div class="card" id="setCellsCard" hidden>
+          <div class="ch"><h3>Models and cells</h3><span class="sub">as scanned at startup</span></div>
+          <div class="wrapx"><table class="agg" id="setModels"></table></div>
+          <div class="wrapx" style="margin-top:10px"><table class="agg" id="setCells"></table></div>
+        </div>
       </div>
     </aside>
   </div>
@@ -415,6 +432,7 @@ const S = {
   tokens: null, pinnedTok: null, busy: false, aggFilter: {source: "task", split: null},
   smooth: 1, head: [], colour: {}, healthOk: true, health: null, tab: "traj", taskCid: null, taskDone: true,
   healthTimer: null, statusTimer: null, trajSess: null, tokChart: null, theme: "system",
+  rollouts: false, models: {}, railFilter: "",     // rollouts mode: per-model layers, rail filter
 };
 const HEAD = {desperate: "--s1", frustrated: "--s2", proud: "--s3", joyful: "--s4"};   // series colours; others --sx
 const HEAD_ORDER = ["desperate", "frustrated", "proud", "joyful"];
@@ -522,6 +540,16 @@ async function boot() {
     $("#stream").innerHTML = '<div class="warnbox crit"><b>Cannot reach the dashboard API.</b> ' + esc(e.message) + "</div>";
     return;
   }
+  S.rollouts = S.session.mode === "rollouts";
+  S.models = (S.session.session && S.session.session.models) || {};
+  if (S.rollouts) {
+    // The page draws one set of chips over every cell, so the emotion list is the union of
+    // the models' orders, first-seen; a model that lacks a direction reads "—" for it.
+    const seen = [];
+    Object.values(S.models).forEach(m => (m.emotions || []).forEach(e => { if (seen.indexOf(e) < 0) seen.push(e); }));
+    S.session.emotions = seen.length ? seen : S.session.emotions;
+    document.body.classList.add("rollouts");
+  }
   S.emotions = S.session.emotions || [];
   S.layers = S.session.capture_layers || [];
   S.probeLayer = S.session.probe_layer === undefined ? null : S.session.probe_layer;
@@ -547,7 +575,7 @@ async function boot() {
   const convs = S.conversations;
   if (convs.length) await openConversation(convs[0].conversation_id);
   else renderEmpty();
-  startHealthPoll();
+  if (!S.rollouts) startHealthPoll();     // rollouts mode has no server behind it to poll
 }
 
 function assignColours() {
@@ -561,12 +589,20 @@ function renderTopBar() {
   const s = S.session, meta = s.session || {}, job = s.job || {};
   const kv = $("#topkv"); kv.innerHTML = "";
   const chip = (cls, html) => { const c = el("span", cls); c.innerHTML = html; kv.appendChild(c); return c; };
-  chip("chip mono", esc(meta.model || "unknown model"));
-  const vecName = String(meta.vectors_dir || "vectors").split("/").filter(Boolean).slice(-2).join("/") || "vectors";
-  chip("chip mono", esc(vecName) + " · probe L" + esc(S.probeLayer) + " · " + S.emotions.length + " dirs");
+  if (S.rollouts) {
+    // Cells can span models with different vectors and probe layers; the per-model facts
+    // live in the conversation header and the Settings tables, not in one session-wide chip.
+    const models = Object.keys(S.models), cells = (meta.cells || []).length;
+    chip("chip mono", esc(models.length === 1 ? models[0] : models.length + " models"));
+    chip("chip mono", cells + " cell" + (cells === 1 ? "" : "s") + " · " + S.emotions.length + " dirs");
+  } else {
+    chip("chip mono", esc(meta.model || "unknown model"));
+    const vecName = String(meta.vectors_dir || "vectors").split("/").filter(Boolean).slice(-2).join("/") || "vectors";
+    chip("chip mono", esc(vecName) + " · probe L" + esc(S.probeLayer) + " · " + S.emotions.length + " dirs");
+  }
   const h = el("span", "chip"); h.id = "healthChip"; h.innerHTML = '<span class="dot"></span><span>health</span>'; kv.appendChild(h);
   if (job.id) chip("chip mono", "job " + esc(job.id) + (job.node ? " · " + esc(job.node) : ""));
-  if (s.read_only) chip("chip", "replay · read-only");
+  if (s.read_only) chip("chip", (S.rollouts ? "rollouts" : "replay") + " · read-only");
   applyHealth(S.health || {ok: true});
   const t = $("#tunnelBtn");
   t.disabled = !(job && job.tunnel_cmd);
@@ -600,18 +636,34 @@ function startHealthPoll() {
 function fillSelects() {
   const cb = $("#colourBy"); cb.innerHTML = "";
   S.emotions.forEach(e => { const o = el("option", null, e); o.value = e; if (e === S.colourBy) o.selected = true; cb.appendChild(o); });
-  const seg = $("#layerSeg"); seg.innerHTML = "";
-  S.layers.forEach(l => {
-    const b = el("button", l === S.layer ? "on" : null, String(l)); b.dataset.l = l;
-    b.addEventListener("click", () => setLayer(l));
-    seg.appendChild(b);
-  });
+  renderLayerSeg();
   const d = (S.session && S.session.defaults) || {};
   const temps = Array.from(new Set([Number(d.temperature || 0), 0, 0.7, 1.0])).sort((a, b) => a - b);
   const toks = Array.from(new Set([Number(d.max_tokens || 2048), 512, 1024, 2048, 4096])).sort((a, b) => a - b);
   const fill = (sel, vals, cur, f) => { sel.innerHTML = ""; vals.forEach(v => { const o = el("option", null, f(v)); o.value = v; if (v === cur) o.selected = true; sel.appendChild(o); }); };
   fill($("#cTemp"), temps, Number(d.temperature || 0), v => v.toFixed(1));
   fill($("#cMaxTok"), toks, Number(d.max_tokens || 2048), v => String(v));
+}
+
+function renderLayerSeg() {
+  const seg = $("#layerSeg"); seg.innerHTML = "";
+  S.layers.forEach(l => {
+    const b = el("button", l === S.layer ? "on" : null, String(l)); b.dataset.l = l;
+    b.addEventListener("click", () => setLayer(l));
+    seg.appendChild(b);
+  });
+}
+
+// Every rollout cell was captured with its own model's layers and probe layer, so the page
+// follows the open conversation's model instead of one session-wide set. The emotion chips
+// are drawn from the union and do not move with the model; only the layer switch does.
+function applyModelLayers(model) {
+  const m = (S.models || {})[model];
+  if (!m) return;
+  S.layers = m.capture_layers || [];
+  S.probeLayer = m.probe_layer === undefined ? null : m.probe_layer;
+  if (S.layers.indexOf(S.layer) < 0) S.layer = S.probeLayer !== null ? S.probeLayer : (S.layers.length ? S.layers[0] : null);
+  renderLayerSeg();
 }
 
 function renderEmpty() {
@@ -625,6 +677,7 @@ async function refreshRail() {
   catch (e) { $("#railList").innerHTML = '<div class="warnbox crit" style="margin:8px">' + esc(e.message) + "</div>"; return; }
   S.conversations = (data.conversations || []).slice().sort((a, b) => String(b.last_created_at || "").localeCompare(String(a.last_created_at || "")));
   const list = $("#railList"); list.innerHTML = "";
+  if (S.rollouts) { renderRolloutRail(list); renderRailFoot(); fillAggFilter(); return; }
   const tasks = S.conversations.filter(c => c.source === "task");
   const chats = S.conversations.filter(c => c.source !== "task");
   const group = (label, items, render) => {
@@ -656,6 +709,58 @@ async function refreshRail() {
   fillAggFilter();
 }
 
+// One line per rollout, grouped model > cell. The cell summary carries what separates one
+// cell from another (split, mindset, how many records have per-token arrays), so a rollout
+// read out of the wrong cell is hard to mistake for one read out of the right one.
+function renderRolloutRail(list) {
+  const q = (S.railFilter || "").toLowerCase();
+  const curCid = S.current ? S.current.conversation.conversation_id : null;
+  const byModel = {};
+  S.conversations.forEach(c => { ((byModel[c.model] ||= {})[c.version] ||= []).push(c); });
+  const models = Object.keys(byModel).sort();
+  const oneCell = models.length === 1 && Object.keys(byModel[models[0]]).length === 1;
+  const cellsMeta = {}; ((S.session.session || {}).cells || []).forEach(c => { cellsMeta[c.model + "/" + c.version] = c; });
+  models.forEach(model => {
+    const versions = Object.keys(byModel[model]).sort();
+    const shown = versions.filter(v => byModel[model][v].some(c => !q || (c.task_id + " " + v + " " + model).toLowerCase().indexOf(q) >= 0));
+    if (!shown.length) return;
+    const g = el("div", "group eyebrow", model); g.style.marginTop = "8px"; list.appendChild(g);
+    shown.forEach(version => {
+      const items = byModel[model][version].filter(c => !q || (c.task_id + " " + version + " " + model).toLowerCase().indexOf(q) >= 0);
+      const meta = cellsMeta[model + "/" + version] || {};
+      const d = document.createElement("details"); d.className = "cell";
+      d.open = oneCell || !!q || items.some(c => c.conversation_id === curCid);
+      const sm = document.createElement("summary");
+      const mind = (meta.mindset || []).length ? " · " + meta.mindset.join("+") : "";
+      // While a filter is on, the cell line says how many of its rollouts matched, so the
+      // count next to it cannot be read as the cell's size.
+      const n = q && meta.n_rollouts ? items.length + " of " + meta.n_rollouts : items.length;
+      sm.innerHTML = "<b>" + esc(version) + '</b> <span class="meta">' + esc(meta.bench_split || "?") + esc(mind) + " · " + n + " rollouts" +
+        (meta.n_with_token_arrays ? " · " + meta.n_with_token_arrays + " per-token" : "") +
+        (meta.n_misaligned ? ' · <span class="cap">' + meta.n_misaligned + " misaligned</span>" : "") + "</span>";
+      d.appendChild(sm);
+      const multi = new Set(items.map(c => c.task_id)).size !== items.length;
+      items.sort((a, b) => String(a.task_id).localeCompare(String(b.task_id), undefined, {numeric: true}) || a.sample - b.sample).forEach(c => {
+        const b = el("button", "item" + (c.conversation_id === curCid ? " sel" : ""));
+        b.dataset.cid = c.conversation_id;
+        const st = c.passed === true ? "pass" : c.passed === false ? "fail" : "idle";
+        b.innerHTML = '<span class="st ' + st + '"></span><span class="id">' + esc(c.task_id) + (multi ? " · s" + c.sample : "") + "</span>" +
+          '<span class="meta">' + c.n_turns + "t" + (c.has_token_arrays ? " · ●" : "") + (c.passed === true ? " · ✓" : c.passed === false ? " · ✕" : "") + "</span>";
+        b.title = c.has_token_arrays ? "per-token arrays available" : "turn readouts only (no per-token arrays)";
+        b.addEventListener("click", () => openConversation(c.conversation_id));
+        d.appendChild(b);
+      });
+      list.appendChild(d);
+    });
+  });
+  if (!list.children.length) {
+    list.innerHTML = '<div class="group" style="color:var(--muted);font-size:11.5px">' +
+      (S.conversations.length ? "no rollout matches the filter" : "no rollouts found") + "</div>";
+  }
+  const n = S.conversations.reduce((a, c) => a + (c.n_turns || 0), 0);
+  $("#recChip").textContent = n + " turns · " + S.conversations.length + " rollouts";
+}
+
 function slurmMinutes(s) {
   if (!s) return null;
   const m = String(s).trim().match(/^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)$/);
@@ -667,6 +772,11 @@ function slurmMinutes(s) {
 function renderRailFoot() {
   const s = S.session || {}, job = s.job || {};
   const foot = $("#railFoot");
+  if (S.rollouts) {
+    const roots = ((s.session || {}).roots || []).map(r => "<code>" + esc(r) + "</code>").join("<br>");
+    foot.innerHTML = "Rollouts → " + (roots || "<code>—</code>") + "<br>Read-only: pilot records are never modified.";
+    return;
+  }
   let html = "Records → <code>" + esc(s.records_dir || "—") + "</code>";
   if (job.time_left) {
     const mins = slurmMinutes(job.time_left);
@@ -686,10 +796,14 @@ function scheduleRefresh(cid) {
 
 async function openConversation(id) {
   let data;
+  // The first record of a rollout cell pays for the tokeniser load (~20 s), so say so.
+  if (S.rollouts) startTicker("loading transcript");
   try { data = await api.get("/api/conversations/" + encodeURIComponent(id)); }
-  catch (e) { setStatus(e.message, true); return; }
+  catch (e) { stopTicker(); setStatus(e.message, true); return; }
+  if (S.rollouts) { stopTicker(); setStatus(""); }
   const sameConv = S.current && S.current.conversation.conversation_id === id;
   S.current = data;
+  if (S.rollouts && data.conversation.model) applyModelLayers(data.conversation.model);
   if (!sameConv) { S.tokens = null; S.pinnedTok = null; }
   renderConversation();
   renderTrajectory();
@@ -703,7 +817,13 @@ async function openConversation(id) {
 
 function markRailSelection() {
   const cid = S.current ? S.current.conversation.conversation_id : null;
-  $$("#railList .item").forEach(b => b.classList.toggle("sel", b.dataset.cid === cid));
+  $$("#railList .item").forEach(b => {
+    const on = b.dataset.cid === cid;
+    b.classList.toggle("sel", on);
+    // The open rollout can sit inside a collapsed cell (the rail is drawn before the first
+    // conversation loads); a selection nobody can see is worse than an expanded cell.
+    if (on && b.parentElement && b.parentElement.tagName === "DETAILS") b.parentElement.open = true;
+  });
 }
 
 const turnsOf = () => (S.current && S.current.turns) || [];
@@ -721,12 +841,21 @@ function renderConversation() {
   const stream = $("#stream");
   stream.innerHTML = "";
   if (!S.current) { renderEmpty(); return; }
-  const conv = S.current.conversation, turns = turnsOf(), isTask = conv.source === "task";
+  const conv = S.current.conversation, turns = turnsOf();
+  // A rollout is laid out like a task run -- one problem statement, then attempt/test pairs --
+  // but its facts come off the record itself, not off a condition the dashboard chose.
+  const isRoll = conv.source === "rollout", isTask = conv.source === "task" || isRoll;
   // header
-  $("#convTitle").textContent = isTask ? (conv.task_id || conv.conversation_id) : (conv.title || conv.conversation_id);
+  $("#convTitle").textContent = isRoll
+    ? (conv.task_id || conv.conversation_id) + (conv.sample === undefined || conv.sample === null ? "" : " · s" + conv.sample)
+    : isTask ? (conv.task_id || conv.conversation_id) : (conv.title || conv.conversation_id);
   const cond = (turns.length && turns[turns.length - 1].condition) || {};
   const bits = [];
-  if (isTask) { bits.push("ImpossibleBench · " + (conv.bench_split || "?") + " split"); bits.push("attempt " + turns.length); }
+  if (isRoll) {
+    [conv.model, conv.version, (conv.bench_split || "?") + " split",
+     conv.mindset && conv.mindset.length ? "mindset:" + conv.mindset.join("+") : null,
+     turns.length + " turn" + (turns.length === 1 ? "" : "s")].forEach(b => { if (b) bits.push(b); });
+  } else if (isTask) { bits.push("ImpossibleBench · " + (conv.bench_split || "?") + " split"); bits.push("attempt " + turns.length); }
   else bits.push("chat · " + turns.length + " turn" + (turns.length === 1 ? "" : "s"));
   if (cond.temperature !== undefined) bits.push("T=" + cond.temperature);
   if (cond.max_tokens !== undefined) bits.push("max_tokens " + cond.max_tokens);
@@ -740,7 +869,8 @@ function renderConversation() {
   const state = conv.state || "done";
   const running = ["generating", "testing", "awaiting_user"].indexOf(state) >= 0;
   st.className = "status " + (running ? "run" : conv.passed === true ? "pass" : conv.passed === false ? "fail" : "");
-  st.textContent = running ? "● " + state.replace("_", " ") : conv.passed === true ? "✓ passed" : conv.passed === false ? "✕ failed" : state;
+  st.textContent = running ? "● " + state.replace("_", " ") : conv.passed === true ? "✓ passed" : conv.passed === false ? "✕ failed"
+    : isRoll ? "no result" : state;
 
   // messages
   const first = turns.length ? turns[0] : null;
@@ -749,7 +879,11 @@ function renderConversation() {
   if (sys) stream.appendChild(sysMessage(sys.content));
   if (isTask) {
     const problem = msgs0.find(m => m.role === "user");
+    // A rollout's context is read back out of the .eval log; without it the completions are
+    // all there is, and saying so beats a transcript that silently starts mid-conversation.
     if (problem) stream.appendChild(plainMessage("user", "problem statement", problem.content));
+    else if (isRoll) stream.appendChild(plainMessage("user", "problem statement", "(unavailable: " +
+      (((first && first.warnings) || []).find(w => w.indexOf("transcript context") >= 0) || "no .eval log") + ")"));
   }
   turns.forEach((t, i) => {
     if (isTask) {
@@ -804,6 +938,7 @@ function assistantMessage(turn, i) {
   const facts = [];
   facts.push((turn.n_generated || 0) + " tok");
   if (turn.n_think) facts.push(turn.n_think + " think");
+  if (turn.n_decode !== undefined && turn.n_decode !== null) facts.push(turn.n_decode + " rows");
   if (turn.timings && isNum(turn.timings.request_s)) facts.push(turn.timings.request_s.toFixed(1) + " s");
   let right = "";
   const warns = (turn.warnings || []).slice();
@@ -831,12 +966,17 @@ function renderTurnBody(host, turn) {
     const w = el("div", "warnbox crit"); w.innerHTML = "<b>Generation failed.</b> " + esc(turn.error);
     host.appendChild(w); return;
   }
+  if (S.rollouts && turn.has_token_arrays === false && !turn.misaligned) {
+    const w = el("div", "warnbox");
+    w.innerHTML = "<b>No per-token arrays</b> for this record (written before the mindset merge, 2026-08-16): text and start/end readouts only.";
+    host.appendChild(w);
+  }
   if (turn.misaligned) {
     const w = el("div", "warnbox crit");
     w.innerHTML = "<b>Hook/token misalignment.</b> The per-token strip is hidden for this turn: the residuals cannot be lined up with the tokens, so any tint would be wrong.";
     host.appendChild(w);
   }
-  if (S.view === "text" || turn.misaligned) {
+  if (S.view === "text" || turn.misaligned || (S.rollouts && turn.has_token_arrays === false)) {
     if (turn.reasoning) {
       const d = document.createElement("details"); d.className = "think"; d.open = false;
       const s = document.createElement("summary"); s.textContent = "thinking · " + (turn.n_think || 0) + " tok";
@@ -1396,21 +1536,61 @@ function renderSettings() {
     ["tunnel", job.tunnel_cmd || "—"],
     ["mode", s.read_only ? "replay (read-only)" : "live"],
   );
-  dl($("#setServer"), server);
+  if (S.rollouts) {
+    dl($("#setServer"), [["mode", "rollouts (read-only)"], ["roots", (meta.roots || []).join(", ") || "—"],
+                         ["ignored", (meta.ignored || []).join(", ") || "—"]]);
+  } else {
+    dl($("#setServer"), server);
+  }
+  // In rollouts mode the layers follow the open conversation's model, not the session.
   dl($("#setMeasure"), [
-    ["vectors", meta.vectors_dir || "—"],
-    ["probe layer", "L" + s.probe_layer],
-    ["capture layers", (s.capture_layers || []).map(l => "L" + l).join(", ")],
+    ["vectors", meta.vectors_dir || (S.rollouts ? "per model · see Models and cells" : "—")],
+    ["probe layer", "L" + S.probeLayer + (S.rollouts ? " · open conversation's model" : "")],
+    ["capture layers", (S.layers || []).map(l => "L" + l).join(", ")],
     ["emotion order", (s.emotions || []).join(", ")],
     ["readout", "single token · " + READOUT_LABEL[S.readout] + " · segment " + S.segment + " · stat " + S.stat],
     ["cosine scale", "±0.08 fixed (strip tint)"],
   ]);
-  dl($("#setSession"), [
+  dl($("#setSession"), S.rollouts ? [
+    ["roots", (meta.roots || []).join(", ") || "—"],
+    ["cells", String((meta.cells || []).length)],
+    ["rollouts", String(S.conversations.length)],
+    ["arrays", "<cell>/residuals/*.npz"],
+    ["command", "python -m healthy_rl.dashboard --rollouts " + ((meta.roots || [])[0] || "<dir>")],
+  ] : [
     ["records", s.records_dir || "—"],
     ["arrays", "proj/<record_id>.npz"],
     ["defaults", "max_tokens " + d.max_tokens + " · max_attempts " + d.max_attempts + " · temperature " + d.temperature],
     ["replay", "python -m healthy_rl.dashboard --replay " + (s.records_dir || "<dir>")],
   ]);
+  renderCellTables();
+}
+
+// What the startup scan found: one row per model (is there a tokeniser and a vector set for
+// it at all) and one per cell (how many records, and how many of them carry per-token arrays).
+function renderCellTables() {
+  const card = $("#setCellsCard");
+  card.hidden = !S.rollouts;
+  if (!S.rollouts) return;
+  const meta = (S.session && S.session.session) || {};
+  const th = cols => "<tr>" + cols.map(c => "<th>" + esc(c) + "</th>").join("") + "</tr>";
+  const td = (v, cls) => "<td" + (cls ? ' class="' + cls + '"' : "") + ">" + esc(v) + "</td>";
+  let html = th(["model", "tokenizer", "vectors", "probe", "layers", "emotions"]);
+  Object.keys(S.models).sort().forEach(name => {
+    const m = S.models[name] || {};
+    html += "<tr>" + td(name) + td(m.tokenizer || "—") + td(m.vectors || "—") +
+      td(m.probe_layer === undefined || m.probe_layer === null ? "—" : "L" + m.probe_layer) +
+      td((m.capture_layers || []).map(l => "L" + l).join(" ")) + td((m.emotions || []).join(" ")) + "</tr>";
+  });
+  $("#setModels").innerHTML = html;
+  html = th(["model", "cell", "split", "mindset", "rollouts", "per-token", "tokenised", "misaligned", "max_tok"]);
+  (meta.cells || []).forEach(c => {
+    html += "<tr" + (c.n_rollouts ? "" : ' class="dim"') + ">" + td(c.model) + td(c.version) + td(c.bench_split || "?") +
+      td((c.mindset || []).join("+") || "—") + td(c.n_rollouts, "n") + td(c.n_with_token_arrays, "n") +
+      td(c.n_tokenised, "n") + td(c.n_misaligned, "n") +
+      td(c.max_tokens === undefined || c.max_tokens === null ? "—" : c.max_tokens, "n") + "</tr>";
+  });
+  $("#setCells").innerHTML = html;
 }
 
 // ---------- composer: chat, task ----------
@@ -1444,7 +1624,8 @@ function updateComposer() {
   // leave the first run's turn events refreshing the wrong conversation.
   $("#newChatBtn").disabled = ro || S.busy;
   $("#newTaskBtn").disabled = ro || !S.healthOk || S.busy;
-  if (ro) setStatus("Replay session: read-only, no generation.");
+  if (S.rollouts) setStatus("Rollouts: pilot records, read-only.");
+  else if (ro) setStatus("Replay session: read-only, no generation.");
   else if (!S.healthOk) setStatus("Model unreachable — generation disabled." + (S.health && S.health.last_error ? " " + S.health.last_error : ""), true);
 }
 
@@ -1641,6 +1822,12 @@ function wireControls() {
     S.colourBy = ev.target.value;
     renderConversation(); renderTiles(); trajDraw(); tokChartDraw();
     if (S.pinnedTok) renderTokInfo(S.pinnedTok.i);
+  });
+  $("#railFilter").addEventListener("input", ev => {
+    S.railFilter = ev.target.value;
+    if (!S.rollouts) return;
+    const list = $("#railList"); list.innerHTML = "";   // filtering is local: no need to re-fetch
+    renderRolloutRail(list);
   });
   $("#tokTurn").addEventListener("change", ev => { if (ev.target.value) { S.pinnedTok = null; loadTokens(ev.target.value); } });
   $("#newChatBtn").addEventListener("click", () => {

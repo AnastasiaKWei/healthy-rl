@@ -28,3 +28,8 @@ def test_javascript_parses(tmp_path):
     assert scripts
     js = tmp_path / "page.js"; js.write_text("\n".join(scripts))
     subprocess.run([node, "--check", str(js)], check=True)
+
+
+def test_rollouts_mode_strings_present():
+    for s in ["S.rollouts", "applyModelLayers", "no per-token arrays", "session.models", "railFilter"]:
+        assert s in PAGE, s
