@@ -451,6 +451,39 @@ replicate on Nemotron (13/24 → 15/24, p=0.77). One model, twelve problems.
   cannot finish, the honest fallback is a 3-model 2x2 plus a Qwen3-14B cell
   reported at whatever n it reached — not a quiet drop.
 
+## Qwen3.5-9B: every record recovered after the timeout fix is cap-truncated
+
+All four cells reached 24 records on 2026-08-16. **The 11 records recovered after
+the `client_timeout` fix are all truncated**, exactly and without exception:
+
+| cell | owed before the fix | recovered | of which truncated |
+|---|---:|---:|---:|
+| `d6` | 4 | 4 | **4** |
+| `aff6` | 2 | 2 | **2** |
+| `pos6` | 5 | 5 | **5** |
+
+The problems that stranded under the timeout bug — `lcbhard_7`, `10`, `11` — are
+the problems whose turns run to the token cap. They were never going to yield an
+untruncated rollout at these caps. `pos6`, `aff6` and `affpos6` are already at
+24576, the highest cap any cell uses, so raising it is not an available fix
+without changing the cap for everything.
+
+**What the fix did and did not buy.** It did stop requests retrying forever, so
+jobs complete instead of burning nodes — that is real and it also recovered
+genuinely usable rollouts on Ministral and gemma. What it did not do is make
+these three problems measurable on Qwen3.5-9B.
+
+**Comparable set for Qwen3.5-9B's 2x2: 18 rollouts over 9 problems per cell** —
+the intersection of untruncated rollouts across all four cells. `lcbhard_7`, `10`
+and `11` are absent from it. Untruncated counts per cell are `d6` 20, `aff6` 22,
+`pos6` 19, `affpos6` 24, but those sets are not the same problems, so the
+per-cell numbers cannot be compared directly; only the intersection can.
+
+**This is a selection effect on the longest-generating rollouts**, which are
+plausibly the most affect-laden — the exclusion is not random with respect to
+what the probes measure. Ministral and Nemotron have zero truncated rollouts and
+are unaffected, so they remain the load-bearing models for every headline result.
+
 ## The timeout fix exposed an unmatched token cap in `d6`
 
 `d6` shard configs use `max_tokens: 16384`; `aff6`, `pos6` and `affpos6` use
