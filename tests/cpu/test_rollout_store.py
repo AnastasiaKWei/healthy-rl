@@ -260,3 +260,82 @@ def test_record_without_tokenizer(tmp_path):
 def test_record_unknown_id(tmp_path):
     with pytest.raises(KeyError):
         _store(tmp_path).record("nope")
+
+
+def test_arrays_for_token_cell(tmp_path):
+    st = _store(tmp_path)
+    r = st.record("fake-model/appr6/lcbhard_0/s0/t1")
+    a = st.arrays(r["record_id"])
+    assert a["proj"].shape == (4, 2, 3) and a["proj"].dtype == np.float32 and a["norm"].shape == (4, 2)
+    assert a["proj_prefill"].shape == (2, 3) and a["norm_prefill"].shape == (2,)
+    assert a["res_start_L20"].shape == (8,) and "proj_end" not in a
+    z = np.load(tmp_path / "rollouts" / "fake-model" / "appr6" / "residuals" / "lcbhard_0_s0.npz")
+    assert np.allclose(a["proj"][:, 1, :], z["t1_proj_L20"][1:].astype(np.float32))
+    assert np.allclose(a["proj_prefill"][1], z["t1_proj_L20"][0].astype(np.float32))
+    # readouts flow through stats unchanged
+    from healthy_rl.dashboard import stats
+    v = stats.turn_readout(proj=a["proj"], norm=a["norm"], proj_prefill=a["proj_prefill"], norm_prefill=a["norm_prefill"],
+                           token_kind=r["token_kind"], layer_index=1, readout="think_end")
+    assert v is not None and v.shape == (3,)
+
+
+def test_arrays_for_old_cell_project_residuals(tmp_path):
+    from healthy_rl.rollouts import Vectors
+    E, L, d = 3, 2, 8
+    dirs = np.zeros((E, L, d), np.float32); dirs[:, 1, :3] = np.eye(3)     # probe layer 20 = index 1
+    vec = Vectors(directions=dirs, emotions=list(EMOTIONS), capture_layers=[10, 20], probe_layer=20,
+                  mean_residual_norm={10: 1.0, 20: 1.0}, path=Path("fake"))
+    make_cell(tmp_path / "rollouts", "fake-model", "d6", rows=ROWS[:1], token_arrays=False)
+    st = RolloutStore.open([tmp_path / "rollouts"], tokenizer_loader=lambda m: WhitespaceTokenizer(),
+                           vectors_loader=lambda m: vec, eval_loader=FakeEvalSamples({}))
+    r = st.record("fake-model/d6/lcbhard_0/s0/t0")
+    a = st.arrays(r["record_id"])
+    assert a["proj"].shape == (0, 2, 3) and a["norm"].shape == (0, 2)
+    z = np.load(tmp_path / "rollouts" / "fake-model" / "d6" / "residuals" / "lcbhard_0_s0.npz")
+    h = z["t0_res_start_L20"].astype(np.float64)
+    assert np.allclose(a["proj_prefill"][1], h[:3]) and np.isclose(a["norm_prefill"][1], np.linalg.norm(h))
+    assert np.isnan(a["proj_prefill"][0]).all() and np.isnan(a["norm_prefill"][0])
+    he = z["t0_res_end_L20"].astype(np.float64)
+    assert np.allclose(a["proj_end"][1], he[:3]) and np.isclose(a["norm_end"][1], np.linalg.norm(he))
+    from healthy_rl.dashboard import stats
+    s = stats.turn_readout(proj=a["proj"], norm=a["norm"], proj_prefill=a["proj_prefill"], norm_prefill=a["norm_prefill"],
+                           token_kind=[], layer_index=1, readout="start")
+    e = stats.turn_readout(proj=a["proj"], norm=a["norm"], proj_prefill=a["proj_prefill"], norm_prefill=a["norm_prefill"],
+                           token_kind=[], layer_index=1, readout="end", proj_end=a["proj_end"], norm_end=a["norm_end"])
+    assert np.allclose(s, h[:3] / np.linalg.norm(h)) and np.allclose(e, he[:3] / np.linalg.norm(he))
+    assert st.session["models"]["fake-model"]["vectors"] == "ok"
+
+
+def test_arrays_for_old_cell_without_vectors(tmp_path):
+    st = _store(tmp_path)          # vectors_loader -> None
+    r = st.record("fake-model/d6/lcbhard_0/s0/t0")
+    a = st.arrays(r["record_id"])
+    assert a["proj"].shape == (0, 2, 3) and np.isnan(a["proj_prefill"]).all() and np.isnan(a["norm_prefill"]).all()
+    assert "proj_end" not in a
+    assert any("vectors" in w for w in st.record(r["record_id"])["warnings"])
+
+
+def test_arrays_zero_token_turn_and_missing_npz(tmp_path):
+    st = _store(tmp_path)
+    a = st.arrays("fake-model/appr6/lcbhard_1/s0/t0")
+    assert a["proj"].shape == (0, 2, 3) and np.isnan(a["norm_prefill"]).all()
+    import os
+    os.remove(tmp_path / "rollouts" / "fake-model" / "appr6" / "residuals" / "lcbhard_1_s0.npz")
+    # a fresh store over the same cells: re-running _store would re-create the npz just removed
+    st2 = RolloutStore.open([tmp_path / "rollouts"], tokenizer_loader=lambda m: WhitespaceTokenizer(),
+                            vectors_loader=lambda m: None, eval_loader=FakeEvalSamples({}))
+    r = st2.record("fake-model/appr6/lcbhard_1/s0/t1")
+    a = st2.arrays(r["record_id"])
+    assert a["proj"].shape[0] == 0 and st2.record(r["record_id"])["misaligned"] is True and "npz" in st2.record(r["record_id"])["error"]
+
+
+def test_arrays_layer_mismatch_marks_misaligned(tmp_path):
+    cell = make_cell(tmp_path / "rollouts", "fake-model", "appr6", rows=ROWS[:1], capture_layers=(10, 20, 30))
+    f = cell / "rollouts.shard0of2.jsonl"
+    row = json.loads(f.read_text()); row["capture_layers"] = [10, 20]; f.write_text(json.dumps(row) + "\n")   # row lies about its layers
+    st = RolloutStore.open([tmp_path / "rollouts"], tokenizer_loader=lambda m: WhitespaceTokenizer(),
+                           vectors_loader=lambda m: None, eval_loader=FakeEvalSamples({}))
+    a = st.arrays("fake-model/appr6/lcbhard_0/s0/t0")
+    assert a["proj"].shape == (0, 2, 3)      # nothing usable is served under the wrong layer list
+    r = st.record("fake-model/appr6/lcbhard_0/s0/t0")
+    assert r["misaligned"] is True and "L30" in r["error"]

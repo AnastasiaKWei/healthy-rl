@@ -198,6 +198,50 @@ Three completions and then a wedge, every time, with `max_connections: 8` and 8
 in-flight samples. That reproducibility argues for something structural in the
 client's connection handling rather than an unlucky slow generation.
 
+#### ROOT CAUSE, measured 2026-08-16
+
+The hang is a client timeout, and both halves of it had to be wrong at once.
+
+Reproduction, on Qwen3.5-9B with the real production hook
+(`scripts/diagnose_stuck_request.py`):
+
+| in flight | tokens | plain | hooked | hook overhead |
+|---:|---:|---:|---:|---:|
+| 1 | 8192 | 319 s | 355 s | 11% |
+| 8 | 12288 | 491 s | 761 s | **55%** |
+
+Nothing hangs — every request returns. What the numbers say is that at
+production concurrency the hooked rate is **16.1 tok/s per request**, so:
+
+| turn length | time | vs the old 600 s timeout |
+|---:|---:|---|
+| 8192 | 507 s | under |
+| 12288 | 761 s | **over** |
+| 24576 (the cap) | 1522 s | **over** |
+
+So any turn past ~9700 tokens exceeded the timeout, the client abandoned it, and
+retried from scratch against a server that never stopped working on the original.
+That is the whole fault, and it explains every part of the signature that looked
+mysterious:
+
+- **"Qwen-only"** — Qwen's turns run 6000–13000 tokens; Ministral's run ~1000 and
+  never approach the line.
+- **"Problem-specific"** (`lcbhard_7`/`10`/`11`/`4`) — those are simply the
+  problems with the longest turns: median longest turn 8399 tokens against 5988
+  for the rest, and the four longest turns overall. No turn ever hit the 24576
+  cap, so the cap was never involved.
+- **"Exactly 3 completed POSTs"** — the turns that finished under 600 s.
+- **The healthy-looking server** — it was healthy. It was still generating.
+
+The hook is why the margin vanished: 11% overhead alone would have kept a
+12288-token turn under 600 s; 55% at concurrency 8 does not.
+
+**Fix:** `request_timeout_s` is now 3600 everywhere (base config and all 155
+shard configs), the code default is 3600 rather than the SDK's 600, and
+`tests/cpu/test_request_timeout.py` asserts per config file that the timeout
+covers a full-length turn *at that file's own `max_tokens`*. The earlier wiring
+fix was necessary but not sufficient — the value itself was still 600.
+
 **It only happens to the Qwen models.** Seven confirmed hangs: six on
 Qwen3.5-9B, one on Qwen3-14B. Ministral-3-14B and Nemotron-3-Nano-4B completed
 all eight of their cells — 192 rollouts — without a single one. Not a node

@@ -187,6 +187,68 @@ def align_tokens(tokens: list[str], starts: list[int], think_end_char: int, n_de
     return list(tokens), kinds, True, f"re-tokenised {N} tokens, {n_decode} decode rows"
 
 
+def _project_residual(h: np.ndarray, directions: np.ndarray) -> tuple[np.ndarray, float]:
+    """``(proj (E,), norm)`` of one residual on the probe-layer directions; NaN when non-finite."""
+    h = np.asarray(h, dtype=np.float64)
+    if not np.isfinite(h).all():
+        return np.full(directions.shape[0], np.nan), np.nan
+    n = float(np.linalg.norm(h))
+    return directions @ h, n
+
+
+def arrays_from_npz(z, *, turn: int, capture_layers: list[int], probe_layer: int, n_emotions: int, vectors=None
+                    ) -> tuple[dict[str, np.ndarray], list[str]]:
+    """Dashboard-shaped arrays for one turn of a rollout npz (spec §3.2, §3.4)."""
+    L, files = len(capture_layers), set(z.files)
+    problems: list[str] = []
+    E = int(n_emotions)
+    per_layer: list[tuple[np.ndarray, np.ndarray, np.ndarray] | None] = []
+    for layer in capture_layers:
+        k = f"t{turn}_proj_L{layer}"
+        if k in files:
+            proj = np.asarray(z[k], dtype=np.float32); norm = np.asarray(z[f"t{turn}_norm_L{layer}"], dtype=np.float32)
+            kind = np.asarray(z[f"t{turn}_kind_L{layer}"]).reshape(-1)
+            if proj.shape[1] != E:
+                problems.append(f"{k}: proj has {proj.shape[1]} emotions, record lists {E}")
+            per_layer.append((proj, norm, kind))
+        else:
+            per_layer.append(None)
+    extra = sorted(k for k in files if k.startswith(f"t{turn}_proj_L") and int(k.rsplit("L", 1)[1]) not in capture_layers)
+    if extra:
+        problems.append("npz has layers the record does not list: " + ", ".join("L" + k.rsplit("L", 1)[1] for k in extra))
+    have = [p for p in per_layer if p is not None]
+    out: dict[str, np.ndarray] = {}
+    if have and not problems and len(have) == L:
+        T = int((have[0][2] == 0).sum())
+        if any(int((p[2] == 0).sum()) != T for p in have):
+            problems.append("decode-row count differs across layers")
+    if have and not problems and len(have) == L:
+        out["proj"] = np.stack([p[0][p[2] == 0] for p in have], axis=1)                # T x L x E
+        out["norm"] = np.stack([p[1][p[2] == 0] for p in have], axis=1)                # T x L
+        pre = [np.where(p[2] == 1)[0] for p in have]
+        out["proj_prefill"] = np.stack([p[0][i[-1]] if len(i) else np.full(E, np.nan) for p, i in zip(have, pre)])
+        out["norm_prefill"] = np.array([p[1][i[-1]] if len(i) else np.nan for p, i in zip(have, pre)], np.float32)
+    else:
+        if have and len(have) != L and not problems:
+            missing = [f"L{l}" for l, p in zip(capture_layers, per_layer) if p is None]
+            problems.append("npz lacks per-token arrays at " + ", ".join(missing))
+        out["proj"] = np.zeros((0, L, E), np.float32); out["norm"] = np.zeros((0, L), np.float32)
+        out["proj_prefill"] = np.full((L, E), np.nan, np.float32); out["norm_prefill"] = np.full(L, np.nan, np.float32)
+        rs, re_ = f"t{turn}_res_start_L{probe_layer}", f"t{turn}_res_end_L{probe_layer}"
+        if vectors is not None and probe_layer in capture_layers and (rs in files or re_ in files):
+            li = capture_layers.index(probe_layer)
+            D = np.asarray(vectors.probe_directions(), dtype=np.float64)
+            if rs in files:
+                p, n = _project_residual(z[rs], D); out["proj_prefill"][li] = p; out["norm_prefill"][li] = n
+            if re_ in files:
+                out["proj_end"] = np.full((L, E), np.nan, np.float32); out["norm_end"] = np.full(L, np.nan, np.float32)
+                p, n = _project_residual(z[re_], D); out["proj_end"][li] = p; out["norm_end"][li] = n
+    for k in (f"t{turn}_res_start_L{probe_layer}", f"t{turn}_res_end_L{probe_layer}"):
+        if k in files:
+            out[k.split("_", 1)[1]] = np.asarray(z[k])          # "res_start_L20"
+    return out, problems
+
+
 class RolloutStore:
     """Read-only, ``SessionStore``-shaped view over rollout cells."""
 
@@ -299,7 +361,44 @@ class RolloutStore:
         return rec
 
     def arrays(self, record_id: str) -> dict[str, np.ndarray]:
-        raise NotImplementedError  # Task 4
+        rec = self.record(record_id)
+        L, E = len(rec["capture_layers"]), len(rec["emotions"])
+        empty = {"proj": np.zeros((0, L, E), np.float32), "norm": np.zeros((0, L), np.float32),
+                 "proj_prefill": np.full((L, E), np.nan, np.float32), "norm_prefill": np.full(L, np.nan, np.float32)}
+        path = self._npz_path(rec)
+        if path is None or not path.is_file():
+            self._mark(rec, f"npz missing: {path}")
+            return empty
+        vec = self._vectors_for(rec["model"])
+        try:
+            with np.load(path) as z:
+                out, problems = arrays_from_npz(z, turn=rec["turn_index"], capture_layers=rec["capture_layers"],
+                                                probe_layer=rec["probe_layer"], n_emotions=E, vectors=vec)
+        except (OSError, ValueError) as exc:
+            self._mark(rec, f"npz unreadable: {exc}")
+            return empty
+        if problems:
+            self._mark(rec, "; ".join(problems))
+            return empty
+        if out["proj"].shape[0] == 0 and rec["n_generated"] > 0 and vec is None and not rec["has_token_arrays"]:
+            if "vectors missing: start/end readouts unavailable for this cell" not in rec["warnings"]:
+                rec["warnings"].append("vectors missing: start/end readouts unavailable for this cell")
+        return out
+
+    def _mark(self, rec: dict, error: str) -> None:
+        """Flag a full record misaligned; the page hides the strip and readouts go None.
+
+        ``record()`` may already have reported the same problem (a missing npz is seen
+        by ``_decode_rows`` first), so an error string that is already there is not
+        appended a second time.
+        """
+        rec["misaligned"] = True
+        prev = rec.get("error")
+        if not prev:
+            rec["error"] = error
+        elif error not in prev:
+            rec["error"] = prev + "; " + error
+        self._session = None
 
     def conversations(self) -> list[dict]:
         out: dict[str, dict] = {}

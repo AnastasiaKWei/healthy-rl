@@ -2244,13 +2244,37 @@ def preflight(base_url: str, model_name: str, vectors: Vectors, cfg: Mapping[str
     }
 
 
+# Measured on Qwen3.5-9B, 2 x A100-40G, tp=2, 8 concurrent requests carrying the
+# projection hook: 12288 generated tokens took 761 s, i.e. 16.1 tok/s per request.
+# The hook costs 11% at one request in flight and 55% at eight, so concurrency --
+# not the model -- is what pushes a long turn past a short timeout.
+MEASURED_HOOKED_TOKENS_PER_S = 16.1
+
+# The OpenAI SDK's own default, and the value this project shipped. At the rate
+# above it is exceeded by any turn longer than ~9700 tokens, which is precisely
+# the range the longest-generating problems occupy. Kept as a named constant so
+# the test can assert we are no longer using it.
+SDK_DEFAULT_TIMEOUT_S = 600.0
+
+# Headroom over a full-length turn at the cap this project runs (24576 tokens
+# -> ~1522 s). Not "a big number": 24576 / 16.1 * 2.3.
+DEFAULT_REQUEST_TIMEOUT_S = 3600.0
+
+
 def request_timeout_s(cfg: Mapping[str, Any]) -> int:
     """The per-request timeout, in whole seconds, for every client in this stage.
 
     Inspect's ``GenerateConfig.timeout`` is an ``int | None``, so the float the
     config carries is truncated here rather than at each call site.
+
+    **This must exceed the time a full-length turn takes**, or the client
+    abandons a request the server is still serving and retries it from scratch,
+    forever -- the Qwen-only hang in docs/infrastructure.md. Wiring the value
+    through to the eval was necessary but not sufficient: the value itself was
+    still 600, and at 16.1 tok/s (8 concurrent, hooked) that is exceeded by any
+    turn over ~9700 tokens.
     """
-    return int(float(cfg.get("request_timeout_s", 600.0)))
+    return int(float(cfg.get("request_timeout_s", DEFAULT_REQUEST_TIMEOUT_S)))
 
 
 def eval_generate_config(
