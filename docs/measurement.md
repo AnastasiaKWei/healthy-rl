@@ -207,7 +207,9 @@ after every failed attempt (`include_task_reminder=True`, the default our
 reminder is byte-identical to its base arm's and turn 1 is the only place the two
 differ — the word-count table in [prompts-rollouts.md](prompts-rollouts.md) is
 the check (63 words per reminder with the affect prompt off, 97 with it on, in
-every arm).
+every mindset arm; the inoculation arm's reminders are longer by design,
+because nothing strips its block — see
+[runs.md](runs.md#the-inoculation-arm)).
 
 That reminder path is a load-bearing external dependency. The strip raises if the
 section is absent from `instruction_prompt`, so a renamed or reformatted key
