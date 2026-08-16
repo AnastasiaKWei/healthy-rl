@@ -21,6 +21,8 @@ versions encode the condition:
 | `growth6`, `resil6`, `appr6` | 6 | mindset block (growth / resilience / appraisal, v2), otherwise `d6`: no affect prompt, conflicting split. Block sent on turn 1 only. Compare against `d6` |
 | `affgrowth6`, `affresil6`, `affappr6` | 6 | same blocks with the affect prompt on, otherwise `aff6`. Compare against `aff6` |
 | `spgrowth6`, `spresil6`, `spappr6` | 6 | gemma-3-12b-it only: the same blocks on the `sp6` base (scratchpad on, no affect prompt). Compare against `sp6` |
+| `spaff6` | 6 | gemma-3-12b-it only: scratchpad on **and** affect prompt on — a new base cell (2026-08-16); per-token arrays present. Compare mindset arms `spaffgrowth6`/`spaffresil6`/`spaffappr6` against it |
+| `d6r`, `sp6r`, `aff6r`, `pos6r`, `affpos6r` | 6 | **re-runs** of the same-named base cells (gemma: d6/sp6/aff6; Ministral: d6/aff6/pos6/affpos6), fresh samples at temperature 1.0 written 2026-08-16 with the per-token arrays and `max_tokens` 24576. The per-token control for that model's mindset arms; also an independent replicate of the boundary readouts |
 
 `d6` / `sp6` / `aff6` / `pos6` / `affpos6` are the trustworthy set. Each condition
 needs its own `out_dir` — resume refuses to mix them, and since 2026-08-15 it
@@ -175,6 +177,17 @@ Rollout records, `$ARTIFACT_DIR/rollouts/<model>/<version>/*.jsonl`:
 | gemma-3-12b-it | `affgrowth6` | 24 | complete 2026-08-16 ~11:20; `--nice=2000`. Affect on, NO scratchpad (matches gemma's `aff6`); read at turn end |
 | gemma-3-12b-it | `affresil6` | 24 | complete 2026-08-16 ~11:45; `--nice=2000` |
 | gemma-3-12b-it | `affappr6` | 24 | complete 2026-08-16 ~11:45; `--nice=2000` |
+| gemma-3-12b-it | `spaff6` | 24 | complete 2026-08-16 ~11:45; base cell for the spaff arms; jobs 5651735–5651743 |
+| gemma-3-12b-it | `spaffgrowth6` | 24 | complete 2026-08-16 ~11:50; jobs 5651748–5651756 |
+| gemma-3-12b-it | `spaffresil6` | 24 | complete 2026-08-16 ~11:50; jobs 5651757–5651765 |
+| gemma-3-12b-it | `spaffappr6` | 24 | complete 2026-08-16 ~12:00; jobs 5651766–5651774 |
+| gemma-3-12b-it | `d6r` | 24 | re-run, complete 2026-08-16 ~12:20; jobs 5653039–5653047 |
+| gemma-3-12b-it | `sp6r` | 24 | re-run, complete 2026-08-16 ~12:35; jobs 5653048–5653056 |
+| gemma-3-12b-it | `aff6r` | 24 | re-run, complete 2026-08-16 ~12:20; jobs 5653057–5653065 |
+| Ministral-3-14B-Reasoning-2512 | `d6r` | 24 | re-run, complete 2026-08-16 ~12:35; jobs 5653066–5653074 |
+| Ministral-3-14B-Reasoning-2512 | `aff6r` | 24 | re-run, complete 2026-08-16 ~12:45; jobs 5653075–5653083 |
+| Ministral-3-14B-Reasoning-2512 | `pos6r` | 24 | re-run, complete 2026-08-16 ~12:40; jobs 5653084–5653092 |
+| Ministral-3-14B-Reasoning-2512 | `affpos6r` | 24 | re-run, complete 2026-08-16 ~12:45; jobs 5653093–5653101 |
 
 gemma-3-12b-it has no `pos6`/`affpos6` cell: it is the flattest of the measured
 models, and the 2x2s went to the models with a clear conflicting-split signal
