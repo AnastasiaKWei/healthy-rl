@@ -203,13 +203,13 @@ same `conversation_id` rather than nested in one row:
 | `turn_index`, `non_empty_turn_index` | raw index within the conversation; index among turns that generated tokens (`None` for an empty turn). Analysis uses the second, as `live_trajectory.py` does |
 | `attempt` | task runs: 1-based attempt number, `turn_index + 1` |
 | `tokens`, `token_kind` | the generated token strings, and `think` / `answer` per token. Rollout records keep no token text |
-| `n_think` | how many of `n_generated` were reasoning tokens |
-| `at_cap` | `n_generated == max_tokens`. The dashboard's version of the `turn_n_generated` check below |
+| `n_think` | how many of the `tokens` were reasoning tokens. It counts over `token_kind`, so it equals a share of `n_generated` only when the record is not `misaligned` |
+| `at_cap` | `n_generated >= max_tokens` **or** `finish_reason == "length"`. Wider than the rollout records' cap check, which is the `turn_n_generated == max_tokens` comparison below |
 | `misaligned` | hook rows did not equal `len(tokens)`; the row is still written, the token strip is hidden, and the counts are in `error`. Treat the turn's per-token readouts as unusable |
 | `warnings` | non-fatal notes from generation assembly, e.g. `reasoning_content offset is a guess: answer text not found in token stream` |
 | `text`, `reasoning`, `answer` | the full completion, and the two halves of it |
 | `messages_in` | the full input message list for this generation, so any attempt can be replayed exactly |
-| `condition` | `scratchpad`, `affect_prompt`, `temperature`, `max_tokens`, `auto_continue`, `system_prompt_hash` |
+| `condition` | task runs: `scratchpad`, `affect_prompt`, `temperature`, `max_tokens`, `auto_continue`, `system_prompt_hash`. Chat records carry only `max_tokens` and `temperature` — the other switches are task-loop settings and do not exist for a chat turn |
 | `user_intervention` | text the user inserted before the feedback message, if any. Rollouts have no such thing |
 | `title` | first chat turn only; what the rail shows |
 | `passed`, `feedback` | task runs: the scorer result and the exact message fed back |

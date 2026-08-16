@@ -218,10 +218,11 @@ Two more:
   parquet that is not there. Both keys appear in every `pos6`/`affpos6` config.
 - **`bench_dir` means two different directories.** In `configs/rollouts.yaml`
   (read by `scripts/run_rollouts.py`) it is one split's *fetch* directory,
-  `$ARTIFACT_DIR/bench/v1`. In `configs/dashboard.yaml` it is the bench *root*,
-  `$ARTIFACT_DIR/bench`, and `split_parquets` maps each split to its parquet below
-  it — the dashboard offers both splits in one session, so it cannot be pinned to
-  one fetch directory. Each is right for its stage and neither validates the
+  `$ARTIFACT_DIR/bench/v1`. For the dashboard it is the bench *root*:
+  `configs/dashboard.yaml` sets `split_parquets`, which maps each split to its
+  parquet below that root, and leaves `bench_dir` itself as a commented-out key —
+  `scripts/dashboard.py` defaults it to `$ARTIFACT_DIR/bench`. The dashboard offers
+  both splits in one session, so it cannot be pinned to one fetch directory. Each is right for its stage and neither validates the
   other's value, so a key copied between the two configs points the run one level
   off, at a directory with no parquet where it looks.
 - **`serve.max_model_len` must fit the checkpoint, and a copied serve block
@@ -292,9 +293,9 @@ node; the tunnel is the only intended route.
 
 ### No new dependencies
 
-`fastapi`, `uvicorn` and `httpx` are already installed as vLLM's own
-dependencies, so the dashboard adds nothing to `pyproject.toml`. Convenient, and
-fragile in exactly one direction: `uv sync` still reverts
+`fastapi` and `uvicorn` come from vLLM's dependency set, and `httpx` was already a
+direct dependency of this project (`pyproject.toml`), so the dashboard adds
+nothing to `pyproject.toml`. Convenient, and fragile in exactly one direction: `uv sync` still reverts
 `patches/vllm_lens_zstd_threadsafe.py`, the same as for rollouts.
 
 ### The zstd patch is recorded, not required
@@ -334,9 +335,10 @@ records it is generating. Two things that look like omissions and are not:
   wall-clock timeout (`sandbox_timeout_s`, default 30).
 
 **Each `Sandbox.run` costs ~5.6 s before any test executes**, all of it apptainer
-start-up. That is why the host-side timeout is `sandbox_timeout_s +
-STARTUP_GRACE_S` (30 s) rather than the container limit alone, and why a six-attempt
-task loop feels slower than the generation times add up to.
+start-up. That is why the host-side timeout is the container limit plus a grace
+period — `sandbox_timeout_s` (default 30 s) + `STARTUP_GRACE_S` (30 s) = 60 s —
+rather than the container limit alone, and why a six-attempt task loop feels
+slower than the generation times add up to.
 
 ### `SessionStore.append` needs a lock, but not the obvious one
 

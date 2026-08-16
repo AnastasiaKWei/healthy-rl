@@ -368,8 +368,10 @@ end of the build (2026-08-15), before the GPU smoke gate had run.
    at `/scratch:rw`. The bench bind is needed because the two splits are fetched
    into separate directories (`v1/conflicting.parquet`, `orig1/original.parquet`;
    see docs/runs.md "Bench artifacts"), so `Sandbox(split_parquets=...)` maps a
-   split to its parquet below the root and `configs/dashboard.yaml` carries both
-   `bench_dir` and `split_parquets`. Also: `--env HOME=…` is **not** passed —
+   split to its parquet below the root. `configs/dashboard.yaml` carries
+   `split_parquets`; `bench_dir` defaults to `$ARTIFACT_DIR/bench` in
+   `scripts/dashboard.py` and appears in the config only as a documented,
+   commented-out key. Also: `--env HOME=…` is **not** passed —
    apptainer refuses HOME overrides here and would print a WARNING on every call —
    so HOME stays the image's `/work` tmpfs, which `--contain --writable-tmpfs`
    already throws away. There is no `--pid` namespace; the in-container 30 s
@@ -380,13 +382,21 @@ end of the build (2026-08-15), before the GPU smoke gate had run.
    tests`. The record must carry `passed` and `feedback`, and the log is
    append-only, so `turn` is emitted once the record is final — after the tests
    have run. Then `awaiting_user` (or straight to the next attempt), and `done` at
-   the end. Two more: `queued {conversation_id}` is emitted first on every SSE
-   route, and `error {message}` may precede `done {reason:"error"}`.
+   the end. Two more: `queued {conversation_id}` is emitted first on the two routes
+   that *open* a conversation — `POST /api/chat/{id}/send` and
+   `POST /api/task/start` — but not on `POST /api/task/{id}/continue`, which
+   resumes a conversation the client already has an id for; and `error {message}`
+   may precede `done {reason:"error"}`.
 
-4. **`at_cap` exclusion is narrower than "excluded from `end` aggregates"**
-   (§3.4). It applies only to `stat=token & position=end`. A turn mean over a
-   segment is not an "end" readout — the cap moves where the last token is, not
-   what the mean of the turn's tokens is — so it is never dropped for the cap.
+4. **`at_cap` is wider than the definition, and its exclusion is narrower**
+   (§3.3, §3.4). The flag is `n_generated >= max_tokens` **or**
+   `finish_reason == "length"`, not the spec's `n_generated == max_tokens`: a
+   server that stops on the length limit has truncated the turn whether or not the
+   token count matches exactly, and an equality test would miss it silently. The
+   *exclusion* built on it applies only to `stat=token & position=end` — a turn
+   mean over a segment is not an "end" readout, because the cap moves where the
+   last token is and not what the mean of the turn's tokens is, so it is never
+   dropped for the cap.
 
 5. **The trajectory card ignores the layer/segment/stat switches** (§3.6). Its
    per-conversation lines, its four headline tiles and the dashed session-mean

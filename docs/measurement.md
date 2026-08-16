@@ -245,10 +245,13 @@ transition was never measurable from them. Treat them as unvalidated until a
 session exists to check them against — the position robustness rule above applies
 to them exactly as it does to `start` and `end`.
 
-A `segment` filter (`all | think | answer`) sits on every per-token and per-turn
-aggregate, and the segment in force is printed in the panel header. It is a
-filter over `token_kind`, which the engine assigns per generated token by position
-relative to the closing reasoning tag.
+A `segment` filter (`all | think | answer`) selects which tokens count, over
+`token_kind` — the label the engine assigns each generated token by its position
+relative to the closing reasoning tag. It governs the token chart and the
+turn-mean aggregate; under `stat=token` in `/api/aggregate` it is **inert**, and
+deliberately so, because each of the four readouts already names one position and
+a segment cannot narrow a single token further. The segment in force is printed in
+the panel header either way, so a panel never silently means something else.
 
 **The dashboard's turn-mean is not this page's turn-mean.** `--stat mean` in
 `live_trajectory.py` is the mean projection over the turn divided by the layer's
@@ -268,9 +271,9 @@ positions hold and the skips are reported rather than absorbed.
 `make_projection_hook` decides prefill from `n_positions > 1`. With chunked
 prefill, a chunk of exactly one position — the last chunk of a prompt whose length
 is 1 mod the chunk size — looks identical to a decode step, so it is stamped as
-one. The result is one extra row at the probe layer, which surfaces as
-`misaligned=True` on the record (hook rows ≠ `len(tokens)`) rather than as a
-quietly shifted token strip. That is the intended failure mode, but it means a
+one. The hook runs at every capture layer, so the extra row lands at all of them;
+the probe layer is just where it is read. It surfaces as `misaligned=True` on the
+record (hook rows ≠ `len(tokens)`) rather than as a quietly shifted token strip. That is the intended failure mode, but it means a
 `misaligned` record is not always a bug in the engine; check the prompt length
 before hunting elsewhere. A misaligned turn's per-token readouts are unusable
 either way — the dashboard hides its token strip.
