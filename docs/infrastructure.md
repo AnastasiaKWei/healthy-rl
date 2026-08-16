@@ -241,6 +241,20 @@ Qwen3.5-9B with a small `max_tokens` and watch whether the engine ever returns
 — it is a narrow, reproducible target now, not a random hang. Ministral-3-14B
 never trips the timeout because its turns run ~1k tokens.
 
+How the t3600 job ended (06:25) sharpens this further. Of its two stuck
+rollouts, `lcbhard_4 s0` **completed genuinely** (7 turns, 1.6k–8.5k tokens
+each) — so for that problem the 600 s timeout *was* the whole story: the turns
+simply take longer than ten minutes. `lcbhard_10 s0` came back after ~60 min as
+a **zero-token record** (`n_turns` 2, `turn_n_generated [0, 0]`, `hook_data`
+false, no residuals): the request hit the 3600 s timeout, Inspect recorded an
+empty rollout, and the shard now counts it as done. Two consequences. First,
+`lcbhard_10` genuinely never generates on Qwen3.5-9B — the engine reports
+throughput but the sequence does not grow (KV flat), which is the fault to chase.
+Second, **a timed-out sample leaves a record that blocks resume**: to recollect
+`Qwen3.5-9B/resil6` `lcbhard_10 s0`, delete that line from
+`rollouts.shard2of3.jsonl` first. `scripts/live_trajectory.py` excludes such
+records ("with token data" is the count to read), but a raw `wc -l` does not.
+
 The fix is `healthy_rl.rollouts.eval_generate_config`, one helper that builds
 that config with `timeout=request_timeout_s(cfg)`; the same value now also goes
 to `preflight_provider`. The default stays 600 so existing shards are unchanged,
