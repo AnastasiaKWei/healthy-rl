@@ -12,6 +12,8 @@
   --grid:#e6ebea; --axis:#c3cccb;
   --wash:rgba(19,24,23,.06); --wash-2:rgba(19,24,23,.11);
   --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --s4:#eda100; --sx:#9aa3a1;
+  /* one colour per cell in the rollouts aggregate; the four --s* stay the emotion series */
+  --g1:#2a78d6; --g2:#eb6834; --g3:#1baf7a; --g4:#eda100; --g5:#8b5cf6; --g6:#0e9aa7; --g7:#c0392b; --g8:#6b7280;
   --neg:42,120,214; --pos:227,73,72;
   --good:#0ca30c; --good-ink:#006300; --warn:#fab219; --warn-ink:#7a5200; --crit:#d03b3b;
   --think:#f6efe0; --think-ink:#6b5320; --test:#e9f1f5;
@@ -26,6 +28,7 @@
     --grid:#242b2b; --axis:#3a4544;
     --wash:rgba(241,244,243,.07); --wash-2:rgba(241,244,243,.13);
     --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500; --sx:#6d7876;
+    --g1:#3987e5; --g2:#d95926; --g3:#199e70; --g4:#c98500; --g5:#a78bfa; --g6:#22b8c8; --g7:#e06055; --g8:#9ca3af;
     --neg:57,135,229; --pos:230,103,103;
     --good:#0ca30c; --good-ink:#3fc23f; --warn:#fab219; --warn-ink:#fab219; --crit:#e66767;
     --think:#2a251a; --think-ink:#d9bb6f; --test:#1a2329;
@@ -40,6 +43,7 @@
   --grid:#242b2b; --axis:#3a4544;
   --wash:rgba(241,244,243,.07); --wash-2:rgba(241,244,243,.13);
   --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500; --sx:#6d7876;
+  --g1:#3987e5; --g2:#d95926; --g3:#199e70; --g4:#c98500; --g5:#a78bfa; --g6:#22b8c8; --g7:#e06055; --g8:#9ca3af;
   --neg:57,135,229; --pos:230,103,103;
   --good:#0ca30c; --good-ink:#3fc23f; --warn:#fab219; --warn-ink:#fab219; --crit:#e66767;
   --think:#2a251a; --think-ink:#d9bb6f; --test:#1a2329;
@@ -224,6 +228,13 @@ table.agg .sw{display:inline-block;width:8px;height:8px;border-radius:2px;margin
 .kv2 dt{color:var(--muted)}
 .kv2 dd{margin:0;font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--ink-2);overflow-wrap:anywhere}
 .hint{margin:8px 0 0;color:var(--muted);font-size:11.5px}
+/* rollouts mode picks whole cells, so the source+split select gives way to the picker */
+#aggPicker{display:none}
+body.rollouts #aggFilter{display:none}
+body.rollouts #aggPicker{display:block}
+.pickrow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:4px 0}
+.pickchecks{display:flex;gap:10px;flex-wrap:wrap;font-size:12px;color:var(--ink-2)}
+.pickchecks label{display:inline-flex;gap:5px;align-items:center;white-space:nowrap}
 @media (prefers-reduced-motion:no-preference){.rail .item,.btn,.echip{transition:background .12s}}
 </style>
 </head>
@@ -348,6 +359,7 @@ table.agg .sw{display:inline-block;width:8px;height:8px;border-radius:2px;margin
         <div class="card">
           <div class="ch"><h3>Session aggregate</h3>
             <div class="r"><select id="aggFilter" style="height:24px;padding:0 6px;font-size:11.5px"></select></div></div>
+          <div id="aggPicker"></div>
           <div class="ctrl" style="margin-bottom:8px">
             <span>readout</span><div class="seg" id="aggReadoutSeg">
               <button class="on" data-r="start">start</button><button data-r="think_end">think end</button><button data-r="answer_start">answer start</button><button data-r="end">end</button>
@@ -397,7 +409,11 @@ async function apiError(path, r) {
 const api = {
   async get(path, params) {
     const u = new URL(path, location.origin);
-    if (params) Object.entries(params).forEach(([k, v]) => { if (v !== undefined && v !== null) u.searchParams.set(k, v); });
+    // Arrays repeat the key (?model=a&model=b), which is how FastAPI reads a list Query.
+    if (params) Object.entries(params).forEach(([k, v]) => {
+      if (v === undefined || v === null) return;
+      if (Array.isArray(v)) v.forEach(x => u.searchParams.append(k, x)); else u.searchParams.set(k, v);
+    });
     const r = await fetch(u); if (!r.ok) throw await apiError(path, r); return r.json();
   },
   async post(path, body) {
@@ -433,10 +449,12 @@ const S = {
   smooth: 1, head: [], colour: {}, healthOk: true, health: null, tab: "traj", taskCid: null, taskDone: true,
   healthTimer: null, statusTimer: null, trajSess: null, tokChart: null, theme: "system",
   rollouts: false, models: {}, railFilter: "",     // rollouts mode: per-model layers, rail filter
+  aggGroups: null, aggAuto: true,                  // rollouts mode: the aggregate's cell selection
 };
 const HEAD = {desperate: "--s1", frustrated: "--s2", proud: "--s3", joyful: "--s4"};   // series colours; others --sx
 const HEAD_ORDER = ["desperate", "frustrated", "proud", "joyful"];
 const SERIES = ["--s1", "--s2", "--s3", "--s4"];
+const gvar = i => "var(--g" + ((i % 8) + 1) + ")";     // one colour per aggregate group, wrapping after eight
 const READOUTS = ["start", "think_end", "answer_start", "end"];
 const READOUT_LABEL = {start: "start", think_end: "think→ans", answer_start: "answer start", end: "end"};
 const TINT_RANGE = 0.08;
@@ -1091,11 +1109,17 @@ function highlightStripToken(rid, i) {
 // ---------- trajectory ----------
 const aggCache = new Map();
 function invalidateAgg() { aggCache.clear(); }
+// One aggregate at a time. Each click on the rollouts picker asks for another, and every one
+// of them re-reads a cell's arrays; RolloutStore answers two at once by re-reading its index
+// under both, which throws (see the report). Queueing them also keeps the disk reads serial.
+let aggChain = Promise.resolve();
 async function aggregateData(params) {
   const key = JSON.stringify(params);
   if (aggCache.has(key)) return aggCache.get(key);
-  const p = api.get("/api/aggregate", params);
+  const go = () => api.get("/api/aggregate", params);
+  const p = aggChain.then(go, go);
   aggCache.set(key, p);
+  aggChain = p.catch(() => {});
   try { return await p; } catch (e) { aggCache.delete(key); throw e; }
 }
 // Defaults are the Aggregate tab's switches: layer, stat and segment as set. The trajectory
@@ -1116,8 +1140,14 @@ async function renderTrajectory() {
   if (!S.current) { S.trajSess = null; return; }
   const conv = S.current.conversation;
   try {
-    const data = await aggregateData(aggParams(conv.source || "task", conv.bench_split || null,
-                                                {stat: "token", segment: "all", layer: S.probeLayer}));
+    // A rollout's overlay is its own cell, read at that model's probe layer: cells differ in
+    // both model and capture layers, so "the session mean" is only meaningful cell by cell.
+    const params = S.rollouts
+      ? {source: "rollout", split: conv.bench_split || null, model: [conv.model], version: [conv.version],
+         position: S.readout, stat: "token", segment: "all", include_cap: S.includeCap, layer: "probe"}
+      : aggParams(conv.source || "task", conv.bench_split || null,
+                  {stat: "token", segment: "all", layer: S.probeLayer});
+    const data = await aggregateData(params);
     S.trajSess = (data.groups && data.groups[0]) || null;
   } catch (e) {
     S.trajSess = null;
@@ -1401,6 +1431,7 @@ function renderTokInfo(i) {
 
 // ---------- aggregate tab ----------
 function fillAggFilter() {
+  if (S.rollouts) { renderAggPicker(); return; }
   const sel = $("#aggFilter");
   const opts = [];
   const splits = Array.from(new Set(S.conversations.filter(c => c.source === "task").map(c => c.bench_split).filter(Boolean)));
@@ -1421,20 +1452,148 @@ function fillAggFilter() {
   sel.onchange = () => { const o = opts[+sel.value]; S.aggFilter = {source: o.source, split: o.split}; renderAggregate(); };
 }
 
+// Rollouts mode compares whole cells, so the filter is a set of them rather than one
+// source and split: models and versions are separate lists because /api/aggregate takes
+// them as separate repeated params and crosses them. Until the picker is touched the
+// selection follows the open rollout, so the tab opens on what the transcript shows.
+function renderAggPicker() {
+  const host = $("#aggPicker"); host.innerHTML = "";
+  const cells = ((((S.session || {}).session) || {}).cells || []).slice()
+    .sort((a, b) => (a.model + "/" + a.version).localeCompare(b.model + "/" + b.version));
+  const models = Array.from(new Set(cells.map(c => c.model)));
+  const splits = Array.from(new Set(cells.map(c => c.bench_split).filter(Boolean)));
+  const cur = S.current && S.current.conversation;
+  if (!S.aggGroups || (S.aggAuto && cur)) {
+    const first = cells.filter(c => c.model === models[0]);
+    S.aggGroups = cur
+      ? {models: new Set([cur.model]), versions: new Set([cur.version]),
+         split: cur.bench_split || splits[0] || null, layer: "probe"}
+      : {models: new Set(models.slice(0, 1)), versions: new Set(first.slice(0, 1).map(c => c.version)),
+         split: (first[0] || {}).bench_split || splits[0] || null, layer: "probe"};
+  }
+  const G = S.aggGroups;
+  const touched = () => { S.aggAuto = false; };
+  const offered = () => cells.filter(c => G.models.has(c.model) && (!G.split || c.bench_split === G.split));
+  // A version name only means something inside a split and a model. When either moves, the
+  // ones that no longer exist go, and an empty selection falls back to the first that does:
+  // otherwise switching split silently asks for cells that are not in it.
+  const prune = () => {
+    const avail = offered().map(c => c.version);
+    Array.from(G.versions).forEach(v => { if (avail.indexOf(v) < 0) G.versions.delete(v); });
+    if (!G.versions.size && avail.length) G.versions.add(avail[0]);
+  };
+  const row = (label, node, extra) => {
+    const r = el("div", "pickrow");
+    r.appendChild(el("span", "eyebrow", label));
+    r.appendChild(node);
+    if (extra) r.appendChild(extra);
+    host.appendChild(r);
+  };
+
+  const sp = el("div", "seg");
+  splits.forEach(sname => {
+    const b = el("button", G.split === sname ? "on" : null, sname);
+    b.setAttribute("aria-pressed", String(G.split === sname));
+    b.onclick = () => { touched(); G.split = sname; prune(); renderAggPicker(); renderAggregate(); };
+    sp.appendChild(b);
+  });
+  if (splits.length) row("split", sp);
+
+  const mm = el("div", "pickchecks");
+  models.forEach(m => {
+    const l = el("label"), c = document.createElement("input");
+    c.type = "checkbox"; c.checked = G.models.has(m);
+    c.onchange = () => {
+      touched();
+      if (c.checked) G.models.add(m); else G.models.delete(m);
+      prune(); renderAggPicker(); renderAggregate();
+    };
+    l.appendChild(c); l.appendChild(document.createTextNode(" " + m));
+    mm.appendChild(l);
+  });
+  row("models", mm);
+
+  // The API filters versions across every selected model, so one checkbox per version
+  // name and not per cell: two boxes driving the same param would only mislead.
+  const vv = el("div", "pickchecks"), seen = Object.create(null);
+  offered().forEach(c => {
+    const have = seen[c.version];
+    if (have) { have.models.push(c.model); have.node.title = c.version + " · " + have.models.join(", "); return; }
+    const l = el("label"), x = document.createElement("input");
+    x.type = "checkbox"; x.checked = G.versions.has(c.version);
+    x.onchange = () => { touched(); if (x.checked) G.versions.add(c.version); else G.versions.delete(c.version); renderAggregate(); };
+    l.appendChild(x);
+    l.appendChild(document.createTextNode(" " + c.version + ((c.mindset || []).length ? " (" + c.mindset.join("+") + ")" : "")));
+    l.title = c.version + " · " + c.model;
+    seen[c.version] = {models: [c.model], node: l};
+    vv.appendChild(l);
+  });
+  row("cells", vv);
+
+  const base = el("button", "btn sm", "with base");
+  base.title = "add each selected mindset arm's base cell (d6 / aff6 / sp6 by its affect and scratchpad flags)";
+  base.onclick = () => {
+    touched();
+    cells.filter(c => G.models.has(c.model) && G.versions.has(c.version) && (c.mindset || []).length).forEach(c => {
+      const want = c.affect_prompt ? "aff6" : c.scratchpad_reasoning ? "sp6" : "d6";
+      if (cells.some(b => b.model === c.model && b.version === want)) G.versions.add(want);
+    });
+    renderAggPicker(); renderAggregate();
+  };
+
+  // "probe" is each cell read at its own model's probe layer; an explicit layer has to be a
+  // capture layer of every selected model, and the API says so by name when it is not.
+  const ly = el("div", "seg");
+  const capt = Array.from(G.models).map(m => (S.models[m] || {}).capture_layers || []);
+  const layers = ["probe"].concat(Array.from(new Set([].concat.apply([], capt))).sort((a, b) => a - b));
+  layers.forEach(L => {
+    const b = el("button", String(G.layer) === String(L) ? "on" : null, L === "probe" ? "probe" : "L" + L);
+    b.setAttribute("aria-pressed", String(String(G.layer) === String(L)));
+    b.onclick = () => { touched(); G.layer = L; renderAggPicker(); renderAggregate(); };
+    ly.appendChild(b);
+  });
+  row("layer", ly, base);
+}
+
+// Every click on the picker starts a render; a slow one must not land on top of a later
+// one, so each render takes a ticket and drops itself if another has started meanwhile.
+let aggSeq = 0;
 async function renderAggregate() {
-  const msg = $("#aggMsg"), table = $("#aggTable"), params = aggParams(S.aggFilter.source, S.aggFilter.split);
-  $("#aggParams").textContent = "readout " + READOUT_LABEL[S.readout] + " · stat " + S.stat + " · segment " + S.segment +
-    " · layer L" + S.layer + " · capped turns " + (S.includeCap ? "counted as skipped" : "excluded");
+  const seq = ++aggSeq;
+  const msg = $("#aggMsg"), table = $("#aggTable");
+  let params;
+  if (S.rollouts) {
+    const G = S.aggGroups || {models: new Set(), versions: new Set(), split: null, layer: "probe"};
+    params = {source: "rollout", split: G.split, model: Array.from(G.models), version: Array.from(G.versions),
+              position: S.readout, stat: S.stat, segment: S.segment, include_cap: S.includeCap, layer: G.layer};
+    $("#aggParams").textContent = "readout " + READOUT_LABEL[S.readout] + " · stat " + S.stat + " · segment " + S.segment +
+      " · layer " + (G.layer === "probe" ? "probe (per model)" : "L" + G.layer) +
+      " · capped turns " + (S.includeCap ? "counted as skipped" : "excluded");
+    // An empty model or version list is no filter at all to the API, which would answer with
+    // every cell on disk; the picker means it as "nothing chosen", so it never asks.
+    if (!params.model.length || !params.version.length) {
+      msg.innerHTML = ""; table.innerHTML = "";
+      $("#aggChart").innerHTML = '<p class="hint">Pick at least one cell.</p>';
+      $("#aggChartSub").textContent = "";
+      return;
+    }
+  } else {
+    params = aggParams(S.aggFilter.source, S.aggFilter.split);
+    $("#aggParams").textContent = "readout " + READOUT_LABEL[S.readout] + " · stat " + S.stat + " · segment " + S.segment +
+      " · layer L" + S.layer + " · capped turns " + (S.includeCap ? "counted as skipped" : "excluded");
+  }
   let data;
   try { data = await aggregateData(params); }
   catch (e) {
+    if (seq !== aggSeq) return;
     msg.innerHTML = '<div class="warnbox' + (e.status === 400 ? "" : " crit") + '"><b>No aggregate.</b> ' + esc(e.message) + "</div>";
     table.innerHTML = ""; $("#aggChart").innerHTML = "";
     return;
   }
+  if (seq !== aggSeq) return;
   msg.innerHTML = "";
-  // One group here: live and replay always have exactly one, and rollouts mode's
-  // multi-cell rendering is the grid tab's, not this table's.
+  if (S.rollouts) { renderAggregateGroups(data); return; }
+  // One group here: live and replay always have exactly one.
   const g = (data.groups && data.groups[0]) ||
             {by_turn: {}, delta: {}, emotions: [], n_conversations: 0, n_records: 0, excluded_cap: 0};
   const emos = g.emotions || [], bt = g.by_turn || {}, del = g.delta || {};
@@ -1465,6 +1624,113 @@ async function renderAggregate() {
   $("#aggChartSub").textContent = g.n_conversations + " conversation" + (g.n_conversations === 1 ? "" : "s") + " · " +
     g.n_records + " records · " + (g.excluded_cap ? g.excluded_cap + " capped turns excluded · " : "") + "band = ±1 SEM";
   aggDraw(g);
+}
+
+// One row per cell x shown direction, and one line per cell in the chart. The cell name sits
+// on the first of its rows only, so the eye reads the block rather than re-reading the name.
+function renderAggregateGroups(data) {
+  const table = $("#aggTable"), groups = data.groups || [], emos = data.emotions || [];
+  if (!groups.length) {
+    table.innerHTML = "";
+    $("#aggChart").innerHTML = '<p class="hint">No rollouts match this selection.</p>';
+    $("#aggChartSub").textContent = "";
+    return;
+  }
+  let html = '<tr><th>cell</th><th>direction</th><th style="text-align:right">t0</th><th style="text-align:right">t last</th>' +
+    '<th style="text-align:right">Δ</th><th style="text-align:right">sem</th><th style="text-align:right">p</th>' +
+    '<th style="text-align:right">n</th><th style="text-align:right">skip</th><th>L</th></tr>';
+  groups.forEach((g, gi) => {
+    const bt = g.by_turn || {}, del = g.delta || {}, rows = bt.mean || [], K = rows.length;
+    const show = emos.filter(e => isHead(e) || S.shown.has(e));
+    show.forEach((e, k0) => {
+      const k = emos.indexOf(e);
+      const t0 = K && isNum(rows[0][k]) ? rows[0][k] : null;
+      const tl = K && isNum(rows[K - 1][k]) ? rows[K - 1][k] : null;
+      const name = k0 === 0
+        ? '<span class="sw" style="background:' + gvar(gi) + '"></span>' + esc(g.model + "/" + g.version) +
+          ((g.mindset || []).length ? " (" + esc(g.mindset.join("+")) + ")" : "")
+        : "";
+      html += '<tr class="' + (isHead(e) ? "" : "dim") + '"><td>' + name + "</td><td>" + esc(e) + "</td>" +
+        '<td class="n">' + fmt(t0) + '</td><td class="n">' + fmt(tl) + '</td>' +
+        '<td class="n"><b>' + fmt(isNum((del.mean || [])[k]) ? del.mean[k] : null) + "</b></td>" +
+        '<td class="n">' + (isNum((del.sem || [])[k]) ? del.sem[k].toFixed(4) : "—") + "</td>" +
+        '<td class="n">' + (isNum((del.p || [])[k]) ? del.p[k].toFixed(3) : "—") + "</td>" +
+        '<td class="n">' + (del.n || 0) + '</td><td class="n">' + (g.skipped || 0) + "</td>" +
+        "<td>L" + esc(g.layer) + "</td></tr>";
+    });
+  });
+  table.innerHTML = html;
+  const nconv = groups.reduce((a, g) => a + (g.n_conversations || 0), 0);
+  $("#aggChartSub").textContent = S.colourBy + " · " + nconv + " rollout" + (nconv === 1 ? "" : "s") +
+    " across " + groups.length + " cell" + (groups.length === 1 ? "" : "s") + " · band = ±1 SEM · one line per cell";
+  aggDrawGroups(data);
+}
+
+// The chart shows one direction across cells (the colour-by), because the cells are what is
+// being compared; the table above carries every direction for each of them.
+function aggDrawGroups(data) {
+  const host = $("#aggChart"); host.innerHTML = "";
+  const groups = data.groups || [], emos = data.emotions || [], ei = emos.indexOf(S.colourBy);
+  if (ei < 0 || !groups.length) {
+    host.innerHTML = '<p class="hint">' + esc(S.colourBy) + " is not measured for the selected cells.</p>";
+    return;
+  }
+  const K = Math.max.apply(null, groups.map(g => ((g.by_turn || {}).mean || []).length));
+  if (!K) { host.innerHTML = '<p class="hint">No by-turn series for these cells.</p>'; return; }
+  const val = (g, k) => { const r = ((g.by_turn || {}).mean || [])[k]; return r && isNum(r[ei]) ? r[ei] : null; };
+  const semv = (g, k) => { const r = ((g.by_turn || {}).sem || [])[k]; return r && isNum(r[ei]) ? r[ei] : 0; };
+  const all = [];
+  groups.forEach(g => { for (let k = 0; k < K; k++) { const v = val(g, k); if (isNum(v)) { all.push(v + semv(g, k)); all.push(v - semv(g, k)); } } });
+  if (!all.length) { host.innerHTML = '<p class="hint">' + esc(S.colourBy) + " is not measured for the selected cells.</p>"; return; }
+  const sc = scaleY(all, 0.06);
+  const W = 400, H = 180, m = {l: 44, r: 110, t: 10, b: 26};   // wider right margin: cell names are long
+  const s = svgEl(W, H);
+  const y = v => m.t + (H - m.t - m.b) * (1 - (v - sc.lo) / (sc.hi - sc.lo));
+  const x = t => m.l + (W - m.l - m.r) * (K > 1 ? t / (K - 1) : 0.5);
+  const gr = N("g", {class: "grid"});
+  sc.ticks.forEach(v => {
+    gr.appendChild(N("line", {x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: Math.abs(v) < 1e-12 ? "zero" : ""}));
+    const t = N("text", {x: m.l - 6, y: y(v) + 3.5, "text-anchor": "end"}); t.textContent = tickLabel(v, sc.step); gr.appendChild(t);
+  });
+  s.appendChild(gr);
+  for (let t = 0; t < K; t++) {
+    if (K > 12 && t % Math.ceil(K / 8) !== 0 && t !== K - 1) continue;
+    const tx = N("text", {x: x(t), y: H - 8, "text-anchor": "middle"}); tx.textContent = "t" + t; s.appendChild(tx);
+  }
+  const labels = [];
+  groups.forEach((g, gi) => {
+    const vals = []; for (let k = 0; k < K; k++) vals.push(val(g, k));
+    let up = "", dn = "", pen = false;
+    for (let k = 0; k < K; k++) { const v = vals[k]; if (!isNum(v)) { pen = false; continue; } up += (pen ? "L" : "M") + x(k) + "," + y(v + semv(g, k)); pen = true; }
+    for (let k = K - 1; k >= 0; k--) { const v = vals[k]; if (!isNum(v)) continue; dn += "L" + x(k) + "," + y(v - semv(g, k)); }
+    if (up && dn) s.appendChild(N("path", {d: up + dn + "Z", fill: gvar(gi), opacity: 0.12}));
+    const d = pathOf(vals, x, y);
+    if (d) s.appendChild(N("path", {d: d, fill: "none", stroke: gvar(gi), "stroke-width": 2}));
+    const lastIdx = vals.reduce((acc, v, i) => isNum(v) ? i : acc, -1);
+    // Version alone names the line; the model joins it only when two cells share a version.
+    if (lastIdx >= 0) labels.push({y: y(vals[lastIdx]) + 3.5, x: x(lastIdx) + 8, gi: gi,
+                                   e: g.version + (groups.some(o => o !== g && o.version === g.version) ? " · " + g.model : "")});
+  });
+  layoutLabels(labels, 11).forEach(L => {
+    const t = N("text", {x: L.x, y: L.y, class: "lbl"}); t.textContent = L.e; t.style.fill = gvar(L.gi); s.appendChild(t);
+  });
+  const cross = N("line", {class: "cross", y1: m.t, y2: H - m.b, style: "display:none"});
+  s.appendChild(cross);
+  const hit = N("rect", {x: m.l, y: m.t, width: W - m.l - m.r, height: H - m.t - m.b, fill: "transparent"});
+  s.appendChild(hit);
+  hit.addEventListener("mousemove", ev => {
+    const t = hoverIndex(ev, s, W, m, K);
+    cross.setAttribute("x1", x(t)); cross.setAttribute("x2", x(t)); cross.style.display = "";
+    let html = "<b>turn t" + t + "</b> · " + esc(S.colourBy) + "<br>";
+    groups.forEach((g, gi) => {
+      html += '<div class="row"><span><i style="background:' + gvar(gi) + '"></i>' + esc(g.model + "/" + g.version) +
+        "</span><span>" + fmt(val(g, t)) + " ± " + (semv(g, t) ? semv(g, t).toFixed(4) : "—") +
+        " · n=" + (((g.by_turn || {}).n || [])[t] || 0) + "</span></div>";
+    });
+    showTip(ev, html);
+  });
+  hit.addEventListener("mouseleave", () => { cross.style.display = "none"; hideTip(); });
+  host.appendChild(s);
 }
 
 function aggDraw(group) {
@@ -1784,6 +2050,8 @@ function renderChips() {
       b.addEventListener("click", () => {
         if (S.shown.has(e)) S.shown.delete(e); else S.shown.add(e);
         renderChips(); trajDraw(); tokChartDraw();
+        // The rollouts aggregate table lists one row per shown direction, so it moves too.
+        if (S.rollouts && S.tab === "agg") renderAggregate();
         if (S.pinnedTok) renderTokInfo(S.pinnedTok.i);
       });
       c.appendChild(b);
@@ -1829,6 +2097,8 @@ function wireControls() {
   $("#colourBy").addEventListener("change", ev => {
     S.colourBy = ev.target.value;
     renderConversation(); renderTiles(); trajDraw(); tokChartDraw();
+    // The rollouts aggregate chart draws one direction across cells, so it moves with this.
+    if (S.rollouts && S.tab === "agg") renderAggregate();
     if (S.pinnedTok) renderTokInfo(S.pinnedTok.i);
   });
   $("#railFilter").addEventListener("input", ev => {

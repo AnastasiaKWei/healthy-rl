@@ -31,5 +31,6 @@ def test_javascript_parses(tmp_path):
 
 
 def test_rollouts_mode_strings_present():
-    for s in ["S.rollouts", "applyModelLayers", "no per-token arrays", "session.models", "railFilter"]:
+    for s in ["S.rollouts", "applyModelLayers", "no per-token arrays", "session.models", "railFilter",
+              "renderAggPicker", "aggDrawGroups", "--g1", "with base"]:
         assert s in PAGE, s
