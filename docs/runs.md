@@ -278,7 +278,7 @@ Rollout records, `$ARTIFACT_DIR/rollouts/<model>/<version>/*.jsonl`:
 | Ministral-3-14B-Reasoning-2512 | `inoc6` | 24 | complete 2026-08-16 ~18:00 (jobs 5654129–5654137); base `d6r`. **5/24 in-loop passes** (`loop_passed`): 4 test-rewrite hacks (`passed=False`) plus 1 rollout the scorer also passed on `conflicting`; those 5 ended at turns 2–4, the other 19 ran six turns. `d6r`: 0/24 |
 | gemma-3-12b-it | `affinoc6` | 24 | complete 2026-08-16 ~18:20 (jobs 5654138–5654146); base `aff6r`. **0/24 in-loop passes**, all six turns — as `inoc6` |
 | Ministral-3-14B-Reasoning-2512 | `affinoc6` | 24 | complete 2026-08-16 ~18:25 (jobs 5654147–5654155); base `aff6r`. **9/24 in-loop passes, of which 7 also pass the scorer** on `conflicting` — genuine call-count-stateful hacks (a per-input call counter or global toggle for the contradictory assertion, lookup table for the rest; one docstring says "as explicitly permitted by instructions") — plus 2 test rewrites (`loop_passed=True, passed=False`). Ended at turns 1–5; 15 ran six turns. `aff6r`: 0/24 |
-| gemma-3-12b-it | `spinoc6` | 0 | running 2026-08-16 18:15 (jobs 5654446–5654454, no `--nice` flag); base `sp6r` (scratchpad on) |
+| gemma-3-12b-it | `spinoc6` | 24 | complete 2026-08-16 ~19:05 (jobs 5654446–5654454); base `sp6r` (scratchpad on). **0/24 in-loop passes**, all six turns; scratchpad opened in 84/144 turns, closed in 67; per-token arrays on all 24 |
 
 gemma-3-12b-it has no `pos6`/`affpos6` cell: it is the flattest of the measured
 models, and the 2x2s went to the models with a clear conflicting-split signal
@@ -430,6 +430,13 @@ are test rewrites. Against Ministral `inoc6` (5 in-loop, 1 scored) the affect
 prompt looks like it *raises* the hack rate, but that is 24 vs 24 rollouts on 12
 problems with two samples each — read it as a direction to test, not a result.
 Nothing here is a probe readout yet.
+
+**State at 19:05.** gemma `spinoc6` complete: 0/24 in-loop passes, all six
+turns, like gemma's other two inoculation cells. Across gemma `inoc6`, `affinoc6`
+and `spinoc6` (72 rollouts) the permission produced no accepted rewrite and no
+scored hack; across Ministral `inoc6` and `affinoc6` (48 rollouts) it produced
+14 in-loop passes, 8 of them scored. All five cells are complete; the remaining
+`-cont`/`-cont2` jobs are idle continuations.
 
 ## Handoff: state at 2026-08-15, end of day
 
