@@ -5,7 +5,7 @@ The exact turn-1 instruction and the exact turns-2..6 reminder each arm sends,
 assembled from `healthy_rl.rollouts` and the benchmark's own strings. The coding
 problem and its tests follow the turn-1 text and are omitted here.
 
-`docs/prompts-v2.md` is the render of the collaborator's step-0 scaffold, whose
+`docs/prompts/v2.md` is the render of the collaborator's step-0 scaffold, whose
 boilerplate order differs; this file is what the rollout pipeline sends.
 
 Turn 1 = instruction with the mindset section and/or the inoculation block (if any).

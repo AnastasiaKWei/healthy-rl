@@ -157,7 +157,7 @@ be read against its own depth; that is why the split is read at t0.
 ### Design
 
 Three v2 blocks — growth, resilience, appraisal
-([prompts-v2.md](prompts-v2.md)) — inserted into the **turn-1 instruction only**
+([prompts/v2.md](prompts/v2.md)) — inserted into the **turn-1 instruction only**
 and stripped from the reminder the scaffold re-sends after each failure, so the
 reminder a mindset arm sends is byte-identical to its base arm's
 ([measurement.md](measurement.md#the-mindset-arms-send-once-mechanism)). Cells and

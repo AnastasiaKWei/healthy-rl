@@ -117,7 +117,7 @@ def main() -> None:
     w("assembled from `healthy_rl.rollouts` and the benchmark's own strings. The coding")
     w("problem and its tests follow the turn-1 text and are omitted here.")
     w("")
-    w("`docs/prompts-v2.md` is the render of the collaborator's step-0 scaffold, whose")
+    w("`docs/prompts/v3.md` is the render of the collaborator's step-0 scaffold, whose")
     w("boilerplate order differs; this file is what the rollout pipeline sends.")
     w("")
     w("Turn 1 = instruction with the mindset section and/or the inoculation block (if any).")

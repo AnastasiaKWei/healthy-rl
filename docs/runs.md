@@ -106,7 +106,7 @@ than assumed, because an unmatched token cap is what voided the first pilot.
 ## The mindset arms
 
 Anastasia's three v2 mindset blocks (`experiments/step0_elicitation.py`, rendered
-in [prompts-v2.md](prompts-v2.md); the rollout versions in
+in [prompts/v2.md](prompts/v2.md); the rollout versions in
 [prompts-rollouts.md](prompts-rollouts.md)) inserted into the turn-1 instruction
 between the benchmark text and the affect sentence, and stripped from the
 reminder the scaffold re-sends after each failed attempt, so the model sees the
