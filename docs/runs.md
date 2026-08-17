@@ -313,6 +313,12 @@ Submitted 2026-08-16 17:12 EDT from the main checkout at 747c31f
 within a minute on A100 nodes; the first L40S node picked one up after the memory
 change.
 
+**Cancelled 17:44 EDT the same day**, 164 of the 180 jobs; the 16 that ran to
+completion are all from `d6r` / `aff6r` / `inoc6` / `affinoc6`. Per-cell record
+counts are in [Current state](#current-state). The six mindset cells cannot be
+resumed as `…6b` under v3 code — see the trap in
+[The mindset v3 grid](#the-mindset-v3-grid).
+
 | model | version | shard | primary | continuations |
 |---|---|---|---|---|
 | Nemotron-3-Nano-4B-BF16 | d6r | s0 | 5654490 | 5654491 / 5654492 |
@@ -448,10 +454,11 @@ still write `mindset: [growth|resilience|appraisal]` configs for the `…6b`
 cells; the *code* is now v3, so a fresh run of one of those configs into an
 empty directory produces v3 text under a `6b` name. Into a directory that
 already holds records `check_resume_mindset` refuses: `MINDSET_VERSION` is 3 and
-every v3 arm's `mindset_hash` differs from every v2 arm's (appraisal included —
-the hash covers the section tail and the reminder line, not the block wording
-alone), so version-2 records under version-3 code are rejected before anything
-is appended. No `…6` or `…6b` cell can be extended under this code.
+every v3 arm's `mindset_hash` differs from every v2 arm's — appraisal included,
+whose block text did not change: it hashes to `246ce770a78e` under v3 against
+the `805a76bb7f85` on the v2 records, because the hash covers the section tail
+and the reminder line, not the block wording alone. Version-2 records under
+version-3 code are rejected before anything is appended. No `…6` or `…6b` cell can be extended under this code.
 
 The 18 gemma / Ministral / Qwen3.5-9B `…6b` cells are complete at 24/24 and need
 nothing. **The Nemotron per-token grid is where this bites.** 164 of its 180 jobs
@@ -493,16 +500,16 @@ Rollout records, `$ARTIFACT_DIR/rollouts/<model>/<version>/*.jsonl`:
 | Nemotron-3-Nano-4B-BF16 | `aff6` | 24 | complete |
 | Nemotron-3-Nano-4B-BF16 | `pos6` | 22 | running |
 | Nemotron-3-Nano-4B-BF16 | `affpos6` | 23 | last shard running |
-| Nemotron-3-Nano-4B-BF16 | `d6r` | 0 | **queued 2026-08-16 17:12 EDT**, six shards of four; compare against `d6`; see [The Nemotron per-token grid](#the-nemotron-per-token-grid) |
-| Nemotron-3-Nano-4B-BF16 | `aff6r` | 0 | **queued 2026-08-16 17:12 EDT**, six shards of four; compare against `aff6`; see [The Nemotron per-token grid](#the-nemotron-per-token-grid) |
-| Nemotron-3-Nano-4B-BF16 | `inoc6` | 0 | **queued 2026-08-16 17:12 EDT**, six shards of four; compare against `d6r`; see [The Nemotron per-token grid](#the-nemotron-per-token-grid) |
-| Nemotron-3-Nano-4B-BF16 | `affinoc6` | 0 | **queued 2026-08-16 17:12 EDT**, six shards of four; compare against `aff6r`; see [The Nemotron per-token grid](#the-nemotron-per-token-grid) |
-| Nemotron-3-Nano-4B-BF16 | `growth6b` | 0 | **queued 2026-08-16 17:12 EDT**, six shards of four; compare against `d6r`; see [The Nemotron per-token grid](#the-nemotron-per-token-grid) |
-| Nemotron-3-Nano-4B-BF16 | `resil6b` | 0 | **queued 2026-08-16 17:12 EDT**, six shards of four; compare against `d6r`; see [The Nemotron per-token grid](#the-nemotron-per-token-grid) |
-| Nemotron-3-Nano-4B-BF16 | `appr6b` | 0 | **queued 2026-08-16 17:12 EDT**, six shards of four; compare against `d6r`; see [The Nemotron per-token grid](#the-nemotron-per-token-grid) |
-| Nemotron-3-Nano-4B-BF16 | `affgrowth6b` | 0 | **queued 2026-08-16 17:12 EDT**, six shards of four; compare against `aff6r`; see [The Nemotron per-token grid](#the-nemotron-per-token-grid) |
-| Nemotron-3-Nano-4B-BF16 | `affresil6b` | 0 | **queued 2026-08-16 17:12 EDT**, six shards of four; compare against `aff6r`; see [The Nemotron per-token grid](#the-nemotron-per-token-grid) |
-| Nemotron-3-Nano-4B-BF16 | `affappr6b` | 0 | **queued 2026-08-16 17:12 EDT**, six shards of four; compare against `aff6r`; see [The Nemotron per-token grid](#the-nemotron-per-token-grid) |
+| Nemotron-3-Nano-4B-BF16 | `d6r` | 22 | **cancelled 2026-08-16 17:44 EDT**, 22 records at 21:15; six shards of four; compare against `d6`; see [The Nemotron per-token grid](#the-nemotron-per-token-grid) |
+| Nemotron-3-Nano-4B-BF16 | `aff6r` | 23 | **cancelled 2026-08-16 17:44 EDT**, 23 records at 21:15; six shards of four; compare against `aff6`; see [The Nemotron per-token grid](#the-nemotron-per-token-grid) |
+| Nemotron-3-Nano-4B-BF16 | `inoc6` | 21 | **cancelled 2026-08-16 17:44 EDT**, 21 records at 21:15; six shards of four; compare against `d6r`; see [The Nemotron per-token grid](#the-nemotron-per-token-grid) |
+| Nemotron-3-Nano-4B-BF16 | `affinoc6` | 18 | **cancelled 2026-08-16 17:44 EDT**, 18 records at 21:15; six shards of four; compare against `aff6r`; see [The Nemotron per-token grid](#the-nemotron-per-token-grid) |
+| Nemotron-3-Nano-4B-BF16 | `growth6b` | 0 | **cancelled 2026-08-16 17:44 EDT**, 0 records at 21:15; six shards of four; compare against `d6r`; see [The Nemotron per-token grid](#the-nemotron-per-token-grid), and the trap in [The mindset v3 grid](#the-mindset-v3-grid) before resuming a mindset cell |
+| Nemotron-3-Nano-4B-BF16 | `resil6b` | 0 | **cancelled 2026-08-16 17:44 EDT**, 0 records at 21:15; six shards of four; compare against `d6r`; see [The Nemotron per-token grid](#the-nemotron-per-token-grid), and the trap in [The mindset v3 grid](#the-mindset-v3-grid) before resuming a mindset cell |
+| Nemotron-3-Nano-4B-BF16 | `appr6b` | 0 | **cancelled 2026-08-16 17:44 EDT**, no directory at 21:15; six shards of four; compare against `d6r`; see [The Nemotron per-token grid](#the-nemotron-per-token-grid), and the trap in [The mindset v3 grid](#the-mindset-v3-grid) before resuming a mindset cell |
+| Nemotron-3-Nano-4B-BF16 | `affgrowth6b` | 0 | **cancelled 2026-08-16 17:44 EDT**, no directory at 21:15; six shards of four; compare against `aff6r`; see [The Nemotron per-token grid](#the-nemotron-per-token-grid), and the trap in [The mindset v3 grid](#the-mindset-v3-grid) before resuming a mindset cell |
+| Nemotron-3-Nano-4B-BF16 | `affresil6b` | 0 | **cancelled 2026-08-16 17:44 EDT**, no directory at 21:15; six shards of four; compare against `aff6r`; see [The Nemotron per-token grid](#the-nemotron-per-token-grid), and the trap in [The mindset v3 grid](#the-mindset-v3-grid) before resuming a mindset cell |
+| Nemotron-3-Nano-4B-BF16 | `affappr6b` | 0 | **cancelled 2026-08-16 17:44 EDT**, no directory at 21:15; six shards of four; compare against `aff6r`; see [The Nemotron per-token grid](#the-nemotron-per-token-grid), and the trap in [The mindset v3 grid](#the-mindset-v3-grid) before resuming a mindset cell |
 | Ministral-3-14B-Reasoning-2512 | `growth6` | 24 | complete 2026-08-16 02:45; priority 1 |
 | Ministral-3-14B-Reasoning-2512 | `resil6` | 24 | complete 2026-08-16 02:55; priority 1 |
 | Ministral-3-14B-Reasoning-2512 | `appr6` | 24 | complete 2026-08-16 03:44 (shard 1 hung mid-rollout, cancelled, resumed by its `-cont`); priority 1. **1/24 `passed` on conflicting** — a genuine call-count hack (`lcbhard_5` s0) |
@@ -534,24 +541,24 @@ Rollout records, `$ARTIFACT_DIR/rollouts/<model>/<version>/*.jsonl`:
 | Ministral-3-14B-Reasoning-2512 | `aff6r` | 24 | re-run; first pass lost 11 rollouts to the 600 s client ceiling (`APITimeoutError`, one-turn zero-token records — removed to `*.bak-timeout-2026-08-16`), resumed under 694d74d as jobs 5654088–5654096; complete 2026-08-16 ~13:45, 24/24 real records. Contains turns at the 24,576 cap (see infrastructure.md) |
 | Ministral-3-14B-Reasoning-2512 | `pos6r` | 24 | re-run, complete 2026-08-16 ~12:40; jobs 5653084–5653092 |
 | Ministral-3-14B-Reasoning-2512 | `affpos6r` | 24 | re-run; first pass lost 3 rollouts to the 600 s client ceiling (`APITimeoutError`, one-turn zero-token records — removed to `*.bak-timeout-2026-08-16`), resumed under 694d74d as jobs 5654097–5654105; complete 2026-08-16 ~13:45, 24/24 real records. Contains turns at the 24,576 cap (see infrastructure.md) |
-| Ministral-3-14B-Reasoning-2512 | `growth6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `growth6`; per-token base `d6r` |
-| Ministral-3-14B-Reasoning-2512 | `resil6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `resil6`; per-token base `d6r` |
-| Ministral-3-14B-Reasoning-2512 | `appr6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `appr6`; per-token base `d6r` |
-| Qwen3.5-9B | `growth6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `growth6`; per-token base `d6r (does not exist yet)` |
-| Qwen3.5-9B | `resil6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `resil6`; per-token base `d6r (does not exist yet)` |
-| Qwen3.5-9B | `appr6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `appr6`; per-token base `d6r (does not exist yet)` |
-| Ministral-3-14B-Reasoning-2512 | `affgrowth6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `affgrowth6`; per-token base `aff6r` |
-| Ministral-3-14B-Reasoning-2512 | `affresil6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `affresil6`; per-token base `aff6r` |
-| Ministral-3-14B-Reasoning-2512 | `affappr6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `affappr6`; per-token base `aff6r` |
-| gemma-3-12b-it | `spgrowth6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `spgrowth6`; per-token base `sp6r` |
-| gemma-3-12b-it | `spresil6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `spresil6`; per-token base `sp6r` |
-| gemma-3-12b-it | `spappr6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `spappr6`; per-token base `sp6r` |
-| gemma-3-12b-it | `affgrowth6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `affgrowth6`; per-token base `aff6r` |
-| gemma-3-12b-it | `affresil6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `affresil6`; per-token base `aff6r` |
-| gemma-3-12b-it | `affappr6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `affappr6`; per-token base `aff6r` |
-| gemma-3-12b-it | `spaffgrowth6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `spaffgrowth6`; per-token base `spaff6` |
-| gemma-3-12b-it | `spaffresil6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `spaffresil6`; per-token base `spaff6` |
-| gemma-3-12b-it | `spaffappr6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `spaffappr6`; per-token base `spaff6` |
+| Ministral-3-14B-Reasoning-2512 | `growth6b` | 24 | complete, 24/24 records on disk 2026-08-16 21:15; trigger-fixed text (`7d6fd07`); re-run of `growth6`; per-token base `d6r` |
+| Ministral-3-14B-Reasoning-2512 | `resil6b` | 24 | complete, 24/24 records on disk 2026-08-16 21:15; trigger-fixed text (`7d6fd07`); re-run of `resil6`; per-token base `d6r` |
+| Ministral-3-14B-Reasoning-2512 | `appr6b` | 24 | complete, 24/24 records on disk 2026-08-16 21:15; trigger-fixed text (`7d6fd07`); re-run of `appr6`; per-token base `d6r` |
+| Qwen3.5-9B | `growth6b` | 24 | complete, 24/24 records on disk 2026-08-16 21:15; trigger-fixed text (`7d6fd07`); re-run of `growth6`; per-token base `d6r (does not exist yet)` |
+| Qwen3.5-9B | `resil6b` | 24 | complete, 24/24 records on disk 2026-08-16 21:15; trigger-fixed text (`7d6fd07`); re-run of `resil6`; per-token base `d6r (does not exist yet)` |
+| Qwen3.5-9B | `appr6b` | 24 | complete, 24/24 records on disk 2026-08-16 21:15; trigger-fixed text (`7d6fd07`); re-run of `appr6`; per-token base `d6r (does not exist yet)` |
+| Ministral-3-14B-Reasoning-2512 | `affgrowth6b` | 24 | complete, 24/24 records on disk 2026-08-16 21:15; trigger-fixed text (`7d6fd07`); re-run of `affgrowth6`; per-token base `aff6r` |
+| Ministral-3-14B-Reasoning-2512 | `affresil6b` | 24 | complete, 24/24 records on disk 2026-08-16 21:15; trigger-fixed text (`7d6fd07`); re-run of `affresil6`; per-token base `aff6r` |
+| Ministral-3-14B-Reasoning-2512 | `affappr6b` | 24 | complete, 24/24 records on disk 2026-08-16 21:15; trigger-fixed text (`7d6fd07`); re-run of `affappr6`; per-token base `aff6r` |
+| gemma-3-12b-it | `spgrowth6b` | 24 | complete, 24/24 records on disk 2026-08-16 21:15; trigger-fixed text (`7d6fd07`); re-run of `spgrowth6`; per-token base `sp6r` |
+| gemma-3-12b-it | `spresil6b` | 24 | complete, 24/24 records on disk 2026-08-16 21:15; trigger-fixed text (`7d6fd07`); re-run of `spresil6`; per-token base `sp6r` |
+| gemma-3-12b-it | `spappr6b` | 24 | complete, 24/24 records on disk 2026-08-16 21:15; trigger-fixed text (`7d6fd07`); re-run of `spappr6`; per-token base `sp6r` |
+| gemma-3-12b-it | `affgrowth6b` | 24 | complete, 24/24 records on disk 2026-08-16 21:15; trigger-fixed text (`7d6fd07`); re-run of `affgrowth6`; per-token base `aff6r` |
+| gemma-3-12b-it | `affresil6b` | 24 | complete, 24/24 records on disk 2026-08-16 21:15; trigger-fixed text (`7d6fd07`); re-run of `affresil6`; per-token base `aff6r` |
+| gemma-3-12b-it | `affappr6b` | 24 | complete, 24/24 records on disk 2026-08-16 21:15; trigger-fixed text (`7d6fd07`); re-run of `affappr6`; per-token base `aff6r` |
+| gemma-3-12b-it | `spaffgrowth6b` | 24 | complete, 24/24 records on disk 2026-08-16 21:15; trigger-fixed text (`7d6fd07`); re-run of `spaffgrowth6`; per-token base `spaff6` |
+| gemma-3-12b-it | `spaffresil6b` | 24 | complete, 24/24 records on disk 2026-08-16 21:15; trigger-fixed text (`7d6fd07`); re-run of `spaffresil6`; per-token base `spaff6` |
+| gemma-3-12b-it | `spaffappr6b` | 24 | complete, 24/24 records on disk 2026-08-16 21:15; trigger-fixed text (`7d6fd07`); re-run of `spaffappr6`; per-token base `spaff6` |
 | gemma-3-12b-it | `spaffgrowth6v3` | 0 | **pending submission 2026-08-16 (evening)**, mindset v3; base `spaff6`; see [The mindset v3 grid](#the-mindset-v3-grid) |
 | gemma-3-12b-it | `spaffresil6v3` | 0 | **pending submission 2026-08-16 (evening)**, mindset v3; base `spaff6`; see [The mindset v3 grid](#the-mindset-v3-grid) |
 | gemma-3-12b-it | `spaffctrl6v3` | 0 | **pending submission 2026-08-16 (evening)**, mindset v3; base `spaff6`; see [The mindset v3 grid](#the-mindset-v3-grid) |
