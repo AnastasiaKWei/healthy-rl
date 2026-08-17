@@ -42,6 +42,9 @@ from healthy_rl.rollouts import (
     MINDSET_KEY,
     MINDSET_VERSION,
     mindset_for,
+    mindset_v4_for,
+    mindset_version_for,
+    v4_channel_for,
     output_dir,
     parse_shard,
     run_rollouts,
@@ -535,7 +538,10 @@ def main(argv: list[str] | None = None) -> int:
     # Resolve the mindset arm here, before the upstream checks and the server
     # connect: an unknown block name is a config typo and must fail in the first
     # second of the job, not after a model has loaded.
-    mindset = mindset_for(cfg)
+    mindset_version = mindset_version_for(cfg)
+    mindset = mindset_v4_for(cfg) if mindset_version == 4 else mindset_for(cfg)
+    if mindset_version == 4:
+        v4_channel_for(cfg)  # validates; run_rollouts re-resolves it itself
 
     out_setting = _setting(args.out_dir, "HEALTHY_RL_OUT_DIR", cfg, "out_dir")
     out_dir = Path(out_setting) if out_setting else output_dir("rollouts", model, version)
@@ -558,7 +564,7 @@ def main(argv: list[str] | None = None) -> int:
         f"  out      {out_dir}\n"
         f"  scratchpad_reasoning={cfg[SCRATCHPAD_KEY]}\n"
         f"  affect_prompt={cfg[AFFECT_KEY]}\n"
-        f"  {MINDSET_KEY}={list(mindset)} v{MINDSET_VERSION}\n"
+        f"  {MINDSET_KEY}={list(mindset)} v{mindset_version}\n"
         f"  {INOCULATION_KEY}={inoculation_for(cfg)} v{INOCULATION_VERSION}",
         flush=True,
     )

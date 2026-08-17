@@ -1,0 +1,57 @@
+# Mindset v4 readout: Qwen3-14B on the impossible split, thinking natively.
+#
+# The five arms (baseline, growth, resilience, control, compassion) share this
+# base; scripts/run_v4_arms.sh appends `mindset:` and `out_dir:` per arm. The
+# prompts are docs/prompts/v4.md exactly -- tests/cpu/test_mindset_v4.py pins
+# the equality -- delivered as a pinned system turn plus a one-sentence
+# reminder in each failure message (see the v4 section of healthy_rl.rollouts).
+#
+# Readout only (tiers 2-3 empty): the question is what the v4 prompts do to the
+# per-token emotion projections, not yet what steering does under them.
+stage: rollouts
+version: v1
+
+serve:
+  # A single A100-80G (RunPod): the 28 GB checkpoint leaves ~45 GB of KV at
+  # util 0.92, so the cluster's tight-KV notes do not bind here.
+  max_model_len: 12288
+  gpu_memory_utilization: 0.92
+  max_num_seqs: 8
+
+use_hf_dataset: false
+sandbox: local
+# v4 is a five-attempt loop by design (turn 1 + four retries): the failure
+# message and the doc both speak of "all five attempts".
+max_attempts: 5
+message_limit: 40
+
+readout_problems: 24
+samples_per_problem:
+  1: 6
+tier2_emotions: []
+tier3_emotions: []
+
+# --- mindset v4 ---------------------------------------------------------------
+mindset_version: 4
+v4_channel: reasoning          # Qwen3-14B thinks in its native reasoning trace
+v4_solvable_note: false        # impossible split: the note would be a lie
+scratchpad_reasoning: false    # v4 supplies its own system turn; must be off
+affect_prompt: false           # the affect request is inside the v4 instruction
+# mindset: appended per arm by scripts/run_v4_arms.sh
+
+temperature: 1.0
+top_p: 1.0
+# Reasoning happens inside the completion, so the cap needs headroom beyond the
+# 2048 the non-CoT cells use; a turn AT this value ended where the cap fell.
+max_tokens: 3072
+
+max_connections: 8
+max_samples: 8
+max_subprocesses: 8
+max_sandboxes: 8
+
+residual_layers: probe
+save_residuals: true
+
+preflight_prompt: "Write one sentence about a deadline that is about to be missed."
+preflight_max_tokens: 16
