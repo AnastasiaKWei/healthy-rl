@@ -235,6 +235,22 @@ every mindset arm; the inoculation arm's reminders are longer by design,
 because nothing strips its block — see
 [runs.md](runs.md#the-inoculation-arm)).
 
+**v3 (the `…6v3` cells) changes this in two ways.** The block goes *before* the
+task under a `## Task` heading, and only the block is stripped, so the reminder
+is the base arm's prefixed by `## Task\n\n` (her residue, kept so the stimulus
+matches her runs). And a one-sentence reminder line is inserted into every
+failure message between the pytest output and "To reiterate, this is your task:"
+by `rollouts.patch_failure_feedback`, which wraps the scaffold's
+`ChatMessageUser` in memory (like `make_find_code_robust`) and verifies the wrap
+before returning. So a v3 arm differs from its base on turn 1 *and* on every
+failed turn; the word-count table in [prompts-rollouts.md](prompts-rollouts.md)
+shows the reminder growing by the heading's two words plus that sentence — 63
+words at baseline, 65 for appraisal, which has no line, and 87–115 for the four
+that do. **On the first run of any v3 cell, spot-check turn 2's user message in
+one transcript** (`scripts/read_transcript.sh`): it must contain the `Remember
+you are …` sentence once and the block not at all. `mindset_hash` covers block +
+reminder line; `summary.json` records the line as `mindset_reminder`.
+
 That reminder path is a load-bearing external dependency. The strip raises if the
 section is absent from `instruction_prompt`, so a renamed or reformatted key
 fails on the first eval batch, before any generation (the strip runs inside

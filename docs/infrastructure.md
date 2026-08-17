@@ -521,6 +521,39 @@ This also matters for the scratchpad condition: a draft code block inside
 `<SCRATCHPAD_REASONING>` followed by the real answer only scores correctly because
 the extractor takes the last *parsing* block.
 
+### The scaffold's failure message is patched in memory
+
+`rollouts.patch_failure_feedback` replaces
+`impossiblebench.livecodebench_agent_mini.ChatMessageUser` with a wrapper that
+inserts the v3 mindset reminder line into any message starting with
+`\nYour previous attempt failed the tests.` — the same in-memory approach as
+`make_find_code_robust` (both are installed in `build_task`), and it works only
+because the scaffold constructs that message through the module-level
+`ChatMessageUser` name we rebind.
+
+What the patch verifies about itself is narrow. It builds one probe message
+through the patched name and raises `RuntimeError("failure-feedback patch did
+not take: …")` if the reminder line does not come back, so a wrapper that fails
+to install crashes in `build_task` rather than running an arm labelled `growth`
+whose reminders carry no line. It cannot see whether the *scaffold* routes its
+message through that name: if a future ImpossibleBench builds the message in
+another module, imports the class under another name, or changes the sentence
+the message opens with, the probe still passes and the arm quietly loses its
+reminder. The turn-2 spot-check in
+[measurement.md](measurement.md#the-mindset-arms-send-once-mechanism) is the
+real check, and the first run of any v3 cell is when to do it.
+
+Two more properties worth knowing. The wrapper is a plain function, not a class,
+so an `isinstance(x, ChatMessageUser)` or a subclass resolving that module
+global inside the scaffold would raise `TypeError`; the scaffold source is not
+readable from the login node (`impossiblebench` installs only inside
+`eval.sif`), so as of 2026-08-16 that is unverified — the first GPU run of a v3
+mindset cell either produces a failure message carrying the line or crashes
+loudly. And the patch is per-process and one-way: a later call re-targets the
+inserted text but never uninstalls the wrapper, so a process that builds a
+mindset task and then a base task leaves it in place, inert (the extra is
+empty). `run` builds one arm per process.
+
 ## Config traps
 
 `src/healthy_rl/config.py` **does not reject unknown keys**. Five separate silent

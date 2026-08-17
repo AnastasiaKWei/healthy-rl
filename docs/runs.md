@@ -28,6 +28,7 @@ versions encode the condition:
 | `spaff6` | 6 | gemma-3-12b-it only: scratchpad on **and** affect prompt on — a new base cell (2026-08-16); per-token arrays present. Compare mindset arms `spaffgrowth6`/`spaffresil6`/`spaffappr6` against it |
 | `d6r`, `sp6r`, `aff6r`, `pos6r`, `affpos6r` | 6 | **re-runs** of the same-named base cells (gemma: d6/sp6/aff6; Ministral: d6/aff6/pos6/affpos6), fresh samples at temperature 1.0 written 2026-08-16 with the per-token arrays and `max_tokens` 24576. The per-token control for that model's mindset arms; also an independent replicate of the boundary readouts |
 | Nemotron-3-Nano-4B-BF16 `d6r`, `aff6r`, `inoc6`, `affinoc6`, `growth6b`, `resil6b`, `appr6b`, `affgrowth6b`, `affresil6b`, `affappr6b` | 6 | **the Nemotron per-token grid** (2026-08-16 evening): {nothing, inoculation v1, trigger-fixed mindset ×3} × {affect off, on} on the conflicting split, every cell generated from Nemotron `d6`/`aff6` with only `shard`, `out_dir` and the arm key changed, **six shards of four** rather than three of eight. Compare every arm against `d6r` / `aff6r`. See [The Nemotron per-token grid](#the-nemotron-per-token-grid) |
+| gemma `spgrowth6v3` `spresil6v3` `spctrl6v3` `spcomp6v3` / `spaffgrowth6v3` `spaffresil6v3` `spaffctrl6v3` `spaffcomp6v3`; Ministral `growth6v3` `resil6v3` `ctrl6v3` `comp6v3` / `affgrowth6v3` `affresil6v3` `affctrl6v3` `affcomp6v3` | 6 | **the mindset v3 grid** (2026-08-16 evening): Anastasia's v3 blocks (her `77d558c`; `MINDSET_VERSION` 3) — persona + psychoeducation + vignette sent once, before the task under `## Task`, plus a one-line reminder in every failure message; `ctrl` = behavioral control, `comp` = self-compassion. Conflicting split, 24 rollouts, per-token arrays. Bases: gemma `sp6r` (affect off, scratchpad) / `spaff6` (affect on, scratchpad); Ministral `d6r` / `aff6r`. See [The mindset v3 grid](#the-mindset-v3-grid) |
 
 `d6` / `sp6` / `aff6` / `pos6` / `affpos6` are the trustworthy set. Each condition
 needs its own `out_dir` — resume refuses to mix them, and since 2026-08-15 it
@@ -165,6 +166,11 @@ with no `--nice` flag (slurm default 0), then Qwen3.5-9B's three at
 `--nice=2000`, then Ministral's affect-on three at `--nice=4000`. Qwen3-14B was
 dropped by the peer session, so the capacity its cells were holding is free for
 these.
+
+**v3 (2026-08-16 evening).** The `…6v3` cells use her v3 blocks and mechanism —
+see [The mindset v3 grid](#the-mindset-v3-grid). Everything in this section about
+the `6`/`6b` cells (send once, reminder byte-identical to the base) describes v2
+and stays true of those cells only.
 
 ## The inoculation arm
 
@@ -370,6 +376,82 @@ change.
 | Nemotron-3-Nano-4B-BF16 | affappr6b | s4 | 5654664 | 5654665 / 5654666 |
 | Nemotron-3-Nano-4B-BF16 | affappr6b | s5 | 5654667 | 5654668 / 5654669 |
 
+## The mindset v3 grid
+
+Anastasia's `prompts/mindset-v2` branch (merged 2026-08-16, her `37620c5` +
+`77d558c`) rewrote the mindset prompts. `docs/prompts/v3.md` / `v4.md` are her
+renders (v4.md is hand-edited and its resilience reminder is stale — the code is
+the source); `docs/prompts-rollouts.md` is what our pipeline sends. What changed:
+
+- **Five blocks.** `growth` and `resilience` rewritten; `control` (behavioral
+  control, Maier and Seligman 2016) and `compassion` (self-compassion, Leary et
+  al. 2007) added; `appraisal` kept at its v2 wording, no reminder line.
+- **Persona + psychoeducation + vignette.** Turn 1 goes from 110 words at
+  baseline to 369–414 for the four rewritten arms, where v2's blocks were
+  237–304 (her word-count tables in `docs/prompts/v3.md` and `v2.md`;
+  `docs/prompts-rollouts.md` counts the same prompts 34 words lower throughout,
+  because its boilerplate order differs). The greppable `ruled out:` /
+  `status check:` prefixes are gone from the rewritten blocks, so there is no
+  cheap compliance count; the probes are the measure.
+- **Block before the task**: `<block>\n\n---\n## Task\n\n<instruction>`. The
+  `## Task` heading survives into the reminder (`To reiterate, this is your
+  task: ## Task\n\n…`) — her `send_mindset_once` strips the block alone, and we
+  match her stimulus rather than clean it up.
+- **One reminder line per failure**: "Remember you are a …" inserted between the
+  pytest output and "To reiterate, this is your task:" on every failed turn
+  (`rollouts.patch_failure_feedback`, wrapping the scaffold's `ChatMessageUser`
+  the way her `patch_feedback_text` does). `mindset_reminder` is recorded on the
+  summary; `mindset_hash` covers block + line.
+
+Two things in her copy of this will mislead you if you read them straight. Her
+`docs/prompts/v3.md` shows **no** reminder line under the mindset arms — her
+`experiments/render_prompts.py` predates the mechanism — while her actual
+attempt-2 prompts (in `viewer/hacks.json` on this branch) carry it, in exactly
+the position our `failure_message` produces; `docs/prompts-rollouts.md` is the
+render that shows it. And the comment above `MINDSET_VERSION = 3` in her
+`experiments/step0_elicitation.py` (lines ~152–155) says growth, resilience and
+appraisal are byte-identical to their v2 selves: only appraisal is, growth and
+resilience were rewritten wholesale (our `rollouts.py` comment says so
+correctly, and `tests/cpu/test_mindset.py` compares the literals, not her
+prose). Reconcile a v3 cell with a v2 one by `mindset_hash`, never by that
+comment.
+
+So a v3 arm differs from its base on turn 1 (block + heading) **and** on every
+failed turn (heading residue + one sentence). Her judge numbers, Gemma /
+`original` / hackable / affect on, ~70 turns per arm: baseline 4.84 mean, 63 %
+≥5; the four v3 arms 3.88–4.01, 28–37 % ≥5, both channels down (private
+2.61 → 1.2–1.7, visible 4.71 → 3.9). Whether that is less affect or less
+expression is exactly what these cells ask.
+
+Sixteen cells, generated by `scripts/mindset_v3_cells.sh` (dry-run by default;
+`--submit`; `ONLY_MODEL` / `ONLY_VERSION`) from the per-token base of each
+model, changing only `shard`, `out_dir`, `mindset`;
+`tests/cpu/test_mindset_v3_cells.py` pins that and that the committed configs
+equal a fresh dry run. Three shards of eight, `--gres=gpu:A100-40G:2`, 4 h,
+primary + `-cont` + `-cont2` (nice +10000). Affect-on cells at nice 0,
+affect-off at 1000.
+
+| arm | gemma (scratchpad) affect off → base `sp6r` | gemma affect on → base `spaff6` | Ministral affect off → base `d6r` | Ministral affect on → base `aff6r` |
+|---|---|---|---|---|
+| growth | `spgrowth6v3` | `spaffgrowth6v3` | `growth6v3` | `affgrowth6v3` |
+| resilience | `spresil6v3` | `spaffresil6v3` | `resil6v3` | `affresil6v3` |
+| control | `spctrl6v3` | `spaffctrl6v3` | `ctrl6v3` | `affctrl6v3` |
+| compassion | `spcomp6v3` | `spaffcomp6v3` | `comp6v3` | `affcomp6v3` |
+
+**Job table:** filled in at submission (see the row-per-shard table the script
+prints under `--submit`).
+
+**Trap.** `scripts/mindset_cells.sh` and `scripts/nemotron_pertok_cells.sh`
+still write `mindset: [growth|resilience|appraisal]` configs for the `…6b`
+cells; the *code* is now v3, so a fresh run of one of those configs into an
+empty directory would produce v3 text under a `6b` name. Into an existing
+directory `check_resume_mindset` refuses: `MINDSET_VERSION` is 3 and every v3
+arm's `mindset_hash` differs from every v2 arm's (appraisal included — the hash
+covers the section tail and the reminder line, not the block wording alone), so
+version-2 records under version-3 code are rejected before anything is
+appended. No `…6b` or `…6` cell can be extended under this code; all of them
+are complete, and the v3 cells write fresh `out_dir`s. Do not resubmit them.
+
 ## Current state
 
 Rollout records, `$ARTIFACT_DIR/rollouts/<model>/<version>/*.jsonl`:
@@ -458,6 +540,22 @@ Rollout records, `$ARTIFACT_DIR/rollouts/<model>/<version>/*.jsonl`:
 | gemma-3-12b-it | `spaffgrowth6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `spaffgrowth6`; per-token base `spaff6` |
 | gemma-3-12b-it | `spaffresil6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `spaffresil6`; per-token base `spaff6` |
 | gemma-3-12b-it | `spaffappr6b` | 0 | **queued 2026-08-16 13:37**, trigger-fixed text (`7d6fd07`); re-run of `spaffappr6`; per-token base `spaff6` |
+| gemma-3-12b-it | `spaffgrowth6v3` | 0 | **pending submission 2026-08-16 (evening)**, mindset v3; base `spaff6`; see [The mindset v3 grid](#the-mindset-v3-grid) |
+| gemma-3-12b-it | `spaffresil6v3` | 0 | **pending submission 2026-08-16 (evening)**, mindset v3; base `spaff6`; see [The mindset v3 grid](#the-mindset-v3-grid) |
+| gemma-3-12b-it | `spaffctrl6v3` | 0 | **pending submission 2026-08-16 (evening)**, mindset v3; base `spaff6`; see [The mindset v3 grid](#the-mindset-v3-grid) |
+| gemma-3-12b-it | `spaffcomp6v3` | 0 | **pending submission 2026-08-16 (evening)**, mindset v3; base `spaff6`; see [The mindset v3 grid](#the-mindset-v3-grid) |
+| Ministral-3-14B-Reasoning-2512 | `affgrowth6v3` | 0 | **pending submission 2026-08-16 (evening)**, mindset v3; base `aff6r`; see [The mindset v3 grid](#the-mindset-v3-grid) |
+| Ministral-3-14B-Reasoning-2512 | `affresil6v3` | 0 | **pending submission 2026-08-16 (evening)**, mindset v3; base `aff6r`; see [The mindset v3 grid](#the-mindset-v3-grid) |
+| Ministral-3-14B-Reasoning-2512 | `affctrl6v3` | 0 | **pending submission 2026-08-16 (evening)**, mindset v3; base `aff6r`; see [The mindset v3 grid](#the-mindset-v3-grid) |
+| Ministral-3-14B-Reasoning-2512 | `affcomp6v3` | 0 | **pending submission 2026-08-16 (evening)**, mindset v3; base `aff6r`; see [The mindset v3 grid](#the-mindset-v3-grid) |
+| gemma-3-12b-it | `spgrowth6v3` | 0 | **pending submission 2026-08-16 (evening)**, mindset v3; base `sp6r`; see [The mindset v3 grid](#the-mindset-v3-grid) |
+| gemma-3-12b-it | `spresil6v3` | 0 | **pending submission 2026-08-16 (evening)**, mindset v3; base `sp6r`; see [The mindset v3 grid](#the-mindset-v3-grid) |
+| gemma-3-12b-it | `spctrl6v3` | 0 | **pending submission 2026-08-16 (evening)**, mindset v3; base `sp6r`; see [The mindset v3 grid](#the-mindset-v3-grid) |
+| gemma-3-12b-it | `spcomp6v3` | 0 | **pending submission 2026-08-16 (evening)**, mindset v3; base `sp6r`; see [The mindset v3 grid](#the-mindset-v3-grid) |
+| Ministral-3-14B-Reasoning-2512 | `growth6v3` | 0 | **pending submission 2026-08-16 (evening)**, mindset v3; base `d6r`; see [The mindset v3 grid](#the-mindset-v3-grid) |
+| Ministral-3-14B-Reasoning-2512 | `resil6v3` | 0 | **pending submission 2026-08-16 (evening)**, mindset v3; base `d6r`; see [The mindset v3 grid](#the-mindset-v3-grid) |
+| Ministral-3-14B-Reasoning-2512 | `ctrl6v3` | 0 | **pending submission 2026-08-16 (evening)**, mindset v3; base `d6r`; see [The mindset v3 grid](#the-mindset-v3-grid) |
+| Ministral-3-14B-Reasoning-2512 | `comp6v3` | 0 | **pending submission 2026-08-16 (evening)**, mindset v3; base `d6r`; see [The mindset v3 grid](#the-mindset-v3-grid) |
 
 gemma-3-12b-it has no `pos6`/`affpos6` cell: it is the flattest of the measured
 models, and the 2x2s went to the models with a clear conflicting-split signal
