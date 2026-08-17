@@ -444,13 +444,23 @@ prints under `--submit`).
 **Trap.** `scripts/mindset_cells.sh` and `scripts/nemotron_pertok_cells.sh`
 still write `mindset: [growth|resilience|appraisal]` configs for the `…6b`
 cells; the *code* is now v3, so a fresh run of one of those configs into an
-empty directory would produce v3 text under a `6b` name. Into an existing
-directory `check_resume_mindset` refuses: `MINDSET_VERSION` is 3 and every v3
-arm's `mindset_hash` differs from every v2 arm's (appraisal included — the hash
-covers the section tail and the reminder line, not the block wording alone), so
-version-2 records under version-3 code are rejected before anything is
-appended. No `…6b` or `…6` cell can be extended under this code; all of them
-are complete, and the v3 cells write fresh `out_dir`s. Do not resubmit them.
+empty directory produces v3 text under a `6b` name. Into a directory that
+already holds records `check_resume_mindset` refuses: `MINDSET_VERSION` is 3 and
+every v3 arm's `mindset_hash` differs from every v2 arm's (appraisal included —
+the hash covers the section tail and the reminder line, not the block wording
+alone), so version-2 records under version-3 code are rejected before anything
+is appended. No `…6` or `…6b` cell can be extended under this code.
+
+The 18 gemma / Ministral / Qwen3.5-9B `…6b` cells are complete at 24/24 and need
+nothing. **The Nemotron per-token grid is where this bites.** 164 of its 180 jobs
+were cancelled at 17:44 EDT on 2026-08-16 and 16 completed, all of them from the
+four non-mindset cells: as of 21:15, with the queue empty, `d6r` holds 22
+records, `aff6r` 23, `inoc6` 21, `affinoc6` 18, `growth6b` and `resil6b` 0 in
+directories that exist, and the remaining four mindset cells have no directory
+at all. The four non-mindset cells carry no `mindset` key, so v3 code resumes
+them normally. The six mindset cells cannot be resumed as `6b` — and the empty
+ones are the case that fails *silently*, writing v3 text under a v2 name. Finish
+them from a pre-v3 commit, or rerun them as `6v3` cells with fresh `out_dir`s.
 
 ## Current state
 
