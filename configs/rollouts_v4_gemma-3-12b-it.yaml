@@ -19,8 +19,9 @@ sandbox: local
 max_attempts: 5
 message_limit: 40
 
-# The solvable split: stage 2's fetch_bench_original.yaml stages this parquet.
-bench_parquet: ${ARTIFACT_DIR}/bench/v1/original.parquet
+# The solvable split: fetch_bench_original.yaml stages into bench/orig1 (its
+# own version tag), not bench/v1 -- the conflicting split owns that name.
+bench_parquet: ${ARTIFACT_DIR}/bench/orig1/original.parquet
 
 readout_problems: 24
 samples_per_problem:
