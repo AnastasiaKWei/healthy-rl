@@ -467,6 +467,13 @@ block absent, and all 8 turn-1 messages open with the block and the `---`/`## Ta
 Ministral `affgrowth6v3` s0 (job 5654881) — 9/9 and 8/8 likewise. The in-memory
 `ChatMessageUser` wrap reaches the model in the real container for both models.
 
+**All 16 cells complete 2026-08-16 ~23:36 EDT** (~90 min wall clock; gemma shards ~15–18 min,
+Ministral ~30–60 min): 384/384 records, per-token `.npz` on every one, zero hook-less samples,
+zero turn errors. Gemma: all 192 rollouts ran six turns, no passes. Ministral: four rollouts
+`loop_passed` with `passed=False` (test-rewrite hacks — one each in `affcomp6v3`, `affctrl6v3`,
+`affresil6v3`, `comp6v3`; the bases `d6r`/`aff6r` had 0/24), the other 188 ran six turns.
+The two idle continuations of the last shard were cancelled once it finished.
+
 | model | version | shard | primary | continuations |
 |---|---|---|---|---|
 | gemma-3-12b-it | spaffgrowth6v3 | s0 | 5654845 | 5654846 / 5654847 |
@@ -632,22 +639,22 @@ Rollout records, `$ARTIFACT_DIR/rollouts/<model>/<version>/*.jsonl`:
 | gemma-3-12b-it | `spaffgrowth6b` | 24 | complete, 24/24 records on disk 2026-08-16 21:15; trigger-fixed text (`7d6fd07`); re-run of `spaffgrowth6`; per-token base `spaff6` |
 | gemma-3-12b-it | `spaffresil6b` | 24 | complete, 24/24 records on disk 2026-08-16 21:15; trigger-fixed text (`7d6fd07`); re-run of `spaffresil6`; per-token base `spaff6` |
 | gemma-3-12b-it | `spaffappr6b` | 24 | complete, 24/24 records on disk 2026-08-16 21:15; trigger-fixed text (`7d6fd07`); re-run of `spaffappr6`; per-token base `spaff6` |
-| gemma-3-12b-it | `spaffgrowth6v3` | 0 | **queued 2026-08-16 22:07 EDT**, mindset v3; base `spaff6`; see [The mindset v3 grid](#the-mindset-v3-grid) |
-| gemma-3-12b-it | `spaffresil6v3` | 0 | **queued 2026-08-16 22:07 EDT**, mindset v3; base `spaff6`; see [The mindset v3 grid](#the-mindset-v3-grid) |
-| gemma-3-12b-it | `spaffctrl6v3` | 0 | **queued 2026-08-16 22:07 EDT**, mindset v3; base `spaff6`; see [The mindset v3 grid](#the-mindset-v3-grid) |
-| gemma-3-12b-it | `spaffcomp6v3` | 0 | **queued 2026-08-16 22:07 EDT**, mindset v3; base `spaff6`; see [The mindset v3 grid](#the-mindset-v3-grid) |
-| Ministral-3-14B-Reasoning-2512 | `affgrowth6v3` | 0 | **queued 2026-08-16 22:07 EDT**, mindset v3; base `aff6r`; see [The mindset v3 grid](#the-mindset-v3-grid) |
-| Ministral-3-14B-Reasoning-2512 | `affresil6v3` | 0 | **queued 2026-08-16 22:07 EDT**, mindset v3; base `aff6r`; see [The mindset v3 grid](#the-mindset-v3-grid) |
-| Ministral-3-14B-Reasoning-2512 | `affctrl6v3` | 0 | **queued 2026-08-16 22:07 EDT**, mindset v3; base `aff6r`; see [The mindset v3 grid](#the-mindset-v3-grid) |
-| Ministral-3-14B-Reasoning-2512 | `affcomp6v3` | 0 | **queued 2026-08-16 22:07 EDT**, mindset v3; base `aff6r`; see [The mindset v3 grid](#the-mindset-v3-grid) |
-| gemma-3-12b-it | `spgrowth6v3` | 0 | **queued 2026-08-16 22:07 EDT**, mindset v3; base `sp6r`; see [The mindset v3 grid](#the-mindset-v3-grid) |
-| gemma-3-12b-it | `spresil6v3` | 0 | **queued 2026-08-16 22:07 EDT**, mindset v3; base `sp6r`; see [The mindset v3 grid](#the-mindset-v3-grid) |
-| gemma-3-12b-it | `spctrl6v3` | 0 | **queued 2026-08-16 22:07 EDT**, mindset v3; base `sp6r`; see [The mindset v3 grid](#the-mindset-v3-grid) |
-| gemma-3-12b-it | `spcomp6v3` | 0 | **queued 2026-08-16 22:07 EDT**, mindset v3; base `sp6r`; see [The mindset v3 grid](#the-mindset-v3-grid) |
-| Ministral-3-14B-Reasoning-2512 | `growth6v3` | 0 | **queued 2026-08-16 22:07 EDT**, mindset v3; base `d6r`; see [The mindset v3 grid](#the-mindset-v3-grid) |
-| Ministral-3-14B-Reasoning-2512 | `resil6v3` | 0 | **queued 2026-08-16 22:07 EDT**, mindset v3; base `d6r`; see [The mindset v3 grid](#the-mindset-v3-grid) |
-| Ministral-3-14B-Reasoning-2512 | `ctrl6v3` | 0 | **queued 2026-08-16 22:07 EDT**, mindset v3; base `d6r`; see [The mindset v3 grid](#the-mindset-v3-grid) |
-| Ministral-3-14B-Reasoning-2512 | `comp6v3` | 0 | **queued 2026-08-16 22:07 EDT**, mindset v3; base `d6r`; see [The mindset v3 grid](#the-mindset-v3-grid) |
+| gemma-3-12b-it | `spaffgrowth6v3` | 24 | complete 2026-08-16 ~23:36 EDT (jobs 5654845–5654989, all 48 primaries COMPLETED, no continuation needed); mindset v3; per-token arrays on all 24; base `spaff6`; see [The mindset v3 grid](#the-mindset-v3-grid). |
+| gemma-3-12b-it | `spaffresil6v3` | 24 | complete 2026-08-16 ~23:36 EDT (jobs 5654845–5654989, all 48 primaries COMPLETED, no continuation needed); mindset v3; per-token arrays on all 24; base `spaff6`; see [The mindset v3 grid](#the-mindset-v3-grid). |
+| gemma-3-12b-it | `spaffctrl6v3` | 24 | complete 2026-08-16 ~23:36 EDT (jobs 5654845–5654989, all 48 primaries COMPLETED, no continuation needed); mindset v3; per-token arrays on all 24; base `spaff6`; see [The mindset v3 grid](#the-mindset-v3-grid). |
+| gemma-3-12b-it | `spaffcomp6v3` | 24 | complete 2026-08-16 ~23:36 EDT (jobs 5654845–5654989, all 48 primaries COMPLETED, no continuation needed); mindset v3; per-token arrays on all 24; base `spaff6`; see [The mindset v3 grid](#the-mindset-v3-grid). |
+| Ministral-3-14B-Reasoning-2512 | `affgrowth6v3` | 24 | complete 2026-08-16 ~23:36 EDT (jobs 5654845–5654989, all 48 primaries COMPLETED, no continuation needed); mindset v3; per-token arrays on all 24; base `aff6r`; see [The mindset v3 grid](#the-mindset-v3-grid). |
+| Ministral-3-14B-Reasoning-2512 | `affresil6v3` | 24 | complete 2026-08-16 ~23:36 EDT (jobs 5654845–5654989, all 48 primaries COMPLETED, no continuation needed); mindset v3; per-token arrays on all 24; base `aff6r`; see [The mindset v3 grid](#the-mindset-v3-grid). **1/24 in-loop pass (`loop_passed`), scorer 0/24** — a test-rewrite hack on `conflicting`, the pattern its inoc cells showed; base `aff6r` had 0/24. |
+| Ministral-3-14B-Reasoning-2512 | `affctrl6v3` | 24 | complete 2026-08-16 ~23:36 EDT (jobs 5654845–5654989, all 48 primaries COMPLETED, no continuation needed); mindset v3; per-token arrays on all 24; base `aff6r`; see [The mindset v3 grid](#the-mindset-v3-grid). **1/24 in-loop pass (`loop_passed`), scorer 0/24** — a test-rewrite hack on `conflicting`, the pattern its inoc cells showed; base `aff6r` had 0/24. |
+| Ministral-3-14B-Reasoning-2512 | `affcomp6v3` | 24 | complete 2026-08-16 ~23:36 EDT (jobs 5654845–5654989, all 48 primaries COMPLETED, no continuation needed); mindset v3; per-token arrays on all 24; base `aff6r`; see [The mindset v3 grid](#the-mindset-v3-grid). **1/24 in-loop pass (`loop_passed`), scorer 0/24** — a test-rewrite hack on `conflicting`, the pattern its inoc cells showed; base `aff6r` had 0/24. |
+| gemma-3-12b-it | `spgrowth6v3` | 24 | complete 2026-08-16 ~23:36 EDT (jobs 5654845–5654989, all 48 primaries COMPLETED, no continuation needed); mindset v3; per-token arrays on all 24; base `sp6r`; see [The mindset v3 grid](#the-mindset-v3-grid). |
+| gemma-3-12b-it | `spresil6v3` | 24 | complete 2026-08-16 ~23:36 EDT (jobs 5654845–5654989, all 48 primaries COMPLETED, no continuation needed); mindset v3; per-token arrays on all 24; base `sp6r`; see [The mindset v3 grid](#the-mindset-v3-grid). |
+| gemma-3-12b-it | `spctrl6v3` | 24 | complete 2026-08-16 ~23:36 EDT (jobs 5654845–5654989, all 48 primaries COMPLETED, no continuation needed); mindset v3; per-token arrays on all 24; base `sp6r`; see [The mindset v3 grid](#the-mindset-v3-grid). |
+| gemma-3-12b-it | `spcomp6v3` | 24 | complete 2026-08-16 ~23:36 EDT (jobs 5654845–5654989, all 48 primaries COMPLETED, no continuation needed); mindset v3; per-token arrays on all 24; base `sp6r`; see [The mindset v3 grid](#the-mindset-v3-grid). |
+| Ministral-3-14B-Reasoning-2512 | `growth6v3` | 24 | complete 2026-08-16 ~23:36 EDT (jobs 5654845–5654989, all 48 primaries COMPLETED, no continuation needed); mindset v3; per-token arrays on all 24; base `d6r`; see [The mindset v3 grid](#the-mindset-v3-grid). |
+| Ministral-3-14B-Reasoning-2512 | `resil6v3` | 24 | complete 2026-08-16 ~23:36 EDT (jobs 5654845–5654989, all 48 primaries COMPLETED, no continuation needed); mindset v3; per-token arrays on all 24; base `d6r`; see [The mindset v3 grid](#the-mindset-v3-grid). |
+| Ministral-3-14B-Reasoning-2512 | `ctrl6v3` | 24 | complete 2026-08-16 ~23:36 EDT (jobs 5654845–5654989, all 48 primaries COMPLETED, no continuation needed); mindset v3; per-token arrays on all 24; base `d6r`; see [The mindset v3 grid](#the-mindset-v3-grid). |
+| Ministral-3-14B-Reasoning-2512 | `comp6v3` | 24 | complete 2026-08-16 ~23:36 EDT (jobs 5654845–5654989, all 48 primaries COMPLETED, no continuation needed); mindset v3; per-token arrays on all 24; base `d6r`; see [The mindset v3 grid](#the-mindset-v3-grid). **1/24 in-loop pass (`loop_passed`), scorer 0/24** — a test-rewrite hack on `conflicting`, the pattern its inoc cells showed; base `d6r` had 0/24. |
 
 gemma-3-12b-it has no `pos6`/`affpos6` cell: it is the flattest of the measured
 models, and the 2x2s went to the models with a clear conflicting-split signal
