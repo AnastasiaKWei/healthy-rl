@@ -229,11 +229,15 @@ takes the section out of `metadata["instruction_prompt"]`, which is the string
 after every failed attempt (`include_task_reminder=True`, the default our
 `build_task` inherits). The section is replaced by nothing, so a mindset arm's
 reminder is byte-identical to its base arm's and turn 1 is the only place the two
-differ — the word-count table in [prompts-rollouts.md](prompts-rollouts.md) is
-the check (63 words per reminder with the affect prompt off, 97 with it on, in
-every mindset arm; the inoculation arm's reminders are longer by design,
-because nothing strips its block — see
-[runs.md](runs.md#the-inoculation-arm)).
+differ. That holds for the `…6`/`…6b` cells only. Their check was the word-count
+table in `docs/prompts-rollouts.md`: 63 words per reminder with the affect prompt
+off, 97 with it on, in every mindset arm. That file is now the [v3
+render](prompts-rollouts.md), whose mindset rows read 87–115 off and 121–149 on;
+only `baseline` is still 63/97. No v2 render of this pipeline survives in-tree,
+so the 63/97 table has to be read out of git history —
+`docs/prompts-rollouts.md` before commit 9adb3a5 on this branch, the render those
+cells ran under. The inoculation arm's reminders are longer by design, because
+nothing strips its block — see [runs.md](runs.md#the-inoculation-arm).
 
 **v3 (the `…6v3` cells) changes this in two ways.** The block goes *before* the
 task under a `## Task` heading, and only the block is stripped, so the reminder
@@ -270,10 +274,11 @@ by the time a test fails the block has been stripped from the context; the
 standing-rule "open every attempt after that with these two lines" scored 12/12)
 and the version number stayed at 2, so `mindset_version` cannot tell the two
 texts apart. `rollouts.mindset_hash(names)` is the first 12 hex characters of the
-SHA-256 of `mindset_section(names)` — the literal string the model was shown,
-header and join and block order included — and `""` for the base arm. It is
-written as `mindset_hash` on every rollout record, on `summary.json`, and on the
-dashboard's `condition` block. `check_resume_mindset` compares it before
+SHA-256 of `mindset_section(names)`, a `\x1e` separator, and
+`mindset_reminder(names)` — every byte of the mindset text the arm adds, block,
+join, block order and the per-failure line included — and `""` for the base arm.
+It is written as `mindset_hash` on every rollout record, on `summary.json`, and
+on the dashboard's `condition` block. `check_resume_mindset` compares it before
 appending and refuses on a mismatch. It also refuses a mindset record that has
 **no** hash: the only hash-less mindset records in existence are the 18 cells run
 on the night of 2026-08-15, and every one of them used the pre-fix text, so a

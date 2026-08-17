@@ -463,11 +463,12 @@ already holds records `check_resume_mindset` refuses: `MINDSET_VERSION` is 3 and
 every v3 arm's `mindset_hash` differs from every v2 arm's — appraisal included,
 whose block text did not change: it hashes to `246ce770a78e` under v3 against
 the `805a76bb7f85` on the v2 records. What moves appraisal's hash is the section
-format alone (v2 opened with a `How to approach this:` header and closed with a
-blank line; v3 has no header and closes with `\n\n---\n`), since its reminder
-line is empty; the other four arms differ in wording as well. Version-2 records
-under version-3 code are rejected before anything is appended, so no `…6` or
-`…6b` cell can be extended under this code.
+format and the new reminder separator: v2 opened with a `How to approach this:`
+header and closed with a blank line, v3 has no header and closes with
+`\n\n---\n`, and v3 hashes the section plus a `\x1e` even though appraisal's
+reminder line is empty. The other four arms differ in wording as well.
+Version-2 records under version-3 code are rejected before anything is appended,
+so no `…6` or `…6b` cell can be extended under this code.
 
 The 18 gemma / Ministral / Qwen3.5-9B `…6b` cells are complete at 24/24 and need
 nothing. **The Nemotron per-token grid is where this bites.** 164 of its 180 jobs
