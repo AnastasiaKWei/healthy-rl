@@ -392,9 +392,9 @@ the source); `docs/prompts-rollouts.md` is what our pipeline sends. What changed
   (resilience), and appraisal, the block she kept, is unchanged at ~303.
   `docs/prompts-rollouts.md` counts every one of these exactly 34 words lower —
   a fixed boilerplate difference between the two renders, not a difference in
-  the blocks. The greppable `ruled out:` /
-  `status check:` prefixes are gone from the rewritten blocks, so there is no
-  cheap compliance count; the probes are the measure.
+  the blocks. The greppable `ruled out:` / `status check:` prefixes are gone
+  from the rewritten blocks, so there is no cheap compliance count; the probes
+  are the measure.
 - **Block before the task**: `<block>\n\n---\n## Task\n\n<instruction>`. The
   `## Task` heading survives into the reminder (`To reiterate, this is your
   task: ## Task\n\n…`) — her `send_mindset_once` strips the block alone, and we

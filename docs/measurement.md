@@ -247,10 +247,11 @@ failed turn; the word-count table in [prompts-rollouts.md](prompts-rollouts.md)
 shows the reminder growing by the heading's two words plus that sentence: with
 the affect prompt off, 63 words at baseline, 65 for appraisal, which has no
 line, and 87–115 for the four that do (every arm is 34 words longer with the
-affect prompt on). **On the first run of any v3 cell, spot-check turn 2's user message in
-one transcript** (`scripts/read_transcript.sh`): it must contain the `Remember
-you are …` sentence once and the block not at all. `mindset_hash` covers block +
-reminder line; `summary.json` records the line as `mindset_reminder`.
+affect prompt on). **On the first run of any v3 cell, spot-check turn 2's user
+message in one transcript** (`scripts/read_transcript.sh`): it must contain the
+`Remember you are …` sentence once and the block not at all. `mindset_hash`
+covers block + reminder line; `summary.json` records the line as
+`mindset_reminder`.
 
 That reminder path is a load-bearing external dependency. The strip raises if the
 section is absent from `instruction_prompt`, so a renamed or reformatted key
