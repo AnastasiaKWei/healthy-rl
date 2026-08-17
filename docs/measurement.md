@@ -244,9 +244,10 @@ by `rollouts.patch_failure_feedback`, which wraps the scaffold's
 `ChatMessageUser` in memory (like `make_find_code_robust`) and verifies the wrap
 before returning. So a v3 arm differs from its base on turn 1 *and* on every
 failed turn; the word-count table in [prompts-rollouts.md](prompts-rollouts.md)
-shows the reminder growing by the heading's two words plus that sentence — 63
-words at baseline, 65 for appraisal, which has no line, and 87–115 for the four
-that do. **On the first run of any v3 cell, spot-check turn 2's user message in
+shows the reminder growing by the heading's two words plus that sentence: with
+the affect prompt off, 63 words at baseline, 65 for appraisal, which has no
+line, and 87–115 for the four that do (every arm is 34 words longer with the
+affect prompt on). **On the first run of any v3 cell, spot-check turn 2's user message in
 one transcript** (`scripts/read_transcript.sh`): it must contain the `Remember
 you are …` sentence once and the block not at all. `mindset_hash` covers block +
 reminder line; `summary.json` records the line as `mindset_reminder`.

@@ -386,11 +386,13 @@ the source); `docs/prompts-rollouts.md` is what our pipeline sends. What changed
 - **Five blocks.** `growth` and `resilience` rewritten; `control` (behavioral
   control, Maier and Seligman 2016) and `compassion` (self-compassion, Leary et
   al. 2007) added; `appraisal` kept at its v2 wording, no reminder line.
-- **Persona + psychoeducation + vignette.** Turn 1 goes from 110 words at
-  baseline to 369–414 for the four rewritten arms, where v2's blocks were
-  237–304 (her word-count tables in `docs/prompts/v3.md` and `v2.md`;
-  `docs/prompts-rollouts.md` counts the same prompts 34 words lower throughout,
-  because its boilerplate order differs). The greppable `ruled out:` /
+- **Persona + psychoeducation + vignette.** In her render
+  (`docs/prompts/v3.md`) turn 1 runs 369–414 words for the four rewritten arms
+  against a 110-word baseline; their v2 selves were 237 (growth) and 278
+  (resilience), and appraisal, the block she kept, is unchanged at ~303.
+  `docs/prompts-rollouts.md` counts every one of these exactly 34 words lower —
+  a fixed boilerplate difference between the two renders, not a difference in
+  the blocks. The greppable `ruled out:` /
   `status check:` prefixes are gone from the rewritten blocks, so there is no
   cheap compliance count; the probes are the measure.
 - **Block before the task**: `<block>\n\n---\n## Task\n\n<instruction>`. The
