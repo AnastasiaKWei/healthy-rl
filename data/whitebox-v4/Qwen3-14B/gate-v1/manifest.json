@@ -1,0 +1,30 @@
+{
+  "config": {
+    "apply_final_norm": true,
+    "latin_initial_prefix": 4,
+    "latin_initial_rate_threshold": 0.7,
+    "model": "Qwen3-14B",
+    "model_dir": "/workspace/models",
+    "probe_layer": null,
+    "rms_norm_zero_centered": false,
+    "self_token_rate_threshold": 0.5,
+    "stage": "gate",
+    "top_k": 30,
+    "vectors_version": "v1",
+    "version": "v1",
+    "vocab_chunk_rows": 16384
+  },
+  "created_at": "2026-08-17T03:50:30.444938+00:00",
+  "git": {
+    "dirty": null,
+    "sha": null
+  },
+  "stage": "gate",
+  "upstreams": {
+    "vectors": {
+      "manifest_sha256": "2b3d2107c3ea3e0866b8969536a8c581d4096e4ff4ad8a0d042cf6c559179224",
+      "path": "/workspace/artifacts/vectors/Qwen3-14B/v1",
+      "stage": "build_vectors"
+    }
+  }
+}

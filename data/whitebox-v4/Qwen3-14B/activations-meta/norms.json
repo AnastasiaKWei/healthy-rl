@@ -1,0 +1,35 @@
+{
+  "emotion_story_counts": {
+    "afraid": 1200,
+    "angry": 1200,
+    "calm": 1200,
+    "desperate": 1200,
+    "exasperated": 1200,
+    "frustrated": 1200,
+    "guilty": 1200,
+    "hostile": 1200,
+    "joyful": 1200,
+    "loving": 1200,
+    "nervous": 1200,
+    "overwhelmed": 1200,
+    "proud": 1200,
+    "sad": 1200
+  },
+  "mean_residual_norm": {
+    "25": 212.21242520098252,
+    "26": 255.28174136439839,
+    "27": 294.4702157993987,
+    "28": 345.19421396540275,
+    "29": 411.78957855045996
+  },
+  "n_neutral_positions": [
+    129910,
+    129910,
+    129910,
+    129910,
+    129910
+  ],
+  "n_stories_failed": 0,
+  "n_stories_skipped": 0,
+  "n_stories_used": 18000
+}

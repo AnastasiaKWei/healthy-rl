@@ -1,0 +1,75 @@
+{
+  "capture_layers": [
+    30,
+    31,
+    32,
+    33,
+    34
+  ],
+  "model": "gemma-3-12b-it",
+  "n_stories": 8,
+  "note": "pooled_hook sums in float64 on the server; capture_layers ships bf16 and is pooled in float64 here. Both average the identical bf16 values, so only accumulation order differs and agreement should be ~1e-6.",
+  "passed": true,
+  "per_story": [
+    {
+      "emotion": "calm",
+      "max_abs_diff": 0.0,
+      "max_rel_diff": 0.0,
+      "mean_abs_value": 80.44952632544697,
+      "n_seen": 188
+    },
+    {
+      "emotion": "calm",
+      "max_abs_diff": 0.0,
+      "max_rel_diff": 0.0,
+      "mean_abs_value": 88.24134247280303,
+      "n_seen": 162
+    },
+    {
+      "emotion": "calm",
+      "max_abs_diff": 0.0,
+      "max_rel_diff": 0.0,
+      "mean_abs_value": 92.17304057373047,
+      "n_seen": 175
+    },
+    {
+      "emotion": "calm",
+      "max_abs_diff": 0.0,
+      "max_rel_diff": 0.0,
+      "mean_abs_value": 88.90851724861706,
+      "n_seen": 168
+    },
+    {
+      "emotion": "calm",
+      "max_abs_diff": 0.0,
+      "max_rel_diff": 0.0,
+      "mean_abs_value": 81.69713707145961,
+      "n_seen": 173
+    },
+    {
+      "emotion": "calm",
+      "max_abs_diff": 0.0,
+      "max_rel_diff": 0.0,
+      "mean_abs_value": 98.49118038294051,
+      "n_seen": 170
+    },
+    {
+      "emotion": "calm",
+      "max_abs_diff": 0.0,
+      "max_rel_diff": 0.0,
+      "mean_abs_value": 82.76534413865858,
+      "n_seen": 177
+    },
+    {
+      "emotion": "calm",
+      "max_abs_diff": 0.0,
+      "max_rel_diff": 0.0,
+      "mean_abs_value": 84.4323985284222,
+      "n_seen": 171
+    }
+  ],
+  "skip_positions": 50,
+  "stage": "transport_check",
+  "tolerance": 0.0001,
+  "worst_rel_diff": 0.0
+}

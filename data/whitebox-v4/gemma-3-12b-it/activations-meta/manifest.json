@@ -1,0 +1,123 @@
+{
+  "config": {
+    "batch_size": 64,
+    "checkpoint_every": 200,
+    "emotion_column": "emotion",
+    "emotions": [
+      "calm",
+      "desperate",
+      "nervous",
+      "angry",
+      "afraid",
+      "joyful",
+      "guilty",
+      "proud",
+      "loving",
+      "sad",
+      "hostile",
+      "frustrated",
+      "exasperated",
+      "overwhelmed"
+    ],
+    "extra": {
+      "architecture": "Gemma3ForConditionalGeneration",
+      "capture_layers": [
+        30,
+        31,
+        32,
+        33,
+        34
+      ],
+      "checkpoint_path": "/workspace/models/gemma-3-12b-it",
+      "d_model": 3840,
+      "emotion_story_counts": {
+        "afraid": 1200,
+        "angry": 1200,
+        "calm": 1200,
+        "desperate": 1200,
+        "exasperated": 1200,
+        "frustrated": 1200,
+        "guilty": 1200,
+        "hostile": 1200,
+        "joyful": 1200,
+        "loving": 1200,
+        "nervous": 1200,
+        "overwhelmed": 1200,
+        "proud": 1200,
+        "sad": 1200
+      },
+      "emotions": [
+        "calm",
+        "desperate",
+        "nervous",
+        "angry",
+        "afraid",
+        "joyful",
+        "guilty",
+        "proud",
+        "loving",
+        "sad",
+        "hostile",
+        "frustrated",
+        "exasperated",
+        "overwhelmed"
+      ],
+      "mean_residual_norm": {
+        "30": 75487.88297593272,
+        "31": 75651.97581266916,
+        "32": 77088.29578253049,
+        "33": 80444.85630829996,
+        "34": 85286.97035639817
+      },
+      "n_layers": 48,
+      "n_neutral_positions": [
+        129262,
+        129262,
+        129262,
+        129262,
+        129262
+      ],
+      "n_stories_failed": 0,
+      "n_stories_skipped": 0,
+      "n_stories_used": 18000,
+      "probe_layer": 32
+    },
+    "gpu_memory_utilization": 0.9,
+    "max_attempts": 5,
+    "max_failure_rate": 0.02,
+    "max_model_len": 1024,
+    "max_num_seqs": 128,
+    "max_tokens": 1,
+    "min_failure_sample": 50,
+    "min_tokens": 60,
+    "model": "gemma-3-12b-it",
+    "model_dir": "/workspace/models",
+    "n_neutral": 1200,
+    "neutral_batch_size": 4,
+    "neutral_file": "neutral_stories.parquet",
+    "request_timeout_s": 600,
+    "retry_rounds": 2,
+    "skip_positions": 50,
+    "stage": "extract_acts",
+    "stories_dir": "/workspace/artifacts/stories/v1",
+    "stories_file": "stories.parquet",
+    "stories_per_emotion": 1200,
+    "text_column": "story",
+    "transport": "pooled_hook",
+    "transport_tolerance": 0.0001,
+    "version": "v1"
+  },
+  "created_at": "2026-08-17T03:25:10.952364+00:00",
+  "git": {
+    "dirty": null,
+    "sha": null
+  },
+  "stage": "extract_acts",
+  "upstreams": {
+    "stories": {
+      "manifest_sha256": "221745120f1c6e0e504ea403456fb8eab0235d429235e7dcee5d37bf983b160a",
+      "path": "/workspace/artifacts/stories/v1",
+      "stage": "fetch_stories"
+    }
+  }
+}

@@ -1,0 +1,75 @@
+{
+  "capture_layers": [
+    25,
+    26,
+    27,
+    28,
+    29
+  ],
+  "model": "Qwen3-14B",
+  "n_stories": 8,
+  "note": "pooled_hook sums in float64 on the server; capture_layers ships bf16 and is pooled in float64 here. Both average the identical bf16 values, so only accumulation order differs and agreement should be ~1e-6.",
+  "passed": true,
+  "per_story": [
+    {
+      "emotion": "calm",
+      "max_abs_diff": 0.0,
+      "max_rel_diff": 0.0,
+      "mean_abs_value": 0.9040485989721151,
+      "n_seen": 187
+    },
+    {
+      "emotion": "calm",
+      "max_abs_diff": 0.0,
+      "max_rel_diff": 0.0,
+      "mean_abs_value": 1.0102588726836257,
+      "n_seen": 162
+    },
+    {
+      "emotion": "calm",
+      "max_abs_diff": 0.0,
+      "max_rel_diff": 0.0,
+      "mean_abs_value": 1.0288130145988637,
+      "n_seen": 174
+    },
+    {
+      "emotion": "calm",
+      "max_abs_diff": 0.0,
+      "max_rel_diff": 0.0,
+      "mean_abs_value": 0.9662718653996459,
+      "n_seen": 172
+    },
+    {
+      "emotion": "calm",
+      "max_abs_diff": 0.0,
+      "max_rel_diff": 0.0,
+      "mean_abs_value": 0.9319083978584968,
+      "n_seen": 178
+    },
+    {
+      "emotion": "calm",
+      "max_abs_diff": 0.0,
+      "max_rel_diff": 0.0,
+      "mean_abs_value": 1.140319523503383,
+      "n_seen": 170
+    },
+    {
+      "emotion": "calm",
+      "max_abs_diff": 0.0,
+      "max_rel_diff": 0.0,
+      "mean_abs_value": 0.9078142809709676,
+      "n_seen": 181
+    },
+    {
+      "emotion": "calm",
+      "max_abs_diff": 0.0,
+      "max_rel_diff": 0.0,
+      "mean_abs_value": 0.9358317255275324,
+      "n_seen": 178
+    }
+  ],
+  "skip_positions": 50,
+  "stage": "transport_check",
+  "tolerance": 0.0001,
+  "worst_rel_diff": 0.0
+}

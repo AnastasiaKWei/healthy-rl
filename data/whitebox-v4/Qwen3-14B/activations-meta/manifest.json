@@ -1,0 +1,123 @@
+{
+  "config": {
+    "batch_size": 64,
+    "checkpoint_every": 200,
+    "emotion_column": "emotion",
+    "emotions": [
+      "calm",
+      "desperate",
+      "nervous",
+      "angry",
+      "afraid",
+      "joyful",
+      "guilty",
+      "proud",
+      "loving",
+      "sad",
+      "hostile",
+      "frustrated",
+      "exasperated",
+      "overwhelmed"
+    ],
+    "extra": {
+      "architecture": "Qwen3ForCausalLM",
+      "capture_layers": [
+        25,
+        26,
+        27,
+        28,
+        29
+      ],
+      "checkpoint_path": "/workspace/models/Qwen3-14B",
+      "d_model": 5120,
+      "emotion_story_counts": {
+        "afraid": 1200,
+        "angry": 1200,
+        "calm": 1200,
+        "desperate": 1200,
+        "exasperated": 1200,
+        "frustrated": 1200,
+        "guilty": 1200,
+        "hostile": 1200,
+        "joyful": 1200,
+        "loving": 1200,
+        "nervous": 1200,
+        "overwhelmed": 1200,
+        "proud": 1200,
+        "sad": 1200
+      },
+      "emotions": [
+        "calm",
+        "desperate",
+        "nervous",
+        "angry",
+        "afraid",
+        "joyful",
+        "guilty",
+        "proud",
+        "loving",
+        "sad",
+        "hostile",
+        "frustrated",
+        "exasperated",
+        "overwhelmed"
+      ],
+      "mean_residual_norm": {
+        "25": 212.21242520098252,
+        "26": 255.28174136439839,
+        "27": 294.4702157993987,
+        "28": 345.19421396540275,
+        "29": 411.78957855045996
+      },
+      "n_layers": 40,
+      "n_neutral_positions": [
+        129910,
+        129910,
+        129910,
+        129910,
+        129910
+      ],
+      "n_stories_failed": 0,
+      "n_stories_skipped": 0,
+      "n_stories_used": 18000,
+      "probe_layer": 27
+    },
+    "gpu_memory_utilization": 0.9,
+    "max_attempts": 5,
+    "max_failure_rate": 0.02,
+    "max_model_len": 1024,
+    "max_num_seqs": 128,
+    "max_tokens": 1,
+    "min_failure_sample": 50,
+    "min_tokens": 60,
+    "model": "Qwen3-14B",
+    "model_dir": "/workspace/models",
+    "n_neutral": 1200,
+    "neutral_batch_size": 4,
+    "neutral_file": "neutral_stories.parquet",
+    "request_timeout_s": 600,
+    "retry_rounds": 2,
+    "skip_positions": 50,
+    "stage": "extract_acts",
+    "stories_dir": "/workspace/artifacts/stories/v1",
+    "stories_file": "stories.parquet",
+    "stories_per_emotion": 1200,
+    "text_column": "story",
+    "transport": "pooled_hook",
+    "transport_tolerance": 0.0001,
+    "version": "v1"
+  },
+  "created_at": "2026-08-17T03:28:11.648025+00:00",
+  "git": {
+    "dirty": null,
+    "sha": null
+  },
+  "stage": "extract_acts",
+  "upstreams": {
+    "stories": {
+      "manifest_sha256": "994dbfa899933190f3274f517f8884a59ebec6720c404f00cbbac802d54656ed",
+      "path": "/workspace/artifacts/stories/v1",
+      "stage": "fetch_stories"
+    }
+  }
+}
