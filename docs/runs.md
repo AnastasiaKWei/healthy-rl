@@ -458,6 +458,15 @@ ids 5654845–5654989). Sixteen primaries started within the minute on A100 node
 all twelve gemma `spaff*` shards, the three Ministral `affgrowth6v3` shards and one
 `affresil6v3` shard.
 
+**Turn-2 spot-check done (2026-08-16 22:25 EDT), on the live Inspect sample buffers of two
+running shards** (`$ARTIFACT_DIR/rollouts/.scratch/<jobid>/data/inspect_ai/samplebuffer/*/*.db`,
+`message_pool` table — the `.eval` is only readable once the shard finishes): gemma
+`spaffgrowth6v3` s2 (job 5654851) — 19/19 failure messages carry the `Remember you are …`
+line exactly once, between the pytest output and `To reiterate, this is your task: ## Task`,
+block absent, and all 8 turn-1 messages open with the block and the `---`/`## Task` seam;
+Ministral `affgrowth6v3` s0 (job 5654881) — 9/9 and 8/8 likewise. The in-memory
+`ChatMessageUser` wrap reaches the model in the real container for both models.
+
 | model | version | shard | primary | continuations |
 |---|---|---|---|---|
 | gemma-3-12b-it | spaffgrowth6v3 | s0 | 5654845 | 5654846 / 5654847 |
