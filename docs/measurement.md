@@ -232,7 +232,8 @@ reminder is byte-identical to its base arm's and turn 1 is the only place the tw
 differ. That holds for the `…6`/`…6b` cells only. Their check was the word-count
 table in `docs/prompts-rollouts.md`: 63 words per reminder with the affect prompt
 off, 97 with it on, in every mindset arm. That file is now the [v3
-render](prompts-rollouts.md), whose mindset rows read 87–115 off and 121–149 on;
+render](prompts-rollouts.md), whose mindset rows read 87–115 off and 121–149 on
+(appraisal excepted at 65/99, its reminder line being empty);
 only `baseline` is still 63/97. No v2 render of this pipeline survives in-tree,
 so the 63/97 table has to be read out of git history —
 `docs/prompts-rollouts.md` before commit 9adb3a5 on this branch, the render those

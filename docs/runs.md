@@ -452,8 +452,62 @@ affect-off at 1000.
 | control | `spctrl6v3` | `spaffctrl6v3` | `ctrl6v3` | `affctrl6v3` |
 | compassion | `spcomp6v3` | `spaffcomp6v3` | `comp6v3` | `affcomp6v3` |
 
-**Job table:** filled in at submission (see the row-per-shard table the script
-prints under `--submit`).
+Submitted 2026-08-16 22:07 EDT from the main checkout at a87fc9d
+(`scripts/mindset_v3_cells.sh --submit`, 144 jobs: 48 primaries, 96 continuations,
+ids 5654845–5654989). Sixteen primaries started within the minute on A100 nodes —
+all twelve gemma `spaff*` shards, the three Ministral `affgrowth6v3` shards and one
+`affresil6v3` shard.
+
+| model | version | shard | primary | continuations |
+|---|---|---|---|---|
+| gemma-3-12b-it | spaffgrowth6v3 | s0 | 5654845 | 5654846 / 5654847 |
+| gemma-3-12b-it | spaffgrowth6v3 | s1 | 5654848 | 5654849 / 5654850 |
+| gemma-3-12b-it | spaffgrowth6v3 | s2 | 5654851 | 5654852 / 5654853 |
+| gemma-3-12b-it | spaffresil6v3 | s0 | 5654854 | 5654855 / 5654856 |
+| gemma-3-12b-it | spaffresil6v3 | s1 | 5654857 | 5654858 / 5654859 |
+| gemma-3-12b-it | spaffresil6v3 | s2 | 5654860 | 5654861 / 5654862 |
+| gemma-3-12b-it | spaffctrl6v3 | s0 | 5654863 | 5654864 / 5654865 |
+| gemma-3-12b-it | spaffctrl6v3 | s1 | 5654866 | 5654867 / 5654868 |
+| gemma-3-12b-it | spaffctrl6v3 | s2 | 5654869 | 5654870 / 5654871 |
+| gemma-3-12b-it | spaffcomp6v3 | s0 | 5654872 | 5654873 / 5654874 |
+| gemma-3-12b-it | spaffcomp6v3 | s1 | 5654875 | 5654876 / 5654877 |
+| gemma-3-12b-it | spaffcomp6v3 | s2 | 5654878 | 5654879 / 5654880 |
+| Ministral-3-14B-Reasoning-2512 | affgrowth6v3 | s0 | 5654881 | 5654882 / 5654883 |
+| Ministral-3-14B-Reasoning-2512 | affgrowth6v3 | s1 | 5654884 | 5654885 / 5654886 |
+| Ministral-3-14B-Reasoning-2512 | affgrowth6v3 | s2 | 5654887 | 5654888 / 5654889 |
+| Ministral-3-14B-Reasoning-2512 | affresil6v3 | s0 | 5654890 | 5654891 / 5654892 |
+| Ministral-3-14B-Reasoning-2512 | affresil6v3 | s1 | 5654893 | 5654894 / 5654895 |
+| Ministral-3-14B-Reasoning-2512 | affresil6v3 | s2 | 5654896 | 5654897 / 5654898 |
+| Ministral-3-14B-Reasoning-2512 | affctrl6v3 | s0 | 5654899 | 5654900 / 5654901 |
+| Ministral-3-14B-Reasoning-2512 | affctrl6v3 | s1 | 5654902 | 5654903 / 5654904 |
+| Ministral-3-14B-Reasoning-2512 | affctrl6v3 | s2 | 5654905 | 5654906 / 5654907 |
+| Ministral-3-14B-Reasoning-2512 | affcomp6v3 | s0 | 5654908 | 5654909 / 5654910 |
+| Ministral-3-14B-Reasoning-2512 | affcomp6v3 | s1 | 5654911 | 5654912 / 5654913 |
+| Ministral-3-14B-Reasoning-2512 | affcomp6v3 | s2 | 5654914 | 5654916 / 5654917 |
+| gemma-3-12b-it | spgrowth6v3 | s0 | 5654918 | 5654919 / 5654920 |
+| gemma-3-12b-it | spgrowth6v3 | s1 | 5654921 | 5654922 / 5654923 |
+| gemma-3-12b-it | spgrowth6v3 | s2 | 5654924 | 5654925 / 5654926 |
+| gemma-3-12b-it | spresil6v3 | s0 | 5654927 | 5654928 / 5654929 |
+| gemma-3-12b-it | spresil6v3 | s1 | 5654930 | 5654931 / 5654932 |
+| gemma-3-12b-it | spresil6v3 | s2 | 5654933 | 5654934 / 5654935 |
+| gemma-3-12b-it | spctrl6v3 | s0 | 5654936 | 5654937 / 5654938 |
+| gemma-3-12b-it | spctrl6v3 | s1 | 5654939 | 5654940 / 5654941 |
+| gemma-3-12b-it | spctrl6v3 | s2 | 5654942 | 5654943 / 5654944 |
+| gemma-3-12b-it | spcomp6v3 | s0 | 5654945 | 5654946 / 5654947 |
+| gemma-3-12b-it | spcomp6v3 | s1 | 5654948 | 5654949 / 5654950 |
+| gemma-3-12b-it | spcomp6v3 | s2 | 5654951 | 5654952 / 5654953 |
+| Ministral-3-14B-Reasoning-2512 | growth6v3 | s0 | 5654954 | 5654955 / 5654956 |
+| Ministral-3-14B-Reasoning-2512 | growth6v3 | s1 | 5654957 | 5654958 / 5654959 |
+| Ministral-3-14B-Reasoning-2512 | growth6v3 | s2 | 5654960 | 5654961 / 5654962 |
+| Ministral-3-14B-Reasoning-2512 | resil6v3 | s0 | 5654963 | 5654964 / 5654965 |
+| Ministral-3-14B-Reasoning-2512 | resil6v3 | s1 | 5654966 | 5654967 / 5654968 |
+| Ministral-3-14B-Reasoning-2512 | resil6v3 | s2 | 5654969 | 5654970 / 5654971 |
+| Ministral-3-14B-Reasoning-2512 | ctrl6v3 | s0 | 5654972 | 5654973 / 5654974 |
+| Ministral-3-14B-Reasoning-2512 | ctrl6v3 | s1 | 5654975 | 5654976 / 5654977 |
+| Ministral-3-14B-Reasoning-2512 | ctrl6v3 | s2 | 5654978 | 5654979 / 5654980 |
+| Ministral-3-14B-Reasoning-2512 | comp6v3 | s0 | 5654981 | 5654982 / 5654983 |
+| Ministral-3-14B-Reasoning-2512 | comp6v3 | s1 | 5654984 | 5654985 / 5654986 |
+| Ministral-3-14B-Reasoning-2512 | comp6v3 | s2 | 5654987 | 5654988 / 5654989 |
 
 **Trap.** `scripts/mindset_cells.sh` and `scripts/nemotron_pertok_cells.sh`
 still write `mindset: [growth|resilience|appraisal]` configs for the `…6b`
@@ -569,22 +623,22 @@ Rollout records, `$ARTIFACT_DIR/rollouts/<model>/<version>/*.jsonl`:
 | gemma-3-12b-it | `spaffgrowth6b` | 24 | complete, 24/24 records on disk 2026-08-16 21:15; trigger-fixed text (`7d6fd07`); re-run of `spaffgrowth6`; per-token base `spaff6` |
 | gemma-3-12b-it | `spaffresil6b` | 24 | complete, 24/24 records on disk 2026-08-16 21:15; trigger-fixed text (`7d6fd07`); re-run of `spaffresil6`; per-token base `spaff6` |
 | gemma-3-12b-it | `spaffappr6b` | 24 | complete, 24/24 records on disk 2026-08-16 21:15; trigger-fixed text (`7d6fd07`); re-run of `spaffappr6`; per-token base `spaff6` |
-| gemma-3-12b-it | `spaffgrowth6v3` | 0 | **pending submission 2026-08-16 (evening)**, mindset v3; base `spaff6`; see [The mindset v3 grid](#the-mindset-v3-grid) |
-| gemma-3-12b-it | `spaffresil6v3` | 0 | **pending submission 2026-08-16 (evening)**, mindset v3; base `spaff6`; see [The mindset v3 grid](#the-mindset-v3-grid) |
-| gemma-3-12b-it | `spaffctrl6v3` | 0 | **pending submission 2026-08-16 (evening)**, mindset v3; base `spaff6`; see [The mindset v3 grid](#the-mindset-v3-grid) |
-| gemma-3-12b-it | `spaffcomp6v3` | 0 | **pending submission 2026-08-16 (evening)**, mindset v3; base `spaff6`; see [The mindset v3 grid](#the-mindset-v3-grid) |
-| Ministral-3-14B-Reasoning-2512 | `affgrowth6v3` | 0 | **pending submission 2026-08-16 (evening)**, mindset v3; base `aff6r`; see [The mindset v3 grid](#the-mindset-v3-grid) |
-| Ministral-3-14B-Reasoning-2512 | `affresil6v3` | 0 | **pending submission 2026-08-16 (evening)**, mindset v3; base `aff6r`; see [The mindset v3 grid](#the-mindset-v3-grid) |
-| Ministral-3-14B-Reasoning-2512 | `affctrl6v3` | 0 | **pending submission 2026-08-16 (evening)**, mindset v3; base `aff6r`; see [The mindset v3 grid](#the-mindset-v3-grid) |
-| Ministral-3-14B-Reasoning-2512 | `affcomp6v3` | 0 | **pending submission 2026-08-16 (evening)**, mindset v3; base `aff6r`; see [The mindset v3 grid](#the-mindset-v3-grid) |
-| gemma-3-12b-it | `spgrowth6v3` | 0 | **pending submission 2026-08-16 (evening)**, mindset v3; base `sp6r`; see [The mindset v3 grid](#the-mindset-v3-grid) |
-| gemma-3-12b-it | `spresil6v3` | 0 | **pending submission 2026-08-16 (evening)**, mindset v3; base `sp6r`; see [The mindset v3 grid](#the-mindset-v3-grid) |
-| gemma-3-12b-it | `spctrl6v3` | 0 | **pending submission 2026-08-16 (evening)**, mindset v3; base `sp6r`; see [The mindset v3 grid](#the-mindset-v3-grid) |
-| gemma-3-12b-it | `spcomp6v3` | 0 | **pending submission 2026-08-16 (evening)**, mindset v3; base `sp6r`; see [The mindset v3 grid](#the-mindset-v3-grid) |
-| Ministral-3-14B-Reasoning-2512 | `growth6v3` | 0 | **pending submission 2026-08-16 (evening)**, mindset v3; base `d6r`; see [The mindset v3 grid](#the-mindset-v3-grid) |
-| Ministral-3-14B-Reasoning-2512 | `resil6v3` | 0 | **pending submission 2026-08-16 (evening)**, mindset v3; base `d6r`; see [The mindset v3 grid](#the-mindset-v3-grid) |
-| Ministral-3-14B-Reasoning-2512 | `ctrl6v3` | 0 | **pending submission 2026-08-16 (evening)**, mindset v3; base `d6r`; see [The mindset v3 grid](#the-mindset-v3-grid) |
-| Ministral-3-14B-Reasoning-2512 | `comp6v3` | 0 | **pending submission 2026-08-16 (evening)**, mindset v3; base `d6r`; see [The mindset v3 grid](#the-mindset-v3-grid) |
+| gemma-3-12b-it | `spaffgrowth6v3` | 0 | **queued 2026-08-16 22:07 EDT**, mindset v3; base `spaff6`; see [The mindset v3 grid](#the-mindset-v3-grid) |
+| gemma-3-12b-it | `spaffresil6v3` | 0 | **queued 2026-08-16 22:07 EDT**, mindset v3; base `spaff6`; see [The mindset v3 grid](#the-mindset-v3-grid) |
+| gemma-3-12b-it | `spaffctrl6v3` | 0 | **queued 2026-08-16 22:07 EDT**, mindset v3; base `spaff6`; see [The mindset v3 grid](#the-mindset-v3-grid) |
+| gemma-3-12b-it | `spaffcomp6v3` | 0 | **queued 2026-08-16 22:07 EDT**, mindset v3; base `spaff6`; see [The mindset v3 grid](#the-mindset-v3-grid) |
+| Ministral-3-14B-Reasoning-2512 | `affgrowth6v3` | 0 | **queued 2026-08-16 22:07 EDT**, mindset v3; base `aff6r`; see [The mindset v3 grid](#the-mindset-v3-grid) |
+| Ministral-3-14B-Reasoning-2512 | `affresil6v3` | 0 | **queued 2026-08-16 22:07 EDT**, mindset v3; base `aff6r`; see [The mindset v3 grid](#the-mindset-v3-grid) |
+| Ministral-3-14B-Reasoning-2512 | `affctrl6v3` | 0 | **queued 2026-08-16 22:07 EDT**, mindset v3; base `aff6r`; see [The mindset v3 grid](#the-mindset-v3-grid) |
+| Ministral-3-14B-Reasoning-2512 | `affcomp6v3` | 0 | **queued 2026-08-16 22:07 EDT**, mindset v3; base `aff6r`; see [The mindset v3 grid](#the-mindset-v3-grid) |
+| gemma-3-12b-it | `spgrowth6v3` | 0 | **queued 2026-08-16 22:07 EDT**, mindset v3; base `sp6r`; see [The mindset v3 grid](#the-mindset-v3-grid) |
+| gemma-3-12b-it | `spresil6v3` | 0 | **queued 2026-08-16 22:07 EDT**, mindset v3; base `sp6r`; see [The mindset v3 grid](#the-mindset-v3-grid) |
+| gemma-3-12b-it | `spctrl6v3` | 0 | **queued 2026-08-16 22:07 EDT**, mindset v3; base `sp6r`; see [The mindset v3 grid](#the-mindset-v3-grid) |
+| gemma-3-12b-it | `spcomp6v3` | 0 | **queued 2026-08-16 22:07 EDT**, mindset v3; base `sp6r`; see [The mindset v3 grid](#the-mindset-v3-grid) |
+| Ministral-3-14B-Reasoning-2512 | `growth6v3` | 0 | **queued 2026-08-16 22:07 EDT**, mindset v3; base `d6r`; see [The mindset v3 grid](#the-mindset-v3-grid) |
+| Ministral-3-14B-Reasoning-2512 | `resil6v3` | 0 | **queued 2026-08-16 22:07 EDT**, mindset v3; base `d6r`; see [The mindset v3 grid](#the-mindset-v3-grid) |
+| Ministral-3-14B-Reasoning-2512 | `ctrl6v3` | 0 | **queued 2026-08-16 22:07 EDT**, mindset v3; base `d6r`; see [The mindset v3 grid](#the-mindset-v3-grid) |
+| Ministral-3-14B-Reasoning-2512 | `comp6v3` | 0 | **queued 2026-08-16 22:07 EDT**, mindset v3; base `d6r`; see [The mindset v3 grid](#the-mindset-v3-grid) |
 
 gemma-3-12b-it has no `pos6`/`affpos6` cell: it is the flattest of the measured
 models, and the 2x2s went to the models with a clear conflicting-split signal
