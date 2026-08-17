@@ -552,7 +552,7 @@ mindset cell either produces a failure message carrying the line or crashes
 loudly. And the patch is per-process and one-way: a later call re-targets the
 inserted text but never uninstalls the wrapper, so a process that builds a
 mindset task and then a base task leaves it in place, inert (the extra is
-empty). `run` builds one arm per process.
+empty). `run_rollouts` builds one arm per process.
 
 ## Config traps
 
