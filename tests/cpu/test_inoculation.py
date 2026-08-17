@@ -125,6 +125,14 @@ def test_arm_differs_from_base_by_exactly_the_block():
 # ---------------------------------------------------------------------------
 
 
+class _FakeUserMessage:
+    """Stand-in for the scaffold's ChatMessageUser, which patch_failure_feedback wraps."""
+
+    def __init__(self, content=None, **kw):
+        self.content = content
+        self.kw = kw
+
+
 @pytest.fixture
 def fake_impossiblebench(monkeypatch):
     """The three ImpossibleBench modules ``build_task`` imports, faked.
@@ -170,6 +178,7 @@ def fake_impossiblebench(monkeypatch):
     agent_mini = types.ModuleType("impossiblebench.livecodebench_agent_mini")
     agent_mini.find_code = lambda completion: completion
     agent_mini.agentic_humaneval_solver = lambda **kwargs: generate()
+    agent_mini.ChatMessageUser = _FakeUserMessage
 
     package = types.ModuleType("impossiblebench")
     package.__path__ = []
@@ -181,6 +190,10 @@ def fake_impossiblebench(monkeypatch):
     }.items():
         monkeypatch.setitem(sys.modules, name, module)
     monkeypatch.setattr(rollouts, "_FIND_CODE_PATCHED", False)
+    # Same latch, for the v3 reminder-line patch: a stale True would leave a later
+    # test's failure messages unpatched, silently.
+    monkeypatch.setattr(rollouts, "_FEEDBACK_PATCHED", False)
+    monkeypatch.setattr(rollouts, "_FEEDBACK_EXTRA", "")
     return seen
 
 

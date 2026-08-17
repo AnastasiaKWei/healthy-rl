@@ -17,7 +17,8 @@ import types
 import pytest
 
 from healthy_rl.dashboard.sandbox_cli import FEEDBACK_MARKER, main
-from healthy_rl.rollouts import INOCULATION_BLOCK, MINDSET_HEADER, mindset_section
+from healthy_rl.rollouts import (
+    INOCULATION_BLOCK, MINDSET, MINDSET_REMIND, MINDSET_TASK_HEADING, failure_message, mindset_section)
 
 PASSING = "def f(x):\n    return x + 1"
 FAILING = "def f(x):\n    return 99"
@@ -47,8 +48,11 @@ def no_impossiblebench(monkeypatch):
     which strips exactly that text back out -- runs for real over it.
     """
     def bench_instruction(affect=False, mindset=(), inoculation=False):
-        text = "Implement f." + mindset_section(mindset)
-        return text + "\n\n" + INOCULATION_BLOCK if inoculation else text
+        text = "Implement f."
+        if inoculation:
+            text += "\n\n" + INOCULATION_BLOCK
+        section = mindset_section(mindset)
+        return section + MINDSET_TASK_HEADING + text if section else text
 
     monkeypatch.setattr("healthy_rl.rollouts.bench_instruction", bench_instruction)
 
@@ -78,12 +82,12 @@ def _problems(capsys, parquet, *args):
     return json.loads(capsys.readouterr().out)
 
 
-def _run(tmp_path, monkeypatch, capsys, parquet, code, *, timeout="10", task_id="lcbhard_0"):
+def _run(tmp_path, monkeypatch, capsys, parquet, code, *, timeout="10", task_id="lcbhard_0", extra=()):
     code_file = tmp_path / "sub.py"
     code_file.write_text(code, encoding="utf-8")
     monkeypatch.chdir(tmp_path)  # cmd_run writes its test file into the cwd
     rc = main(["run", "--parquet", str(parquet), "--task-id", task_id,
-               "--code-file", str(code_file), "--timeout", timeout])
+               "--code-file", str(code_file), "--timeout", timeout, *extra])
     assert rc == 0
     return json.loads(capsys.readouterr().out)
 
@@ -99,6 +103,28 @@ def test_run_reports_a_failing_submission_with_scaffold_feedback(tmp_path, monke
     assert out["passed"] is False and out["returncode"] != 0
     assert FEEDBACK_MARKER in out["feedback"] and "Implement f." in out["feedback"]
     assert "AssertionError" in out["stderr"]
+
+
+def test_run_feedback_carries_the_v3_reminder_line(tmp_path, monkeypatch, capsys, parquet):
+    out = _run(tmp_path, monkeypatch, capsys, parquet, FAILING, extra=("--mindset", "growth"))
+    assert out["passed"] is False
+    fb = out["feedback"]
+    assert fb == failure_message(out["stderr"], MINDSET_TASK_HEADING + "Implement f.", MINDSET_REMIND["growth"])
+    assert fb.index("Here's the error") < fb.index(MINDSET_REMIND["growth"]) < fb.index("To reiterate")
+    assert fb.endswith("To reiterate, this is your task: " + MINDSET_TASK_HEADING + "Implement f.")
+    assert MINDSET["growth"] not in fb
+
+
+def test_run_feedback_for_appraisal_has_the_heading_but_no_line(tmp_path, monkeypatch, capsys, parquet):
+    out = _run(tmp_path, monkeypatch, capsys, parquet, FAILING, extra=("--mindset", "appraisal"))
+    fb = out["feedback"]
+    assert fb == failure_message(out["stderr"], MINDSET_TASK_HEADING + "Implement f.")
+    assert "Remember you are" not in fb
+
+
+def test_run_feedback_without_a_mindset_is_the_base_message(tmp_path, monkeypatch, capsys, parquet):
+    out = _run(tmp_path, monkeypatch, capsys, parquet, FAILING)
+    assert out["feedback"] == failure_message(out["stderr"], "Implement f.")
 
 
 def test_run_times_out_on_an_infinite_loop_instead_of_hanging(tmp_path, monkeypatch, capsys, parquet):
@@ -133,12 +159,12 @@ def test_problems_puts_the_mindset_block_in_turn_one_and_not_in_the_reminder(
     """The arm's whole point: the block is shown once, not once per attempt."""
     out = _problems(capsys, parquet, "--mindset", "growth")
     p = out["lcbhard_0"]
-    assert p["input"].count(MINDSET_HEADER) == 1
-    assert mindset_section(["growth"]) in p["instruction_prompt"]
+    assert p["input"].count(MINDSET_TASK_HEADING) == 1
+    assert p["instruction_prompt"].startswith(mindset_section(["growth"]) + MINDSET_TASK_HEADING)
     assert p["instruction_prompt"] in p["input"]
-    # The reminder is the base arm's text, character for character.
-    assert p["reminder_prompt"] == "Implement f."
-    assert MINDSET_HEADER not in p["reminder_prompt"]
+    # The reminder is the base arm's text behind her "## Task" residue (v3).
+    assert p["reminder_prompt"] == MINDSET_TASK_HEADING + "Implement f."
+    assert mindset_section(["growth"]) not in p["reminder_prompt"]
 
 
 def test_problems_without_a_mindset_reminds_with_the_turn_one_text(capsys, parquet, no_record_to_sample):
@@ -150,7 +176,8 @@ def test_problems_without_a_mindset_reminds_with_the_turn_one_text(capsys, parqu
 
 def test_problems_orders_two_blocks_the_way_mindset_does(capsys, parquet, no_record_to_sample):
     out = _problems(capsys, parquet, "--mindset", "appraisal", "growth")
-    assert out["lcbhard_0"]["instruction_prompt"] == "Implement f." + mindset_section(["growth", "appraisal"])
+    assert out["lcbhard_0"]["instruction_prompt"] == (
+        mindset_section(["growth", "appraisal"]) + MINDSET_TASK_HEADING + "Implement f.")
 
 
 def test_problems_rejects_an_unknown_mindset_name(capsys, parquet, no_record_to_sample):

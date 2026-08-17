@@ -23,6 +23,7 @@ from healthy_rl.rollouts import (
     SCRATCHPAD_SYSTEM_PROMPT,
     Vectors,
     mindset_hash,
+    mindset_reminder,
     robust_find_code,
 )
 
@@ -177,7 +178,8 @@ class TaskRun:
                 self.state = "testing"
                 self.events.put({"event": "testing", "data": {"attempt": attempt}})
                 code = robust_find_code(gen.answer or gen.text)
-                result = self.sandbox.run(self.cfg.split, self.cfg.task_id, code, affect=self.cfg.affect_prompt)
+                result = self.sandbox.run(self.cfg.split, self.cfg.task_id, code,
+                                          affect=self.cfg.affect_prompt, mindset=self.cfg.mindset)
                 rec["passed"] = bool(result.passed)
                 # Build the harness-error fallback BEFORE the record is appended: the
                 # log is append-only, so a record written with an empty feedback would
@@ -188,10 +190,12 @@ class TaskRun:
                 if not result.passed and not feedback:
                     # The reminder, not turn 1: with a mindset arm the block belongs
                     # to the opening message alone, and repeating it here would make
-                    # a once-only arm a once-per-attempt one.
+                    # a once-only arm a once-per-attempt one. The one-line v3
+                    # restatement does go in, exactly as the sandbox would have put it.
                     feedback = feedback_message(f"[harness error: {result.error or 'unknown'}]",
                                                 self.problem.get("reminder_prompt")
-                                                or self.problem.get("instruction_prompt", ""))
+                                                or self.problem.get("instruction_prompt", ""),
+                                                mindset_reminder(self.cfg.mindset))
                 rec["feedback"] = feedback
                 rec["timings"]["sandbox_s"] = result.seconds
                 self.store.append(rec, gen.arrays(self.vectors.probe_layer))

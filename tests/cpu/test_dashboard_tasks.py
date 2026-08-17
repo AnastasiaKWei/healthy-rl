@@ -13,6 +13,7 @@ from healthy_rl.dashboard.sandbox import SandboxResult
 from healthy_rl.dashboard.sandbox_cli import FEEDBACK_MARKER
 from healthy_rl.dashboard.store import SessionStore
 from healthy_rl.dashboard.tasks import TaskConfig, TaskRun
+from healthy_rl.rollouts import MINDSET, MINDSET_REMIND, MINDSET_TASK_HEADING, mindset_section
 
 
 def _drain(q):
@@ -96,7 +97,7 @@ def test_scratchpad_flag_prepends_system_prompt(tmp_path):
 
 def test_sandbox_error_pauses_without_retry(tmp_path):
     run, eng, sb, store = _setup(tmp_path, attempts=3)
-    def broken(split, task_id, code, affect=False):
+    def broken(split, task_id, code, affect=False, mindset=()):
         return SandboxResult(False, "", "", "", timed_out=True, error="sandbox exceeded 60s")
     sb.run = broken
     t = threading.Thread(target=run.run, daemon=True); t.start()
@@ -151,7 +152,7 @@ def test_generating_heartbeats_while_the_engine_runs(tmp_path, monkeypatch):
 
 def test_auto_continue_still_pauses_on_a_sandbox_error(tmp_path):
     run, eng, sb, store = _setup(tmp_path, attempts=3, auto_continue=True)
-    sb.run = lambda split, task_id, code, affect=False: SandboxResult(
+    sb.run = lambda split, task_id, code, affect=False, mindset=(): SandboxResult(
         False, "", "", "", timed_out=True, error="apptainer exec failed")
     t = threading.Thread(target=run.run, daemon=True); t.start()
     _spin(lambda: run.state == "awaiting_user", "the run to pause on the harness error")
@@ -288,7 +289,7 @@ def test_harness_error_record_carries_the_feedback_the_model_was_actually_sent(t
     forever that nothing was fed back, while the next user message carries text.
     """
     run, eng, sb, store = _setup(tmp_path, attempts=3)
-    def broken(split, task_id, code, affect=False):
+    def broken(split, task_id, code, affect=False, mindset=()):
         return SandboxResult(False, "", "", "", timed_out=True, error="sandbox exceeded 60s")
     sb.run = broken
     t = threading.Thread(target=run.run, daemon=True); t.start()
@@ -322,13 +323,14 @@ def test_harness_error_feedback_uses_the_reminder_not_the_turn_one_instruction(t
     """
     run, eng, sb, store = _setup(tmp_path, attempts=3, mindset=("growth",))
     run.problem = dict(run.problem,
-                       instruction_prompt="Implement f.\n\nHow to approach this:\n\nGrow.\n\n",
-                       reminder_prompt="Implement f.")
-    sb.run = lambda split, task_id, code, affect=False: SandboxResult(
+                       instruction_prompt=mindset_section(["growth"]) + MINDSET_TASK_HEADING + "Implement f.",
+                       reminder_prompt=MINDSET_TASK_HEADING + "Implement f.")
+    sb.run = lambda split, task_id, code, affect=False, mindset=(): SandboxResult(
         False, "", "", "", timed_out=True, error="apptainer exec failed")
     t = threading.Thread(target=run.run, daemon=True); t.start()
     _spin(lambda: run.state == "awaiting_user", "the run to pause on the harness error")
     feedback = store.records()[0]["feedback"]
-    assert "To reiterate, this is your task: Implement f." in feedback
-    assert "How to approach this:" not in feedback
+    assert "To reiterate, this is your task: ## Task\n\nImplement f." in feedback
+    assert MINDSET["growth"] not in feedback
+    assert MINDSET_REMIND["growth"] in feedback   # the harness-error fallback carries the line too
     run.stop(); t.join(5)

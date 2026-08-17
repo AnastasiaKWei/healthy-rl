@@ -80,7 +80,10 @@ class FakeSandbox:
                           "reminder_prompt": "Implement g."},
         }
 
-    def run(self, split: str, task_id: str, code: str, affect: bool = False) -> SandboxResult:
+    def run(self, split: str, task_id: str, code: str, affect: bool = False,
+            mindset: Sequence[str] = ()) -> SandboxResult:
+        # Taken and ignored, as in ``problems``: this fake never carries a mindset
+        # block, so it has no reminder line to attach either.
         k = self.attempts.get(task_id, 0) + 1
         self.attempts[task_id] = k
         if self.pass_on_attempt is not None and k >= self.pass_on_attempt:

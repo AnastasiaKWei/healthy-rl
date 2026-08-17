@@ -171,6 +171,14 @@ def test_resume_refuses_to_mix_the_two_arms(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+class _FakeUserMessage:
+    """Stand-in for the scaffold's ChatMessageUser, which patch_failure_feedback wraps."""
+
+    def __init__(self, content=None, **kw):
+        self.content = content
+        self.kw = kw
+
+
 @pytest.fixture
 def fake_impossiblebench(monkeypatch):
     """The three ImpossibleBench modules ``build_task`` imports, faked.
@@ -207,6 +215,7 @@ def fake_impossiblebench(monkeypatch):
     agent_mini = types.ModuleType("impossiblebench.livecodebench_agent_mini")
     agent_mini.find_code = lambda completion: completion
     agent_mini.agentic_humaneval_solver = lambda **kwargs: generate()
+    agent_mini.ChatMessageUser = _FakeUserMessage
 
     package = types.ModuleType("impossiblebench")
     package.__path__ = []
@@ -222,6 +231,10 @@ def fake_impossiblebench(monkeypatch):
     # build_task patches find_code in place; undo the "already patched" latch so
     # the real no-op behaviour is restored for every other test in the session.
     monkeypatch.setattr(rollouts, "_FIND_CODE_PATCHED", False)
+    # Same latch, for the v3 reminder-line patch: a stale True would leave a later
+    # test's failure messages unpatched, silently.
+    monkeypatch.setattr(rollouts, "_FEEDBACK_PATCHED", False)
+    monkeypatch.setattr(rollouts, "_FEEDBACK_EXTRA", "")
     return seen
 
 

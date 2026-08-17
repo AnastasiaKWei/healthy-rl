@@ -115,7 +115,8 @@ class Sandbox:
             raise RuntimeError(f"sandbox problems({split}) failed: {err}")
         return data
 
-    def run(self, split: str, task_id: str, code: str, affect: bool = False) -> SandboxResult:
+    def run(self, split: str, task_id: str, code: str, affect: bool = False,
+            mindset: Sequence[str] = ()) -> SandboxResult:
         parquet = self.parquet_for(split)
         name = f"sub_{uuid.uuid4().hex[:12]}.py"
         host_path = self.scratch_dir / name
@@ -124,6 +125,8 @@ class Sandbox:
         try:
             args = ["run", "--parquet", parquet, "--task-id", task_id,
                     "--code-file", f"/scratch/{name}", "--timeout", str(self.timeout_s)] + (["--affect"] if affect else [])
+            if mindset:
+                args += ["--mindset", *mindset]
             data, err = self._call(args, timeout=self.timeout_s + STARTUP_GRACE_S)
         finally:
             try:

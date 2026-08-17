@@ -20,6 +20,10 @@ def test_feedback_message_is_the_scaffolds():
     assert m.startswith(f"\n{FEEDBACK_MARKER}. Here's the error:\nAssertionError\n\n")
     assert m.endswith("\n\nTo reiterate, this is your task: Do the thing")
     assert "[unknown error]" in feedback_message("", "x")
+    # One composer: the dashboard cannot drift from what the pipeline sends.
+    from healthy_rl.rollouts import failure_message
+    assert feedback_message("AssertionError", "Do the thing") == failure_message("AssertionError", "Do the thing")
+    assert feedback_message("AssertionError", "Do the thing", "R.") == failure_message("AssertionError", "Do the thing", "R.")
 
 
 def _sandbox(tmp_path, runner):
@@ -98,6 +102,19 @@ def test_run_writes_code_file_passes_container_path_and_cleans_up(tmp_path):
     assert isinstance(r, SandboxResult) and r.passed is False and r.feedback == "fb" and r.stderr == "AssertionError"
     assert seen["path"].startswith("/scratch/") and seen["content"] == "def f(): pass"
     assert not list((tmp_path / "scratch").glob("*.py"))
+
+
+def test_run_forwards_affect_and_mindset_to_the_cli(tmp_path):
+    seen = {}
+    def runner(cmd, **kw):
+        seen["cmd"] = list(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"passed": False, "returncode": 1, "stdout": "", "stderr": "E", "feedback": "fb", "timed_out": False}), stderr="")
+    _sandbox(tmp_path, runner).run("conflicting", "lcbhard_2", "def f(): pass", affect=True, mindset=("growth",))
+    tail = seen["cmd"][seen["cmd"].index("run"):]
+    assert "--affect" in tail
+    assert tail[tail.index("--mindset") + 1] == "growth"
+    _sandbox(tmp_path, runner).run("conflicting", "lcbhard_2", "def f(): pass")
+    assert "--mindset" not in seen["cmd"] and "--affect" not in seen["cmd"]
 
 
 def test_run_timeout_and_garbage_are_errors_not_exceptions(tmp_path):
