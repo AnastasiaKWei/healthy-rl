@@ -470,7 +470,8 @@ def mindset_system(mindset: list[str] = (), scratchpad: bool = True) -> str:
         return ""
     parts = []
     for n in chosen:
-        block, guide = MINDSET[n]["block"], MINDSET[n]["guide"]
+        # .get: the v3 blocks have no Reasoning Guidelines section at all.
+        block, guide = MINDSET[n]["block"], MINDSET[n].get("guide", "")
         if guide:
             block += ("\n\n---\n## Reasoning Guidelines\n\n"
                       f"{GUIDE_HEAD[bool(scratchpad)]}\n\n{guide}")
@@ -556,6 +557,9 @@ def build_instruction(scratchpad: bool, affect: bool, solvable: bool = False) ->
 
 
 def main() -> None:
+    # Declared up front: --prompt-version 3 rebinds it to the recovered v3 text, and
+    # Python requires the declaration before any other use in the function.
+    global MINDSET
     p = argparse.ArgumentParser()
     p.add_argument("--model", default="openrouter/google/gemma-3-12b-it")
     p.add_argument("--limit", type=int, default=5)
@@ -640,11 +644,15 @@ def main() -> None:
     # any prompt intervention has. These flags exist to take them apart: each
     # defaults to its v4 setting, so flipping one gives a leave-one-out arm whose
     # difference from the v4 baseline is that factor's marginal contribution.
-    # v4 moved the block to a system turn AND rewrote its text AND added the
-    # guidelines, so "v4 constructs do nothing" is ambiguous between the constructs
-    # being inert and the system turn making them inert. This flag isolates
-    # placement with the text, the guidelines and the environment all held fixed.
-    # It matters most on Gemma, whose chat template has no native system role.
+    # v3 and v4 differ in the words AND in the structure that carried them. Setting
+    # one without the other produces a configuration nobody ever ran, so this sets
+    # both and prints what it set.
+    p.add_argument(
+        "--prompt-version", choices=["3", "4"], default="4",
+        help="3 restores the v3 text and its structure (block in the user turn, "
+             "task restated after every failure, no retry guidance, no solvability "
+             "note, 'Here's the error:'). 4 is the current default.",
+    )
     p.add_argument(
         "--block-channel", choices=["system", "user"], default="system",
         help="where the mindset block and its guidelines go. 'user' puts them ahead "
@@ -708,6 +716,21 @@ def main() -> None:
                         "message, then exit without evaluating.")
     args = p.parse_args()
 
+    # --prompt-version 3 restores both halves of v3: the text, and the structure it
+    # was delivered with. Anything else is a configuration that was never run, so it
+    # sets all five and reports them rather than leaving the caller to remember.
+    version = int(args.prompt_version)
+    if version == 3:
+        from mindset_v3 import MINDSET_V3
+        MINDSET = MINDSET_V3
+        args.block_channel = "user"
+        args.task_reminder = "on"
+        args.retry_guidance = "off"
+        args.solvable_note = "off"
+        args.output_label = "error"
+        print("prompt-version 3: v3 text; block in the user turn; task restated; "
+              "no retry guidance; no solvability note; \"Here's the error:\"")
+
     # Canonical order and no duplicates, so `--mindset resilience growth` and
     # `--mindset growth resilience` are one arm rather than two directories.
     args.mindset = [k for k in MINDSET if k in set(args.mindset)]
@@ -732,11 +755,22 @@ def main() -> None:
         # neither -- which showed up as the v3 arms apparently moving +1.13 against a
         # baseline they had actually beaten by 0.89.
         if args.mindset:
-            slug += f"-mindset-v{MINDSET_VERSION}-" + "+".join(args.mindset)
-        elif MINDSET_VERSION > 3:
+            slug += f"-mindset-v{version}-" + "+".join(args.mindset)
+        elif version > 3:
             # >3 rather than always: v1-v3 baselines are already on disk under the
             # unversioned name and are keyed by it in logs/judge_step0.json.
-            slug += f"-v{MINDSET_VERSION}"
+            slug += f"-v{version}"
+        # Which tasks ran is part of the arm's identity. --limit takes the FIRST n,
+        # so a 30-task run is a superset of a 5-task run: merged into one directory
+        # they would double-count the overlap under colliding epoch numbers.
+        if args.task_ids:
+            nums = sorted(int(t.rsplit("_", 1)[-1]) for t in args.task_ids
+                          if t.rsplit("_", 1)[-1].isdigit())
+            slug += (f"-t{nums[0]}to{nums[-1]}"
+                     if len(nums) == len(args.task_ids) == nums[-1] - nums[0] + 1
+                     else f"-t{len(args.task_ids)}sel")
+        elif args.limit != 5:
+            slug += f"-n{args.limit}"
         # Same reason, and it matters more here: a hackable run is a different *task*,
         # not a different prompt. On `conflicting` the tests are unsatisfiable, so with
         # modifications blocked a pass is impossible and with them allowed a pass means
@@ -745,14 +779,17 @@ def main() -> None:
         # Any factor away from its v4 setting gets its own directory. Without this an
         # ablation arm would merge into the arm it is meant to be compared against,
         # which is the failure that made the first v4 table unreadable.
-        for flag, off_value, mark in (
-                (args.block_channel, "user", "-userblock"),
-                (args.solvable_note, "off", "-nonote"),
-                (args.task_reminder, "on", "-restate"),
-                (args.retry_guidance, "off", "-noretry"),
-                (args.output_label, "error", "-errlabel")):
-            if flag == off_value:
-                slug += mark
+        # Skipped for v3, where all five are set by the version itself and would
+        # append five redundant markers to a name that already says -v3-.
+        if version > 3:
+            for flag, off_value, mark in (
+                    (args.block_channel, "user", "-userblock"),
+                    (args.solvable_note, "off", "-nonote"),
+                    (args.task_reminder, "on", "-restate"),
+                    (args.retry_guidance, "off", "-noretry"),
+                    (args.output_label, "error", "-errlabel")):
+                if flag == off_value:
+                    slug += mark
         if args.feedback != "none":
             slug += f"-fb-{args.feedback}"
         if args.allow_test_modifications:
@@ -800,7 +837,12 @@ def main() -> None:
                 solvable=(split == "original" and args.solvable_note == "on")),
             max_attempts=args.max_attempts,
             allow_test_modifications=args.allow_test_modifications,
-            limit=args.limit,
+            # --limit truncates the dataset when it is built; --task-ids filters
+            # afterwards, inside inspect_eval. Applying both silently intersects
+            # them: with the default limit of 5, asking for tasks 5-29 leaves a
+            # dataset of tasks 0-4 and matches nothing. --task-ids therefore takes
+            # over the selection entirely.
+            limit=None if args.task_ids else args.limit,
             message_limit=40,
             custom_id="step0",
             # v4: the failure message no longer restates the whole task. The
@@ -830,6 +872,19 @@ def main() -> None:
                                    split == 'original' and args.solvable_note == 'on')}")
     if model_args:
         print(f"model_args={json.dumps(model_args)}")
+
+    # The sample_id filter runs inside inspect_eval, so a mismatch between the
+    # dataset and --task-ids only surfaces after the eval starts -- which is how 14
+    # arms exited 1 in 24 seconds having evaluated nothing. Check it up front.
+    if args.task_ids:
+        have = {str(s.id) for t in tasks for s in t.dataset}
+        missing = [t for t in args.task_ids if t not in have]
+        if missing:
+            raise SystemExit(
+                f"{len(missing)} of {len(args.task_ids)} requested task ids are not "
+                f"in the dataset ({len(have)} available): {missing[:5]}…")
+        print(f"task selection: {len(args.task_ids)} ids, all present "
+              f"({args.task_ids[0]}…{args.task_ids[-1]})")
 
     if args.dry_run:
         # Ablation arms differ by one factor each, and the factor is easy to set and

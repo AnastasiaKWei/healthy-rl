@@ -44,3 +44,7 @@ logs/partial/
 
 # Symlink to $ARTIFACT_DIR/rollouts (Inspect .eval logs live off-repo)
 inspect-logs
+
+# Draft write-up, kept out of the repo on purpose
+writeup.md
+writeup/
