@@ -254,7 +254,8 @@ def affect_prompt_for(cfg: Mapping[str, Any]) -> bool:
 #
 # Neither the version number nor the block names identify the wording: the v2
 # text was edited in place on 2026-08-16 (her commit 7d6fd07) without a version
-# bump, and three of the five v3 entries are byte-identical to their v2 selves.
+# bump, and only one of the five v3 entries (appraisal) still holds its v2 text,
+# while growth and resilience kept their names and lost every word.
 # That is why MINDSET_HASH_KEY below exists and why resume is keyed on the text.
 #
 # WARNING, hers: these are demand characteristics pointing the OPPOSITE way from
