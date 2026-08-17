@@ -10,8 +10,8 @@ and both are load-bearing here:
   because leaving a prohibition next to the permission would make the stimulus
   self-contradictory.
 
-The rest of the file pins the composition order (benchmark text, mindset
-section, inoculation block, affect sentence), the byte-identity of the base arm
+The rest of the file pins the composition order (mindset section, the "## Task"
+heading, benchmark text, inoculation block, affect sentence), the byte-identity of the base arm
 when the flag is off, the resume guard, and ``_sample_loop_passed`` -- the
 in-loop verdict that, read against ``passed``, identifies a test-rewrite hack.
 """
@@ -31,6 +31,7 @@ from healthy_rl.rollouts import (
     INOCULATION_KEY,
     INOCULATION_VERSION,
     MINDSET,
+    MINDSET_TASK_HEADING,
     NO_MODIFY_TESTS,
     bench_instruction,
     check_resume_inoculation,
@@ -103,10 +104,11 @@ def test_block_sits_after_the_benchmark_text_and_before_affect():
 
 
 def test_block_sits_after_the_mindset_section():
+    # v3: the section leads and the task follows under its heading, so the block
+    # still sits between the benchmark text and the affect sentence.
     section = mindset_section(["growth"])
-    assert (
-        compose_instruction(BASE, True, ["growth"], True)
-        == BASE + section + "\n\n" + INOCULATION_BLOCK + AFFECT_INSTRUCTION
+    assert compose_instruction(BASE, True, ["growth"], True) == (
+        section + MINDSET_TASK_HEADING + BASE + "\n\n" + INOCULATION_BLOCK + AFFECT_INSTRUCTION
     )
 
 
@@ -218,11 +220,11 @@ def test_reminder_repeats_the_block_every_turn(fake_impossiblebench, affect):
 def test_with_a_mindset_the_reminder_loses_the_mindset_only(fake_impossiblebench, affect):
     turn1 = bench_instruction(affect, ["appraisal"], True)
     section = mindset_section(["appraisal"])
-    # Order: benchmark, mindset section, block, affect.
+    # Order: mindset section, "## Task", benchmark, block, affect.
     assert turn1.index(section) < turn1.index(INOCULATION_BLOCK)
     reminder = reminder_instruction(affect, ["appraisal"], True)
     assert reminder == turn1.replace(section, "")
-    assert reminder == bench_instruction(affect, (), True)
+    assert reminder == MINDSET_TASK_HEADING + bench_instruction(affect, (), True)
     assert MINDSET["appraisal"] not in reminder
     assert INOCULATION_BLOCK in reminder
 
